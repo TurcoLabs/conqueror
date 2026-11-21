@@ -249,6 +249,7 @@ namespace Conqueror
         DestroyTarget(m_MotionVectors);
         DestroyTarget(m_FSR2Output);
         DestroyTarget(m_FSR2Hold);
+        DestroyTarget(m_SpatialHold);
         DestroyTarget(m_FSR2HoldState[0]);
         DestroyTarget(m_FSR2HoldState[1]);
         for (uint32_t& fb : m_FSR2HoldFramebuffer)
@@ -1491,7 +1492,8 @@ namespace Conqueror
     // %0.026). Basamaklar (149) yalnız geometri kenarlarına uygulanan FXAA ile yumuşatılır
     static constexpr float kNISSharpnessScale = 1.0f;
     // FSR AA + NIS: FSR 2'nin çıktısı TAA'nınkinden keskin (tam keskinlikte doğal çözünürlüğün ayrıntısının %107'si, aşırı); yarı keskinlik
-    // hem doğal ayrıntıya denk gelir hem FSR 2'nin kalan titreşimini daha az büyütür (fsraa_flicker)
+    // hem doğal ayrıntıya denk gelir hem FSR 2'nin kalan titreşimini daha az büyütür (fsraa_flicker). 285'te tutucu NIS ve FXAA'dan sonraya
+    // alındı; tam keskinlik orada da oyuncu görünümünde titremeyi ikiye katlıyordu (>8 seviye %0.33 -> %1.0), yarı keskinlik kaldı
     static constexpr float kNISSharpnessScaleFSR = 0.5f;
 
     void PostProcessStack::RunFinal(const PostProcessSettings& settings, uint32_t outputFramebuffer, const int outputViewport[4])
@@ -1509,7 +1511,13 @@ namespace Conqueror
         const GLint ldrFilter = m_PointUpscale ? GL_NEAREST : GL_LINEAR;
         glTextureParameteri(m_LDR.Texture, GL_TEXTURE_MIN_FILTER, ldrFilter);
         glTextureParameteri(m_LDR.Texture, GL_TEXTURE_MAG_FILTER, ldrFilter);
-        const glm::vec2 outOrigin((float)outputViewport[0], (float)outputViewport[1]);
+        glm::vec2 outOrigin((float)outputViewport[0], (float)outputViewport[1]);
+        // 285: FSR AA + uzamsal yükselticide uzamsal geçiş çıktı boyutunda ara hedefe çizilir, tutucu en sonda onun üstünde çalışır
+        uint32_t outFBO = outputFramebuffer;
+        int outVP[4] = { outputViewport[0], outputViewport[1], outputViewport[2], outputViewport[3] };
+        bool holdAfterSpatial = false;
+        uint32_t holdReactive = 0, holdMotion = 0;
+        bool holdStill = false, holdReset = false;
 
         uint32_t cur = m_LDR.Texture;
         // İç çözünürlükte bir geçiş: sonuç sıradaki ara hedefe (m_Temp / m_Temp2)
@@ -1522,8 +1530,8 @@ namespace Conqueror
         };
         auto toOutput = [&]()
         {
-            glBindFramebuffer(GL_FRAMEBUFFER, outputFramebuffer);
-            glViewport(outputViewport[0], outputViewport[1], outputViewport[2], outputViewport[3]);
+            glBindFramebuffer(GL_FRAMEBUFFER, outFBO);
+            glViewport(outVP[0], outVP[1], outVP[2], outVP[3]);
         };
 
         // 1) Uzamsal kenar yumuşatma (iç çözünürlükte, ton eşlenmiş görüntüde)
@@ -2058,12 +2066,26 @@ namespace Conqueror
                 // geçiş yalnız durumu yeniler
                 // FSR 2 yükseltmede de (TAA + FSR 2, 288): iç çözünürlükten büyütürken merdiven basamakları ve zemin çizgileri 18 karelik
                 // titreşim döngüsüyle 10-15 seviye sıçrıyordu (duran görüntüde >8 seviye %0.98, TAAU %0.03)
-                const uint32_t fsrResult = RunStillHold(1, m_FSR2Output.Texture, fsrW, fsrH, fsrReactive, m_MotionVectors.Texture,
-                                                        m_CameraStill || m_CameraNearlyStill, prm.Reset);
+                // 285: FSR AA + uzamsal yükseltici (NIS / FSR 1 / CAS ...): tutucu iç çözünürlükte değil, büyütmeden sonra çıktı
+                // çözünürlüğünde çalışır. NIS'in keskinleştirmesi ve ardından gelen FXAA (kenar maskesi bu karenin titreşimli derinliğinden)
+                // tutucudan geçmiş küçük kıpırtıyı yeniden büyütüyordu: kamera dururken mavi küplerin arası beyazlayıp sönüyordu
+                // (piramit bölgesinde >8 seviye değişen piksel %0.59, yerel FSR AA %0.016)
+                const bool spatialAfter = (fsrW != outW || fsrH != outH) && up != UpscalerMode::SGSR2 && up != UpscalerMode::TAAU;
+                const uint32_t fsrResult = spatialAfter ? m_FSR2Output.Texture
+                                                        : RunStillHold(1, m_FSR2Output.Texture, fsrW, fsrH, fsrReactive, m_MotionVectors.Texture,
+                                                                       m_CameraStill || m_CameraNearlyStill, prm.Reset);
                 if (fsrW != outW || fsrH != outH)
                 {
                     // FSR AA + uzamsal yükseltici: kenar yumuşatılmış iç çözünürlük görüntüsü aşağıda büyütülür (NIS / FSR 1 / CAS ...)
                     cur = fsrResult;
+                    if (spatialAfter)
+                    {
+                        holdAfterSpatial = true;
+                        holdReactive = fsrReactive;
+                        holdMotion = m_MotionVectors.Texture;
+                        holdStill = m_CameraStill || m_CameraNearlyStill;
+                        holdReset = prm.Reset;
+                    }
                     Renderer::GetStats().PostProcessPasses++;
                     goto spatialUpscale;
                 }
@@ -2085,6 +2107,15 @@ namespace Conqueror
         }
 
         spatialUpscale:
+        if (holdAfterSpatial)
+        {
+            EnsureTarget(m_SpatialHold, outW, outH, GL_RGBA8);
+            outFBO = m_SpatialHold.Framebuffer;
+            outVP[0] = outVP[1] = 0;
+            outVP[2] = (int)outW;
+            outVP[3] = (int)outH;
+            outOrigin = glm::vec2(0.0f);
+        }
         auto sgsrConvert = PostProcess::GetShader("SGSR2_Convert");
         auto sgsrUpscale = PostProcess::GetShader("SGSR2_Upscale");
         if (up == UpscalerMode::SGSR2 && m_JitterActive && Valid(sgsrConvert) && Valid(sgsrUpscale) && Valid(sharpen))
@@ -2414,6 +2445,23 @@ namespace Conqueror
                 BindTexture(0, cur);
                 PostProcess::DrawFullscreenQuad();
             }
+        }
+        if (holdAfterSpatial)
+        {
+            // 285: büyütülmüş (ve keskinleştirilmiş, FXAA'dan geçmiş) görüntüde kamera dururken tutucu, sonra gerçek çıktıya kopya
+            outFBO = outputFramebuffer;
+            for (int i = 0; i < 4; ++i)
+                outVP[i] = outputViewport[i];
+            outOrigin = glm::vec2((float)outputViewport[0], (float)outputViewport[1]);
+            const uint32_t held = RunStillHold(4, m_SpatialHold.Texture, outW, outH, holdReactive, holdMotion, holdStill, holdReset);
+            toOutput();
+            sharpen->Bind();
+            sharpen->SetInt("u_ScreenTexture", 0);
+            sharpen->SetFloat2("u_InverseScreenSize", glm::vec2(1.0f / (float)outW, 1.0f / (float)outH));
+            sharpen->SetFloat("u_Amount", 0.0f);
+            BindTexture(0, held);
+            PostProcess::DrawFullscreenQuad();
+            Renderer::GetStats().PostProcessPasses++;
         }
         Renderer::GetStats().PostProcessPasses++;
     }

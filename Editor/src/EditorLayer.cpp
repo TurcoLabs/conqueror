@@ -6820,8 +6820,10 @@ namespace Conqueror::Editor
         // game_flicker <kare> [u0 v0 u1 v1] [max% <yüzde>] [max8% <yüzde>] [save <png>]: kamera dururken sonraki N karede Game görüntüsünün her pikselinin
         // parlaklık aralığı (en büyük - en küçük, 0-255): yanıp sönme / titreşim ölçüsü (260). Rapor: ortalama aralık, aralığı 8 ve 16'yı
         // geçen piksellerin yüzdesi; max% verilirse 16'yı geçenler bu yüzdeyi aşınca FAIL
-        Automation::RegisterCommand("game_flicker", [this](const Args& a, std::string& err) {
-            if (a.size() < 2 || !m_GamePanel || !m_GamePanel->GetFramebuffer()) { err = "game_flicker <frames> [u0 v0 u1 v1] [max% p]"; return false; }
+        // viewport_flicker: aynısı editör Viewport'unda (285: senin kadrajın Viewport'tu, kamera dururken FSR AA + NIS küp araları)
+        auto flickerCommand = [this](const std::string& name, std::function<std::shared_ptr<Framebuffer>()> image) {
+            return [this, name, image](const Args& a, std::string& err) {
+            if (a.size() < 2 || !image()) { err = name + " <frames> [u0 v0 u1 v1] [max% p]"; return false; }
             const int frames = std::max(2, std::atoi(a[1].c_str()));
             float u0 = 0.0f, v0 = 0.0f, u1 = 1.0f, v1 = 1.0f, maxPercent = -1.0f, max8Percent = -1.0f;
             std::string heatmap;   // save <png>: aralık ısı haritası (inceleme için)
@@ -6835,9 +6837,10 @@ namespace Conqueror::Editor
             }
             struct Acc { std::vector<uint8_t> Lo, Hi; int W = 0, H = 0, Seen = 0; };
             auto acc = std::make_shared<Acc>();
-            Automation::AddFrameCheck("game flicker", frames, [this, acc, frames, u0, v0, u1, v1, maxPercent, max8Percent, heatmap](uint32_t, uint32_t, std::string& e) {
-                const auto& fb = m_GamePanel->GetFramebuffer();
-                if (!fb) { e = "no game image"; return false; }
+            Automation::AddFrameCheck(name == "viewport_flicker" ? "viewport flicker" : "game flicker", frames,
+                                      [image, acc, frames, u0, v0, u1, v1, maxPercent, max8Percent, heatmap](uint32_t, uint32_t, std::string& e) {
+                const std::shared_ptr<Framebuffer> fb = image();
+                if (!fb) { e = "no image"; return false; }
                 const auto& spec = fb->GetSpecification();
                 const int x0 = (int)(u0 * spec.Width), y0 = (int)(v0 * spec.Height);
                 const int w = std::max(1, (int)((u1 - u0) * spec.Width)), h = std::max(1, (int)((v1 - v0) * spec.Height));
@@ -6889,7 +6892,10 @@ namespace Conqueror::Editor
                 return true;
             });
             return true;
-        });
+            };
+        };
+        Automation::RegisterCommand("game_flicker", flickerCommand("game_flicker", [this]() { return m_GamePanel ? m_GamePanel->GetFramebuffer() : nullptr; }));
+        Automation::RegisterCommand("viewport_flicker", flickerCommand("viewport_flicker", [this]() { return m_ViewportPanel ? m_ViewportPanel->GetFramebuffer() : nullptr; }));
         Automation::RegisterCommand("game_region_change", [this](const Args& a, std::string& err) {
             static std::vector<uint8_t> s_Marked;
             static int s_W = 0, s_H = 0;

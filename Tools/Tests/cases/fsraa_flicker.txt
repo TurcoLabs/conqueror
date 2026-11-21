@@ -16,7 +16,9 @@ game_flicker 120 0.0 0.3 0.55 0.95 max8% 0.12 max% 0.04
 wait 125
 cvar r.Upscaler 3
 wait 90
-game_flicker 120 0.0 0.3 0.55 0.95 max8% 1.0 max% 0.1
+# 285: FSR AA + NIS'te tutucu NIS ve FXAA'dan sonra çıktı çözünürlüğünde (NIS'in keskinleştirmesi ve FXAA'nın titreşimli derinlikten kenar
+# maskesi tutucudan geçen kıpırtıyı yeniden büyütüyordu): >8 seviye %0.53 -> %0.33, >16 seviye %0.065 -> %0.036
+game_flicker 120 0.0 0.3 0.55 0.95 max8% 0.5 max% 0.06
 wait 125
 # 288: TAA + FSR 2 yükseltici (iç çözünürlük %67): merdiven basamakları ve zemin çizgileri FSR 2'nin 18 karelik titreşim döngüsüyle
 # 10-15 seviye sıçrıyordu (>8 seviye %0.98, TAAU %0.03); ince boşluk tutucu artık FSR 2 yükseltmede de çalışır
@@ -37,4 +39,14 @@ game_flicker 120 0.0 0.3 0.55 0.95 max8% 0.3 max% 0.08
 wait 125
 script_errors expect 0
 stop
+wait 30
+# 285: kullanıcının kadrajı, editör Viewport'u (kamera oyuncunun arkasında, piramide bakar), FSR AA + NIS: küplerin araları kamera
+# dururken beyazlayıp sönüyordu, PrtSc ile alınan görüntüler o anları yakalıyordu (piramit bölgesinde >8 seviye %0.59 -> %0.05)
+focus Viewport
+camera 16 10 0 -1.5 1.5 2
+cvar r.AntiAliasing 26
+cvar r.Upscaler 3
+wait 200
+viewport_flicker 48 0.39 0.36 0.62 0.71 max8% 0.15 max% 0.05
+wait 55
 quit
