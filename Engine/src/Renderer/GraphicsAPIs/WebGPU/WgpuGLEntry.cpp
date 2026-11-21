@@ -268,13 +268,13 @@ namespace Conqueror::WgpuGL
             error = "glad could not load the GL translation layer";
             return false;
         }
-        if (!glad_glCopyImageSubData)
-            glad_glCopyImageSubData = &W_CopyImageSubData;
+        // Ortak ön yüzün genel kopyası / temizlemesi yerine WebGPU'nun doğrudan komutları
+        glad_glCopyImageSubData = &W_CopyImageSubData;
         if (!glad_glCheckNamedFramebufferStatus)
             glad_glCheckNamedFramebufferStatus = &W_CheckNamedFramebufferStatus;
         if (!glad_glObjectLabel)
             glad_glObjectLabel = &W_ObjectLabel;
-        if (!glad_glClearBufferfv) glad_glClearBufferfv = &W_ClearBufferfv;
+        glad_glClearBufferfv = &W_ClearBufferfv;
         if (!glad_glClearBufferiv) glad_glClearBufferiv = &W_ClearBufferiv;
         if (!glad_glClearBufferuiv) glad_glClearBufferuiv = &W_ClearBufferuiv;
         if (!glad_glClearBufferfi) glad_glClearBufferfi = &W_ClearBufferfi;

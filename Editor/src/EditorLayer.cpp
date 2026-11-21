@@ -6935,11 +6935,13 @@ namespace Conqueror::Editor
             if (!ok) err = "change " + std::to_string(have);
             return ok;
         });
-        // viewport_region_change mark|expect <u0 v0 u1 v1> [<v | >v]: game_region_change'in Viewport karşılığı (sahne görünümünde iz /
-        // kalıntı denetimi, 287)
+        // viewport_region_change mark|expect <u0 v0 u1 v1> [<v | >v | <last+v | <last*v]: game_region_change'in Viewport karşılığı (sahne
+        // görünümünde iz / kalıntı denetimi, 287). "<last+v" / "<last*v": bir önceki expect'in ölçtüğü değişimden en çok v fazla / onun v
+        // katından az (aynı hareketin iki ayarla karşılaştırılması, ör. Screen UI kapalı / açık)
         Automation::RegisterCommand("viewport_region_change", [this](const Args& a, std::string& err) {
             static std::vector<uint8_t> s_Marked;
             static int s_W = 0, s_H = 0;
+            static float s_LastChange = -1.0f;
             if (a.size() < 6 || !m_ViewportPanel || !m_ViewportPanel->GetFramebuffer()) { err = "viewport_region_change mark|expect u0 v0 u1 v1 [cond]"; return false; }
             const auto& fb = m_ViewportPanel->GetFramebuffer();
             const auto& spec = fb->GetSpecification();
@@ -6976,10 +6978,22 @@ namespace Conqueror::Editor
             Automation::Report("REGION_CHANGE " + std::to_string(have) + " pixels>20 " + std::to_string(over20) + " max " + std::to_string(peak));
             const std::string& cond = a[6];
             bool ok;
-            if (cond[0] == '>') ok = have > std::stof(cond.substr(1));
-            else if (cond[0] == '<') ok = have < std::stof(cond.substr(1));
-            else ok = std::abs(have - std::stof(cond)) <= 0.5f;
-            if (!ok) err = "change " + std::to_string(have);
+            if (cond.rfind("<last+", 0) == 0 || cond.rfind("<last*", 0) == 0)
+            {
+                if (s_LastChange < 0.0f) { err = "no earlier viewport_region_change expect to compare with"; return false; }
+                const float v = std::stof(cond.substr(6));
+                const float limit = cond[5] == '*' ? s_LastChange * v : s_LastChange + v;
+                ok = have < limit;
+                if (!ok) err = "change " + std::to_string(have) + " (earlier " + std::to_string(s_LastChange) + ", limit " + std::to_string(limit) + ")";
+            }
+            else
+            {
+                if (cond[0] == '>') ok = have > std::stof(cond.substr(1));
+                else if (cond[0] == '<') ok = have < std::stof(cond.substr(1));
+                else ok = std::abs(have - std::stof(cond)) <= 0.5f;
+                if (!ok) err = "change " + std::to_string(have);
+            }
+            s_LastChange = have;
             return ok;
         });
         Automation::RegisterCommand("gpu", [this](const Args& a, std::string& err) {

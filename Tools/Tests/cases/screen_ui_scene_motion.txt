@@ -1,33 +1,38 @@
 # sample-project: Parkour
 # 274: Parkour menüsü oyun çalışırken Viewport'ta (View > Screen UI in Scene) kamera yana dönerken koyu düğmelerin arkasındaki binalar
 # bulaşıyordu, durunca düzeliyordu: tuval TAA / Temporal Stability / FSR 2 öncesine çiziliyor, yarı saydam pikseller arkadaki binanın
-# hareketiyle geri izleniyordu. Şimdi tuval son işlemden sonra (Game görünümü gibi) çizilir. Ölçü: hareketin son karesi ile aynı pozda
-# oturmuş kare arasındaki fark (SMAA, TAA, FSR AA; eskiden 0.59-0.71, şimdi 0.30-0.36). 294: seçenek açılınca ilk kare oturmuş kareyle aynı
-# olmalı (geçmiş UI'sız kaldığı için ilk karelerde paneller saydam, yazılar bozuk görünüyordu)
+# hareketiyle geri izleniyordu. Şimdi tuval son işlemden sonra (Game görünümü gibi) çizilir: hareketin son karesi ile aynı pozda oturmuş
+# kare arasındaki fark, tuval açıkken tuval kapalıykenkinin 0.75 katından az olmalı (tuval sahnenin kendi hareket gecikmesinin bir
+# kısmını örter: SMAA / TAA / FSR AA'da 0.41 / 0.37 / 0.55 katı; tuval eski yoldan TAA'dan önce çizilince kendisi de bulaşıyordu:
+# 0.95 / 0.89 / 1.19 katı). Menünün kendi canlandırması karışmasın diye oyun duraklatılır. Ölçü eskiden mutlak sınırdı
+# (0.45): Vulkan katmanında glCopyImageSubData / glClearBufferfv yokken (297) ölçülmüştü; doğru çalışan TAA'nın hareket gecikmesi
+# OpenGL'de de 0.54-0.69. 294: seçenek açılınca ilk kare oturmuş kareyle aynı olmalı (geçmiş UI'sız kaldığı için ilk karelerde paneller
+# saydam, yazılar bozuk görünüyordu)
 wait 60
 open_scene Assets/Scenes/Menu.cqscene
 wait 30
 play
 wait 60
+pause
+wait 5
 focus Viewport
-view_option screen_ui on
-wait 10
 cvar r.AntiAliasing 2
+view_option screen_ui off
 camera 22 4 0 0 0 0
 wait 60
 camera 22 4 0.4 0 0 0
 wait 1
 camera 22 4 0.8 0 0 0
 wait 1
-camera 22 4 1.2000000000000002 0 0 0
+camera 22 4 1.2 0 0 0
 wait 1
 camera 22 4 1.6 0 0 0
 wait 1
 camera 22 4 2.0 0 0 0
 wait 1
-camera 22 4 2.4000000000000004 0 0 0
+camera 22 4 2.4 0 0 0
 wait 1
-camera 22 4 2.8000000000000003 0 0 0
+camera 22 4 2.8 0 0 0
 wait 1
 camera 22 4 3.2 0 0 0
 wait 1
@@ -37,43 +42,170 @@ camera 22 4 4.0 0 0 0
 wait 1
 camera 22 4 4.4 0 0 0
 wait 1
-camera 22 4 4.800000000000001 0 0 0
+camera 22 4 4.8 0 0 0
 wait 1
 camera 22 4 5.2 0 0 0
 wait 1
-camera 22 4 5.6000000000000005 0 0 0
+camera 22 4 5.6 0 0 0
 wait 1
 camera 22 4 6.0 0 0 0
 wait 1
 camera 22 4 6.4 0 0 0
 wait 1
-camera 22 4 6.800000000000001 0 0 0
+camera 22 4 6.8 0 0 0
 wait 1
 camera 22 4 7.2 0 0 0
 wait 1
-camera 22 4 7.6000000000000005 0 0 0
+camera 22 4 7.6 0 0 0
 wait 1
 camera 22 4 8.0 0 0 0
 wait 1
+camera 22 4 8.4 0 0 0
+wait 1
+camera 22 4 8.8 0 0 0
+wait 1
+camera 22 4 9.2 0 0 0
+wait 1
+camera 22 4 9.6 0 0 0
+wait 1
+camera 22 4 10.0 0 0 0
+wait 1
+camera 22 4 10.4 0 0 0
+wait 1
+camera 22 4 10.8 0 0 0
+wait 1
+camera 22 4 11.2 0 0 0
+wait 1
+camera 22 4 11.6 0 0 0
+wait 1
+camera 22 4 12.0 0 0 0
+wait 1
+camera 22 4 12.4 0 0 0
+wait 1
+camera 22 4 12.8 0 0 0
+wait 1
+camera 22 4 13.2 0 0 0
+wait 1
+camera 22 4 13.6 0 0 0
+wait 1
+camera 22 4 14.0 0 0 0
+wait 1
+camera 22 4 14.4 0 0 0
+wait 1
+camera 22 4 14.8 0 0 0
+wait 1
+camera 22 4 15.2 0 0 0
+wait 1
+camera 22 4 15.6 0 0 0
+wait 1
+camera 22 4 16.0 0 0 0
+wait 1
 viewport_region_change mark 0.0 0.0 1.0 1.0
 wait 90
-viewport_region_change expect 0.0 0.0 1.0 1.0 <0.45
+viewport_region_change expect 0.0 0.0 1.0 1.0 >0
+view_option screen_ui on
+camera 22 4 0 0 0 0
+wait 60
+camera 22 4 0.4 0 0 0
+wait 1
+camera 22 4 0.8 0 0 0
+wait 1
+camera 22 4 1.2 0 0 0
+wait 1
+camera 22 4 1.6 0 0 0
+wait 1
+camera 22 4 2.0 0 0 0
+wait 1
+camera 22 4 2.4 0 0 0
+wait 1
+camera 22 4 2.8 0 0 0
+wait 1
+camera 22 4 3.2 0 0 0
+wait 1
+camera 22 4 3.6 0 0 0
+wait 1
+camera 22 4 4.0 0 0 0
+wait 1
+camera 22 4 4.4 0 0 0
+wait 1
+camera 22 4 4.8 0 0 0
+wait 1
+camera 22 4 5.2 0 0 0
+wait 1
+camera 22 4 5.6 0 0 0
+wait 1
+camera 22 4 6.0 0 0 0
+wait 1
+camera 22 4 6.4 0 0 0
+wait 1
+camera 22 4 6.8 0 0 0
+wait 1
+camera 22 4 7.2 0 0 0
+wait 1
+camera 22 4 7.6 0 0 0
+wait 1
+camera 22 4 8.0 0 0 0
+wait 1
+camera 22 4 8.4 0 0 0
+wait 1
+camera 22 4 8.8 0 0 0
+wait 1
+camera 22 4 9.2 0 0 0
+wait 1
+camera 22 4 9.6 0 0 0
+wait 1
+camera 22 4 10.0 0 0 0
+wait 1
+camera 22 4 10.4 0 0 0
+wait 1
+camera 22 4 10.8 0 0 0
+wait 1
+camera 22 4 11.2 0 0 0
+wait 1
+camera 22 4 11.6 0 0 0
+wait 1
+camera 22 4 12.0 0 0 0
+wait 1
+camera 22 4 12.4 0 0 0
+wait 1
+camera 22 4 12.8 0 0 0
+wait 1
+camera 22 4 13.2 0 0 0
+wait 1
+camera 22 4 13.6 0 0 0
+wait 1
+camera 22 4 14.0 0 0 0
+wait 1
+camera 22 4 14.4 0 0 0
+wait 1
+camera 22 4 14.8 0 0 0
+wait 1
+camera 22 4 15.2 0 0 0
+wait 1
+camera 22 4 15.6 0 0 0
+wait 1
+camera 22 4 16.0 0 0 0
+wait 1
+viewport_region_change mark 0.0 0.0 1.0 1.0
+wait 90
+viewport_region_change expect 0.0 0.0 1.0 1.0 <last*0.75
 cvar r.AntiAliasing 3
+view_option screen_ui off
 camera 22 4 0 0 0 0
 wait 60
 camera 22 4 0.4 0 0 0
 wait 1
 camera 22 4 0.8 0 0 0
 wait 1
-camera 22 4 1.2000000000000002 0 0 0
+camera 22 4 1.2 0 0 0
 wait 1
 camera 22 4 1.6 0 0 0
 wait 1
 camera 22 4 2.0 0 0 0
 wait 1
-camera 22 4 2.4000000000000004 0 0 0
+camera 22 4 2.4 0 0 0
 wait 1
-camera 22 4 2.8000000000000003 0 0 0
+camera 22 4 2.8 0 0 0
 wait 1
 camera 22 4 3.2 0 0 0
 wait 1
@@ -83,43 +215,170 @@ camera 22 4 4.0 0 0 0
 wait 1
 camera 22 4 4.4 0 0 0
 wait 1
-camera 22 4 4.800000000000001 0 0 0
+camera 22 4 4.8 0 0 0
 wait 1
 camera 22 4 5.2 0 0 0
 wait 1
-camera 22 4 5.6000000000000005 0 0 0
+camera 22 4 5.6 0 0 0
 wait 1
 camera 22 4 6.0 0 0 0
 wait 1
 camera 22 4 6.4 0 0 0
 wait 1
-camera 22 4 6.800000000000001 0 0 0
+camera 22 4 6.8 0 0 0
 wait 1
 camera 22 4 7.2 0 0 0
 wait 1
-camera 22 4 7.6000000000000005 0 0 0
+camera 22 4 7.6 0 0 0
 wait 1
 camera 22 4 8.0 0 0 0
 wait 1
+camera 22 4 8.4 0 0 0
+wait 1
+camera 22 4 8.8 0 0 0
+wait 1
+camera 22 4 9.2 0 0 0
+wait 1
+camera 22 4 9.6 0 0 0
+wait 1
+camera 22 4 10.0 0 0 0
+wait 1
+camera 22 4 10.4 0 0 0
+wait 1
+camera 22 4 10.8 0 0 0
+wait 1
+camera 22 4 11.2 0 0 0
+wait 1
+camera 22 4 11.6 0 0 0
+wait 1
+camera 22 4 12.0 0 0 0
+wait 1
+camera 22 4 12.4 0 0 0
+wait 1
+camera 22 4 12.8 0 0 0
+wait 1
+camera 22 4 13.2 0 0 0
+wait 1
+camera 22 4 13.6 0 0 0
+wait 1
+camera 22 4 14.0 0 0 0
+wait 1
+camera 22 4 14.4 0 0 0
+wait 1
+camera 22 4 14.8 0 0 0
+wait 1
+camera 22 4 15.2 0 0 0
+wait 1
+camera 22 4 15.6 0 0 0
+wait 1
+camera 22 4 16.0 0 0 0
+wait 1
 viewport_region_change mark 0.0 0.0 1.0 1.0
 wait 90
-viewport_region_change expect 0.0 0.0 1.0 1.0 <0.45
+viewport_region_change expect 0.0 0.0 1.0 1.0 >0
+view_option screen_ui on
+camera 22 4 0 0 0 0
+wait 60
+camera 22 4 0.4 0 0 0
+wait 1
+camera 22 4 0.8 0 0 0
+wait 1
+camera 22 4 1.2 0 0 0
+wait 1
+camera 22 4 1.6 0 0 0
+wait 1
+camera 22 4 2.0 0 0 0
+wait 1
+camera 22 4 2.4 0 0 0
+wait 1
+camera 22 4 2.8 0 0 0
+wait 1
+camera 22 4 3.2 0 0 0
+wait 1
+camera 22 4 3.6 0 0 0
+wait 1
+camera 22 4 4.0 0 0 0
+wait 1
+camera 22 4 4.4 0 0 0
+wait 1
+camera 22 4 4.8 0 0 0
+wait 1
+camera 22 4 5.2 0 0 0
+wait 1
+camera 22 4 5.6 0 0 0
+wait 1
+camera 22 4 6.0 0 0 0
+wait 1
+camera 22 4 6.4 0 0 0
+wait 1
+camera 22 4 6.8 0 0 0
+wait 1
+camera 22 4 7.2 0 0 0
+wait 1
+camera 22 4 7.6 0 0 0
+wait 1
+camera 22 4 8.0 0 0 0
+wait 1
+camera 22 4 8.4 0 0 0
+wait 1
+camera 22 4 8.8 0 0 0
+wait 1
+camera 22 4 9.2 0 0 0
+wait 1
+camera 22 4 9.6 0 0 0
+wait 1
+camera 22 4 10.0 0 0 0
+wait 1
+camera 22 4 10.4 0 0 0
+wait 1
+camera 22 4 10.8 0 0 0
+wait 1
+camera 22 4 11.2 0 0 0
+wait 1
+camera 22 4 11.6 0 0 0
+wait 1
+camera 22 4 12.0 0 0 0
+wait 1
+camera 22 4 12.4 0 0 0
+wait 1
+camera 22 4 12.8 0 0 0
+wait 1
+camera 22 4 13.2 0 0 0
+wait 1
+camera 22 4 13.6 0 0 0
+wait 1
+camera 22 4 14.0 0 0 0
+wait 1
+camera 22 4 14.4 0 0 0
+wait 1
+camera 22 4 14.8 0 0 0
+wait 1
+camera 22 4 15.2 0 0 0
+wait 1
+camera 22 4 15.6 0 0 0
+wait 1
+camera 22 4 16.0 0 0 0
+wait 1
+viewport_region_change mark 0.0 0.0 1.0 1.0
+wait 90
+viewport_region_change expect 0.0 0.0 1.0 1.0 <last*0.75
 cvar r.AntiAliasing 26
+view_option screen_ui off
 camera 22 4 0 0 0 0
 wait 60
 camera 22 4 0.4 0 0 0
 wait 1
 camera 22 4 0.8 0 0 0
 wait 1
-camera 22 4 1.2000000000000002 0 0 0
+camera 22 4 1.2 0 0 0
 wait 1
 camera 22 4 1.6 0 0 0
 wait 1
 camera 22 4 2.0 0 0 0
 wait 1
-camera 22 4 2.4000000000000004 0 0 0
+camera 22 4 2.4 0 0 0
 wait 1
-camera 22 4 2.8000000000000003 0 0 0
+camera 22 4 2.8 0 0 0
 wait 1
 camera 22 4 3.2 0 0 0
 wait 1
@@ -129,27 +388,153 @@ camera 22 4 4.0 0 0 0
 wait 1
 camera 22 4 4.4 0 0 0
 wait 1
-camera 22 4 4.800000000000001 0 0 0
+camera 22 4 4.8 0 0 0
 wait 1
 camera 22 4 5.2 0 0 0
 wait 1
-camera 22 4 5.6000000000000005 0 0 0
+camera 22 4 5.6 0 0 0
 wait 1
 camera 22 4 6.0 0 0 0
 wait 1
 camera 22 4 6.4 0 0 0
 wait 1
-camera 22 4 6.800000000000001 0 0 0
+camera 22 4 6.8 0 0 0
 wait 1
 camera 22 4 7.2 0 0 0
 wait 1
-camera 22 4 7.6000000000000005 0 0 0
+camera 22 4 7.6 0 0 0
 wait 1
 camera 22 4 8.0 0 0 0
 wait 1
+camera 22 4 8.4 0 0 0
+wait 1
+camera 22 4 8.8 0 0 0
+wait 1
+camera 22 4 9.2 0 0 0
+wait 1
+camera 22 4 9.6 0 0 0
+wait 1
+camera 22 4 10.0 0 0 0
+wait 1
+camera 22 4 10.4 0 0 0
+wait 1
+camera 22 4 10.8 0 0 0
+wait 1
+camera 22 4 11.2 0 0 0
+wait 1
+camera 22 4 11.6 0 0 0
+wait 1
+camera 22 4 12.0 0 0 0
+wait 1
+camera 22 4 12.4 0 0 0
+wait 1
+camera 22 4 12.8 0 0 0
+wait 1
+camera 22 4 13.2 0 0 0
+wait 1
+camera 22 4 13.6 0 0 0
+wait 1
+camera 22 4 14.0 0 0 0
+wait 1
+camera 22 4 14.4 0 0 0
+wait 1
+camera 22 4 14.8 0 0 0
+wait 1
+camera 22 4 15.2 0 0 0
+wait 1
+camera 22 4 15.6 0 0 0
+wait 1
+camera 22 4 16.0 0 0 0
+wait 1
 viewport_region_change mark 0.0 0.0 1.0 1.0
 wait 90
-viewport_region_change expect 0.0 0.0 1.0 1.0 <0.45
+viewport_region_change expect 0.0 0.0 1.0 1.0 >0
+view_option screen_ui on
+camera 22 4 0 0 0 0
+wait 60
+camera 22 4 0.4 0 0 0
+wait 1
+camera 22 4 0.8 0 0 0
+wait 1
+camera 22 4 1.2 0 0 0
+wait 1
+camera 22 4 1.6 0 0 0
+wait 1
+camera 22 4 2.0 0 0 0
+wait 1
+camera 22 4 2.4 0 0 0
+wait 1
+camera 22 4 2.8 0 0 0
+wait 1
+camera 22 4 3.2 0 0 0
+wait 1
+camera 22 4 3.6 0 0 0
+wait 1
+camera 22 4 4.0 0 0 0
+wait 1
+camera 22 4 4.4 0 0 0
+wait 1
+camera 22 4 4.8 0 0 0
+wait 1
+camera 22 4 5.2 0 0 0
+wait 1
+camera 22 4 5.6 0 0 0
+wait 1
+camera 22 4 6.0 0 0 0
+wait 1
+camera 22 4 6.4 0 0 0
+wait 1
+camera 22 4 6.8 0 0 0
+wait 1
+camera 22 4 7.2 0 0 0
+wait 1
+camera 22 4 7.6 0 0 0
+wait 1
+camera 22 4 8.0 0 0 0
+wait 1
+camera 22 4 8.4 0 0 0
+wait 1
+camera 22 4 8.8 0 0 0
+wait 1
+camera 22 4 9.2 0 0 0
+wait 1
+camera 22 4 9.6 0 0 0
+wait 1
+camera 22 4 10.0 0 0 0
+wait 1
+camera 22 4 10.4 0 0 0
+wait 1
+camera 22 4 10.8 0 0 0
+wait 1
+camera 22 4 11.2 0 0 0
+wait 1
+camera 22 4 11.6 0 0 0
+wait 1
+camera 22 4 12.0 0 0 0
+wait 1
+camera 22 4 12.4 0 0 0
+wait 1
+camera 22 4 12.8 0 0 0
+wait 1
+camera 22 4 13.2 0 0 0
+wait 1
+camera 22 4 13.6 0 0 0
+wait 1
+camera 22 4 14.0 0 0 0
+wait 1
+camera 22 4 14.4 0 0 0
+wait 1
+camera 22 4 14.8 0 0 0
+wait 1
+camera 22 4 15.2 0 0 0
+wait 1
+camera 22 4 15.6 0 0 0
+wait 1
+camera 22 4 16.0 0 0 0
+wait 1
+viewport_region_change mark 0.0 0.0 1.0 1.0
+wait 90
+viewport_region_change expect 0.0 0.0 1.0 1.0 <last*0.75
 cvar r.AntiAliasing 3
 camera 22 4 0 0 0 0
 view_option screen_ui off

@@ -1716,6 +1716,145 @@
             c.S.ReadFBO = prevRead;
         }
 
+        // glCopyImageSubData (GL 4.3), her çeviri katmanında: kaynak ve hedef iki geçici iç çerçeve arabelleğine bağlanır ve katmanın
+        // kendi BlitFramebuffer kancası çağrılır (aynı boyut, biçim ve örnek sayısında doğrudan görüntü kopyası; derinlik dokuları
+        // derinlik ekiyle). Motor TAA'nın önceki kare derinliğini, Viewport ızgarasının altındaki görüntüyü, FSR 2 / yol izleme ara
+        // sonuçlarını bununla kopyalar; VkGL, DxGL, D12GL ve MtlGL'de yoktu (çağrı hiçbir şey yapmıyordu): Vulkan'da zamansal kenar
+        // yumuşatma açıkken ızgaralı Viewport boş görünüyordu (297). WebGPU kendi doğrudan kopyasını kurar
+        void APIENTRY CopyImageSubDataEntry(GLuint src, GLenum srcTarget, GLint srcLevel, GLint srcX, GLint srcY, GLint srcZ, GLuint dst,
+                                            GLenum dstTarget, GLint dstLevel, GLint dstX, GLint dstY, GLint dstZ, GLsizei w, GLsizei h, GLsizei d)
+        {
+            if (!Live() || w <= 0 || h <= 0)
+                return;
+            const bool srcRb = srcTarget == GL_RENDERBUFFER, dstRb = dstTarget == GL_RENDERBUFFER;
+            Texture* s = srcRb ? GetRenderbuffer(src) : GetTexture(src);
+            Texture* t = dstRb ? GetRenderbuffer(dst) : GetTexture(dst);
+            if (!s || !t || !s->Image || !t->Image)
+                return;
+            const bool depth = IsDepthInternalFormat(s->InternalFormat);
+            if (depth != IsDepthInternalFormat(t->InternalFormat))
+                return;
+            const GLenum f = s->InternalFormat;
+            const bool stencil = f == GL_DEPTH_STENCIL || f == GL_DEPTH24_STENCIL8 || f == GL_DEPTH32F_STENCIL8;
+            auto& c = Ctx();
+            const uint32_t prevDraw = c.S.DrawFBO, prevRead = c.S.ReadFBO;
+            const uint32_t readName = NewName(), drawName = NewName();
+            c.Framebuffers[readName] = std::make_unique<Framebuffer>();
+            c.Framebuffers[drawName] = std::make_unique<Framebuffer>();
+            Framebuffer& rf = *c.Framebuffers[readName];
+            Framebuffer& df = *c.Framebuffers[drawName];
+            for (int k = 0; k < std::max(1, (int)d); ++k)
+            {
+                Attachment a, b;
+                (srcRb ? a.Renderbuffer : a.Texture) = src;
+                (dstRb ? b.Renderbuffer : b.Texture) = dst;
+                a.Level = srcLevel;
+                a.Layer = srcZ + k;
+                b.Level = dstLevel;
+                b.Layer = dstZ + k;
+                if (depth)
+                {
+                    rf.Depth = a;
+                    df.Depth = b;
+                    if (stencil)
+                    {
+                        rf.Stencil = a;
+                        df.Stencil = b;
+                    }
+                    rf.ReadBuffer = GL_NONE;
+                    df.DrawBuffers[0] = GL_NONE;
+                    df.NumDrawBuffers = 0;
+                }
+                else
+                {
+                    rf.Color[0] = a;
+                    rf.ReadBuffer = GL_COLOR_ATTACHMENT0;
+                    df.Color[0] = b;
+                    df.DrawBuffers[0] = GL_COLOR_ATTACHMENT0;
+                    df.NumDrawBuffers = 1;
+                }
+                c.S.ReadFBO = readName;
+                c.S.DrawFBO = drawName;
+                BlitFramebuffer(srcX, srcY, srcX + w, srcY + h, dstX, dstY, dstX + w, dstY + h,
+                                depth ? (GL_DEPTH_BUFFER_BIT | (stencil ? GL_STENCIL_BUFFER_BIT : 0)) : GL_COLOR_BUFFER_BIT, GL_NEAREST);
+            }
+            c.S.DrawFBO = prevDraw;
+            c.S.ReadFBO = prevRead;
+            for (const uint32_t name : { readName, drawName })
+            {
+                if (c.Rendering && c.RenderingFBO == name)
+                    EndRendering();
+                c.Framebuffers.erase(name);
+            }
+        }
+
+        // glClearBufferfv: çizim arabelleğinin tek renk eki (drawbuffer) ya da derinlik, kendi temizleme değeriyle. Katmanın temizleme
+        // kancası bağlı çerçeve arabelleğinin bütün renk eklerini temizlediğinden çok ekli arabellekte geçiş yalnız o ekle yeniden açılır.
+        // VkGL / DxGL / D12GL / MtlGL'de yoktu: hız arabelleği ("hız yok" = 1e4), tepki maskesi ve FSR 2 dokuları temizlenmiyordu
+        void APIENTRY ClearBufferfvEntry(GLenum buffer, GLint drawbuffer, const GLfloat* value)
+        {
+            if (!Live() || !value)
+                return;
+            auto& c = Ctx();
+            auto& st = c.S;
+            if (buffer == GL_DEPTH)
+            {
+                const float saved = st.ClearDepth;
+                st.ClearDepth = value[0];
+                ClearCurrent(GL_DEPTH_BUFFER_BIT);
+                st.ClearDepth = saved;
+                return;
+            }
+            if (buffer != GL_COLOR)
+                return;
+            Framebuffer* fb = st.DrawFBO ? GetFramebuffer(st.DrawFBO) : nullptr;
+            const bool narrow = fb && fb->NumDrawBuffers > 1;
+            GLenum savedBufs[8] = {};
+            int savedCount = 0;
+            if (narrow)
+            {
+                if (drawbuffer < 0 || drawbuffer >= fb->NumDrawBuffers || fb->DrawBuffers[drawbuffer] == GL_NONE)
+                    return;
+                if (c.Rendering)
+                    EndRendering();
+                std::copy(fb->DrawBuffers, fb->DrawBuffers + 8, savedBufs);
+                savedCount = fb->NumDrawBuffers;
+                const GLenum only = fb->DrawBuffers[drawbuffer];
+                std::fill(fb->DrawBuffers, fb->DrawBuffers + 8, (GLenum)GL_NONE);
+                fb->DrawBuffers[0] = only;
+                fb->NumDrawBuffers = 1;
+            }
+            else if (drawbuffer != 0)
+                return;
+            float savedColor[4];
+            std::copy(st.ClearColor, st.ClearColor + 4, savedColor);
+            std::copy(value, value + 4, st.ClearColor);
+            ClearCurrent(GL_COLOR_BUFFER_BIT);
+            std::copy(savedColor, savedColor + 4, st.ClearColor);
+            if (narrow)
+            {
+                if (c.Rendering)
+                    EndRendering();
+                std::copy(savedBufs, savedBufs + 8, fb->DrawBuffers);
+                fb->NumDrawBuffers = savedCount;
+            }
+        }
+
+        // glGetBooleani_v(GL_COLOR_WRITEMASK, i): ek başına renk maskesi (glColorMaski)
+        void APIENTRY GetBooleani_v(GLenum pname, GLuint index, GLboolean* data)
+        {
+            if (!data)
+                return;
+            if (pname == GL_COLOR_WRITEMASK && index < 8)
+            {
+                const uint8_t m = Ctx().S.ColorMaskBits[index];
+                for (int i = 0; i < 4; ++i)
+                    data[i] = (m & (1u << i)) ? GL_TRUE : GL_FALSE;
+                return;
+            }
+            data[0] = GL_FALSE;
+        }
+
         void APIENTRY GetNamedFramebufferAttachmentParameteriv(GLuint framebuffer, GLenum attachment, GLenum pname, GLint* params)
         {
             if (!params)
@@ -2038,6 +2177,7 @@
             CQ_VKGL_FN(NamedFramebufferTexture, NamedFramebufferTexture), CQ_VKGL_FN(NamedFramebufferRenderbuffer, NamedFramebufferRenderbuffer),
             CQ_VKGL_FN(NamedFramebufferDrawBuffers, NamedFramebufferDrawBuffers), CQ_VKGL_FN(NamedFramebufferDrawBuffer, NamedFramebufferDrawBuffer),
             CQ_VKGL_FN(NamedFramebufferReadBuffer, NamedFramebufferReadBuffer), CQ_VKGL_FN(BlitNamedFramebuffer, BlitNamedFramebuffer),
+            CQ_VKGL_FN(CopyImageSubData, CopyImageSubDataEntry), CQ_VKGL_FN(ClearBufferfv, ClearBufferfvEntry), CQ_VKGL_FN(GetBooleani_v, GetBooleani_v),
             CQ_VKGL_FN(GetNamedFramebufferAttachmentParameteriv, GetNamedFramebufferAttachmentParameteriv),
             CQ_VKGL_FN(CreateRenderbuffers, CreateRenderbuffers), CQ_VKGL_FN(NamedRenderbufferStorage, NamedRenderbufferStorage),
             CQ_VKGL_FN(NamedRenderbufferStorageMultisample, NamedRenderbufferStorageMultisample),
