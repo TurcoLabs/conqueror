@@ -20,6 +20,8 @@
 
 namespace Conqueror::MTL
 {
+    const char* g_DiagLabel = "frame";
+
     namespace
     {
         constexpr uint64_t kChunkSize = 32ull * 1024 * 1024;
@@ -210,6 +212,9 @@ namespace Conqueror::MTL
         {
             [m_Command commit];
             [m_Command waitUntilCompleted];
+            if (m_Command.error)
+                CQ_CORE_ERROR("[Metal diag] command buffer failed (flush after '{0}', frame {1}): {2}", g_DiagLabel ? g_DiagLabel : "?", m_FrameSerial,
+                              [[m_Command.error description] UTF8String]);
             m_Command = nil;
         }
     }
@@ -234,7 +239,10 @@ namespace Conqueror::MTL
         const uint64_t serial = m_FrameSerial;
         dispatch_semaphore_t sem = m_Inflight;
         volatile uint64_t* completed = &m_CompletedFrame;
-        [cmd addCompletedHandler:^(id<MTLCommandBuffer>) {
+        const char* label = g_DiagLabel;
+        [cmd addCompletedHandler:^(id<MTLCommandBuffer> done) {
+            if (done.error)
+                CQ_CORE_ERROR("[Metal diag] command buffer failed (frame {0}, last '{1}'): {2}", serial, label ? label : "?", [[done.error description] UTF8String]);
             if (*completed < serial)
                 *completed = serial;
             dispatch_semaphore_signal(sem);

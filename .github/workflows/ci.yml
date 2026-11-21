@@ -1,9 +1,11 @@
 name: CI
 
+# CI DIAGNOSIS BRANCH (ci/mtlgl-ios-ar), not for main: the AR template crashed on the iOS Simulator after the GL translation
+# layers got glCopyImageSubData / glClearBufferfv (a42424d6): Metal command buffer timeout, then access revoked, then SIGABRT in
+# -[CAMetalLayer nextDrawable]. This job builds only the iOS players and runs the AR game with one variant per launch.
 on:
   push:
-    branches: [main, "round*", "ci/**"]
-  pull_request:
+    branches: ["ci/**"]
   workflow_dispatch:
 
 concurrency:
@@ -11,158 +13,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  linux:
-    name: Linux (GCC 14, editor + player)
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v5
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ninja-build g++-14 libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
-            libxkbcommon-dev libwayland-dev wayland-protocols libgtk-3-dev libgl-dev python3-dev
-      - name: Configure
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=gcc-14 -DCMAKE_CXX_COMPILER=g++-14
-      - name: Build
-        run: cmake --build build --parallel
-
-  linux-arm64:
-    name: Linux ARM64 (GCC 14, editor + player; Raspberry Pi 4 / 5, ARM laptops)
-    runs-on: ubuntu-24.04-arm
-    steps:
-      - uses: actions/checkout@v5
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ninja-build g++-14 libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
-            libxkbcommon-dev libwayland-dev wayland-protocols libgtk-3-dev libgl-dev python3-dev
-      - name: Configure
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=gcc-14 -DCMAKE_CXX_COMPILER=g++-14
-      - name: Build
-        run: cmake --build build --parallel
-
-  linux-arm64-cross:
-    name: Linux ARM64 player (cross-compiled from x86_64 with clang, Tools/Linux)
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v5
-      - name: Install dependencies
-        run: |
-          sudo apt-get update && sudo apt-get install -y ninja-build
-          # Debian sid / ports sysroots (loong64, hurd-amd64) ship GCC 16 headers that Ubuntu 24.04's clang 18 cannot parse: clang 21
-          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null
-          echo "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-21 main" | sudo tee /etc/apt/sources.list.d/llvm-21.list
-          sudo apt-get update && sudo apt-get install -y clang-21 lld-21
-          sudo ln -sf /usr/bin/clang-21 /usr/local/bin/clang
-          sudo ln -sf /usr/bin/clang++-21 /usr/local/bin/clang++
-          sudo ln -sf /usr/bin/ld.lld-21 /usr/local/bin/ld.lld
-      - name: ARM64 sysroot (Debian arm64 packages)
-        run: Tools/Linux/make-arm64-sysroot.sh $HOME/arm64-sysroot
-      - name: Configure
-        run: >
-          cmake -S . -B build-arm64 -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=Tools/Linux/arm64-cross.toolchain.cmake
-          -DCQ_ARM64_SYSROOT=$HOME/arm64-sysroot -DCQ_RUNTIME_ONLY=ON -DGLFW_BUILD_WAYLAND=OFF
-      - name: Build
-        run: cmake --build build-arm64 --target ConquerorRuntime --parallel
-
-  linux-cross:
-    name: Linux ${{ matrix.arch }} player (cross-compiled from x86_64 with clang, Tools/Linux)
-    runs-on: ubuntu-24.04
-    strategy:
-      fail-fast: false
-      matrix:
-        arch: [armhf, i386, riscv64, ppc64el, loong64]
-    steps:
-      - uses: actions/checkout@v5
-      - name: Install dependencies
-        run: |
-          sudo apt-get update && sudo apt-get install -y ninja-build
-          # Debian sid / ports sysroots (loong64, hurd-amd64) ship GCC 16 headers that Ubuntu 24.04's clang 18 cannot parse: clang 21
-          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null
-          echo "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-21 main" | sudo tee /etc/apt/sources.list.d/llvm-21.list
-          sudo apt-get update && sudo apt-get install -y clang-21 lld-21
-          sudo ln -sf /usr/bin/clang-21 /usr/local/bin/clang
-          sudo ln -sf /usr/bin/clang++-21 /usr/local/bin/clang++
-          sudo ln -sf /usr/bin/ld.lld-21 /usr/local/bin/ld.lld
-      - name: Sysroot (Debian ${{ matrix.arch }} packages)
-        run: Tools/Linux/make-linux-sysroot.sh ${{ matrix.arch }} $HOME/sysroot
-      - name: Configure
-        run: >
-          cmake -S . -B build-cross -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=Tools/Linux/linux-cross.toolchain.cmake
-          -DCQ_LINUX_ARCH=${{ matrix.arch }} -DCQ_LINUX_SYSROOT=$HOME/sysroot -DCQ_RUNTIME_ONLY=ON -DGLFW_BUILD_WAYLAND=OFF
-      - name: Build
-        run: cmake --build build-cross --target ConquerorRuntime --parallel
-
-  web:
-    name: Web player (Emscripten, WebAssembly + WebGL 2, single thread and threads)
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v5
-      - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y ninja-build
-      - name: Emscripten SDK
-        run: |
-          git clone --depth 1 https://github.com/emscripten-core/emsdk.git $HOME/emsdk
-          $HOME/emsdk/emsdk install 6.0.13
-          $HOME/emsdk/emsdk activate 6.0.13
-      - name: Build (single thread)
-        run: |
-          source $HOME/emsdk/emsdk_env.sh
-          emcmake cmake -S . -B build-web -G Ninja -DCMAKE_BUILD_TYPE=Release -DCQ_WEB_THREADS=OFF
-          cmake --build build-web --target ConquerorRuntime --parallel
-      - name: Build (threads)
-        run: |
-          source $HOME/emsdk/emsdk_env.sh
-          emcmake cmake -S . -B build-web-mt -G Ninja -DCMAKE_BUILD_TYPE=Release -DCQ_WEB_THREADS=ON
-          cmake --build build-web-mt --target ConquerorRuntime --parallel
-
-  linux-embedded:
-    name: Linux player for AGL / Yocto (Wayland only, OpenGL ES default)
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v5
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ninja-build g++-14 libxkbcommon-dev libwayland-dev wayland-protocols
-      - name: Configure
-        run: >
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=gcc-14 -DCMAKE_CXX_COMPILER=g++-14
-          -DCQ_RUNTIME_ONLY=ON -DCQ_DEFAULT_GL_PROFILE=es3.2 -DCQ_ENABLE_VULKAN=OFF -DCQ_LINUX_ENGINE_CORE_STATIC=ON
-          -DGLFW_BUILD_X11=OFF -DGLFW_BUILD_WAYLAND=ON
-      - name: Build
-        run: cmake --build build --target ConquerorRuntime --parallel
-
-  windows:
-    name: Windows (MSVC)
-    runs-on: windows-2022
-    steps:
-      - uses: actions/checkout@v5
-      - name: Configure
-        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64
-      - name: Build
-        # Yalnız hatalar ve özet (binlerce üçüncü taraf uyarısı asıl hatayı gömüyordu); her proje /MP ile zaten tüm
-        # çekirdekleri kullanır, aynı anda en çok 2 proje (bellek tükenip cl.exe sessizce düşmesin)
-        run: cmake --build build --config Release --parallel 2 -- '/clp:ErrorsOnly;Summary' /v:minimal
-
-  windows-arm64:
-    name: Windows on ARM (MSVC ARM64)
-    runs-on: windows-11-arm
-    # İlk ARM64 Windows derlemeleri burada yapılıyor (yerelde ARM64 Windows yok): yeşile dönene kadar iş akışını düşürmez
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v5
-      - name: Configure
-        # Görüntüdeki en yeni Visual Studio (windows-11-arm'da 2022 yok) CMake'in kendi seçimiyle
-        run: cmake -S . -B build -A ARM64
-      - name: Build
-        run: cmake --build build --config Release --parallel 2 -- '/clp:ErrorsOnly;Summary' /v:minimal
-
   macos:
-    name: macOS (Apple Silicon)
+    name: macOS iOS Simulator AR diagnosis (MtlGL copy / clear)
     runs-on: macos-15
-    # macOS port is not finished yet: the job reports problems without failing the workflow
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v5
       - name: Install dependencies
@@ -171,224 +24,67 @@ jobs:
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
       - name: Build
         run: cmake --build build --parallel
-      - name: Metal smoke test (the hub makes a 3D project, the editor opens it with the Metal backend and the Game view renders it)
-        timeout-minutes: 20
-        run: |
-          CQ_TEST_METAL=1 python3 Tools/Tests/regression.py metal_smoke && exit 0
-          cat ~/.cache/cq-build/regression/_Reg_metal_smoke.txt.result.txt || true
-          grep -E "Metal|ERROR|CRITICAL|Graphics" build/bin/Conqueror.log | tail -40 || true
-          exit 1
-      - name: iOS Simulator test (the editor builds the 3D template for iOS without a Team ID; the player is compiled with Xcode for the simulator, installed, started and its screen checked)
-        timeout-minutes: 150
+      - name: Build the 3D template and the AR template for the iOS Simulator
+        timeout-minutes: 170
         run: |
           set +e
-          CQ_TEST_IOS=1 CQ_IOS_BUILD_ROOT="$PWD/build-ios" python3 Tools/Tests/regression.py ios_simulator
-          if [ $? -ne 0 ]; then
-            cat ~/.cache/cq-build/regression/_Reg_ios_simulator.txt.result.txt
-            grep -E "package_ios|error:|Error|FAILED|iOS" build/bin/Conqueror.log | tail -150
-            exit 1
-          fi
-          app=$(ls -d ~/.cache/cq-build/regression/Reg_ios_simulator/Builds/iOS/*.app | head -1)
-          python3 Tools/iOS/simulator_test.py "$app" --screenshot ios_simulator.png --wait 45
-      - name: ARKit on the iOS Simulator (the AR template with ARKit on is built for iOS; the Simulator has no ARKit world tracking, so the game must start without crashing, render and report ARKit as unavailable)
-        if: ${{ !cancelled() }}
-        timeout-minutes: 90
+          for c in ios_simulator ios_simulator_ar; do
+            CQ_TEST_IOS=1 CQ_IOS_BUILD_ROOT="$PWD/build-ios" python3 Tools/Tests/regression.py $c
+            if [ $? -ne 0 ]; then
+              cat ~/.cache/cq-build/regression/_Reg_$c.txt.result.txt
+              grep -E "package_ios|error:|Error|FAILED|iOS" build/bin/Conqueror.log | tail -150
+              exit 1
+            fi
+          done
+      - name: Run the AR game once per variant (the 3D game keeps running beside it, as in the failed CI run)
+        timeout-minutes: 60
         run: |
           set +e
-          CQ_TEST_IOS=1 CQ_IOS_BUILD_ROOT="$PWD/build-ios" python3 Tools/Tests/regression.py ios_simulator_ar
-          if [ $? -ne 0 ]; then
-            cat ~/.cache/cq-build/regression/_Reg_ios_simulator_ar.txt.result.txt
-            grep -E "package_ios|error:|Error|FAILED|iOS" build/bin/Conqueror.log | tail -150
-            exit 1
-          fi
+          mkdir -p diag
+          basic=$(ls -d ~/.cache/cq-build/regression/Reg_ios_simulator/Builds/iOS/*.app | head -1)
           app=$(ls -d ~/.cache/cq-build/regression/Reg_ios_simulator_ar/Builds/iOS/*.app | head -1)
-          python3 Tools/iOS/simulator_test.py "$app" --screenshot ios_simulator_ar.png --wait 45 --expect-log "\[ARKit\] This device does not support ARKit"
-      - name: ARKit camera image test (the YCbCr to RGB conversion and the screen rotation of the camera image with a synthetic frame)
-        if: ${{ !cancelled() }}
-        run: |
-          c++ -std=c++17 -Wall -Wextra -I Engine/src Tools/Tests/native/arkit_image_test.cpp -o arkit_image_test
-          ./arkit_image_test
-      - name: Upload the iOS Simulator screenshots
+          basic_id=$(/usr/libexec/PlistBuddy -c "Print CFBundleIdentifier" "$basic/Info.plist")
+          bid=$(/usr/libexec/PlistBuddy -c "Print CFBundleIdentifier" "$app/Info.plist")
+          python3 Tools/iOS/simulator_test.py "$basic" --screenshot diag/basic.png --wait 45 > diag/basic.out 2>&1
+          echo "basic 3D game: exit $?" | tee -a diag/summary.txt
+          variant() {
+            name=$1; shift
+            xcrun simctl terminate booted "$bid" > /dev/null 2>&1
+            if [ "$name" != "alone" ] && [ "$name" != "alone_nodepthcopy" ] && ! xcrun simctl spawn booted launchctl list | grep -q "$basic_id"; then
+              echo "  (3D game was not running, started again)" | tee -a diag/summary.txt
+              xcrun simctl launch booted "$basic_id" > /dev/null 2>&1
+              sleep 20
+            fi
+            env "$@" python3 Tools/iOS/simulator_test.py "$app" --screenshot "diag/$name.png" --wait 45 --expect-log "ARKit" > "diag/$name.out" 2>&1
+            code=$?
+            echo "$name: exit $code | $(grep -m1 'Screenshot' "diag/$name.out" | sed 's/.*Screenshot/Screenshot/') | $*" | tee -a diag/summary.txt
+            xcrun simctl spawn booted log show --last 2m --style compact --predicate 'process == "conqueror"' > "diag/$name.oslog" 2>&1
+            container=$(xcrun simctl get_app_container booted "$bid" data 2>/dev/null)
+            mkdir -p "diag/$name"
+            if [ -n "$container" ] && [ -d "$container" ]; then
+              find "$container" -name "*.log" -exec cp {} "diag/$name/" \;
+              find "$container" -path "*crash_dumps*" -type f -exec mv {} "diag/$name/" \;
+            fi
+            grep -h "Metal diag\|GLEmu trace\|MtlGL\|Unsupported\|crashed\|Signal:" "diag/$name"/*.log "diag/$name.log" "diag/$name.out" 2>/dev/null | sort -u | head -60 | sed 's/^/    /' | tee -a diag/summary.txt
+            grep -h -i "MTLDebug\|failed assertion\|validation\|command buffer" "diag/$name.oslog" "diag/$name.log" 2>/dev/null | head -20 | sed 's/^/    os: /' | tee -a diag/summary.txt
+          }
+          variant baseline
+          variant trace SIMCTL_CHILD_CQ_GLEMU_TRACE=1
+          variant isolate SIMCTL_CHILD_CQ_GLEMU_TRACE=1 SIMCTL_CHILD_CQ_GLEMU_ISOLATE=1
+          variant validation SIMCTL_CHILD_CQ_GLEMU_TRACE=1 SIMCTL_CHILD_MTL_DEBUG_LAYER=1 SIMCTL_CHILD_MTL_DEBUG_LAYER_ERROR_MODE=nslog SIMCTL_CHILD_MTL_DEBUG_LAYER_WARNING_MODE=nslog
+          variant nocopy SIMCTL_CHILD_CQ_GLEMU_TRACE=1 SIMCTL_CHILD_CQ_GLEMU_SKIP_COPYIMAGE=1
+          variant nodepthcopy SIMCTL_CHILD_CQ_GLEMU_TRACE=1 SIMCTL_CHILD_CQ_GLEMU_SKIP_DEPTHCOPY=1
+          variant noclear SIMCTL_CHILD_CQ_GLEMU_TRACE=1 SIMCTL_CHILD_CQ_GLEMU_SKIP_CLEARBUFFER=1
+          variant nocopy_noclear SIMCTL_CHILD_CQ_GLEMU_SKIP_COPYIMAGE=1 SIMCTL_CHILD_CQ_GLEMU_SKIP_CLEARBUFFER=1
+          variant baseline2
+          xcrun simctl terminate booted "$basic_id" > /dev/null 2>&1
+          variant alone
+          variant alone_nodepthcopy SIMCTL_CHILD_CQ_GLEMU_SKIP_DEPTHCOPY=1
+          exit 0
+      - name: Upload the diagnosis files
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ios-simulator-screenshot
-          path: |
-            ios_simulator.png
-            ios_simulator_ar.png
-            ios_simulator_ar.log
+          name: mtlgl-ios-ar-diagnosis
+          path: diag
           if-no-files-found: ignore
-      - name: Status indicator test (the game's icon is really in the macOS menu bar; tooltip, icon and menu come from the component, a click and a menu item reach it)
-        # Runs after a failed Metal / iOS step too; its own failure does not stop the steps above
-        if: ${{ !cancelled() }}
-        timeout-minutes: 20
-        run: |
-          CQ_TEST_MACOS_TRAY=1 python3 Tools/Tests/regression.py status_indicator_macos && exit 0
-          cat ~/.cache/cq-build/regression/_Reg_status_indicator_macos.txt.result.txt || true
-          grep -E "Status Indicator|ERROR|CRITICAL" build/bin/Conqueror.log | tail -40 || true
-          exit 1
-
-  ios:
-    name: iOS / iPadOS player (${{ matrix.sdk }}, Xcode)
-    runs-on: macos-15
-    strategy:
-      fail-fast: false
-      matrix:
-        sdk: [iphonesimulator, iphoneos]
-    steps:
-      - uses: actions/checkout@v5
-      - name: Install dependencies
-        run: brew install ninja
-      - name: Configure
-        run: >
-          cmake -S . -B build-ios -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT=${{ matrix.sdk }}
-          -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=16.0 -DCQ_RUNTIME_ONLY=ON
-      - name: Build
-        run: cmake --build build-ios --target ConquerorRuntime --parallel
-
-  freebsd:
-    name: FreeBSD (player, in a VM)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 300
-    steps:
-      - uses: actions/checkout@v5
-      - name: Build inside FreeBSD
-        uses: vmactions/freebsd-vm@v1
-        with:
-          usesh: true
-          mem: 12288
-          prepare: |
-            pkg install -y cmake ninja pkgconf python3 xorgproto libX11 libXrandr libXinerama libXcursor libXi libXext \
-              libxkbcommon wayland wayland-protocols evdev-proto
-          run: |
-            cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCQ_RUNTIME_ONLY=ON
-            cmake --build build --target ConquerorRuntime
-
-  openbsd:
-    name: OpenBSD (player, in a VM)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 300
-    steps:
-      - uses: actions/checkout@v5
-      - name: Build inside OpenBSD
-        uses: vmactions/openbsd-vm@v1
-        with:
-          mem: 12288
-          prepare: |
-            pkg_add -I cmake ninja
-          run: |
-            cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCQ_RUNTIME_ONLY=ON
-            cmake --build build --target ConquerorRuntime
-
-  netbsd:
-    name: NetBSD (player, in a VM)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 300
-    steps:
-      - uses: actions/checkout@v5
-      - name: Build inside NetBSD
-        uses: vmactions/netbsd-vm@v1
-        with:
-          mem: 12288
-          prepare: |
-            /usr/sbin/pkg_add pkgin || true
-            pkgin -y install cmake ninja-build
-            # The VM image has no X11 sets: native X11 (/usr/X11R7) comes from the release's xbase + xcomp sets
-            for set in xbase xcomp; do
-              ftp -o - "https://cdn.netbsd.org/pub/NetBSD/NetBSD-$(uname -r)/$(uname -m)/binary/sets/$set.tar.xz" | tar -xJpf - -C /
-            done
-          run: |
-            cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCQ_RUNTIME_ONLY=ON "-DCMAKE_PREFIX_PATH=/usr/X11R7;/usr/pkg"
-            cmake --build build --target ConquerorRuntime
-
-  hurd:
-    name: GNU/Hurd (player, cross-compiled with clang)
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v5
-      - name: Install dependencies
-        run: |
-          sudo apt-get update && sudo apt-get install -y ninja-build
-          # Debian sid / ports sysroots (loong64, hurd-amd64) ship GCC 16 headers that Ubuntu 24.04's clang 18 cannot parse: clang 21
-          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null
-          echo "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-21 main" | sudo tee /etc/apt/sources.list.d/llvm-21.list
-          sudo apt-get update && sudo apt-get install -y clang-21 lld-21
-          sudo ln -sf /usr/bin/clang-21 /usr/local/bin/clang
-          sudo ln -sf /usr/bin/clang++-21 /usr/local/bin/clang++
-          sudo ln -sf /usr/bin/ld.lld-21 /usr/local/bin/ld.lld
-      - name: GNU/Hurd sysroot (Debian hurd-amd64 packages)
-        run: Tools/Hurd/make-sysroot.sh $HOME/hurd-sysroot
-      - name: Configure
-        run: >
-          cmake -S . -B build-hurd -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=Tools/Hurd/hurd-cross.toolchain.cmake
-          -DCQ_HURD_SYSROOT=$HOME/hurd-sysroot -DCQ_RUNTIME_ONLY=ON -DGLFW_BUILD_WAYLAND=OFF
-      - name: Build
-        run: cmake --build build-hurd --target ConquerorRuntime --parallel
-
-  android:
-    name: Android (NDK, arm64-v8a player)
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v5
-      - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y ninja-build
-      - name: Configure
-        run: >
-          cmake -S . -B build-android -G Ninja -DCMAKE_BUILD_TYPE=Release
-          -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_LATEST_HOME/build/cmake/android.toolchain.cmake
-          -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-26 -DANDROID_STL=c++_static
-      - name: Build
-        run: cmake --build build-android --target conqueror --parallel
-
-  harmonyos:
-    name: HarmonyOS PC / tablet (OpenHarmony NDK, editor + player, ${{ matrix.arch }})
-    runs-on: ubuntu-24.04
-    strategy:
-      fail-fast: false
-      matrix:
-        arch: [arm64-v8a, x86_64]
-    env:
-      # OpenHarmony 6.0 Release public SDK (API 20) from the official mirror; the app targets API 12+ (HarmonyOS 5.0)
-      OHOS_SDK_URL: https://repo.huaweicloud.com/openharmony/os/6.0-Release/ohos-sdk-windows_linux-public.tar.gz
-      OHOS_SDK_SHA256: a315834ac133625efc912bd078f3e2b2550868d04aef1b5aa4f9679c8b3c9d8e
-      OHOS_NATIVE_ZIP: linux/native-linux-x64-6.0.0.47-Beta1.zip
-      OHOS_NATIVE_SHA256: 19ffd1a3f0001536f6826a9ef507afd36a1e050cc27ecb85f4e6c284c546c0af
-    steps:
-      - uses: actions/checkout@v5
-      - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y ninja-build unzip
-      - name: Cache the OpenHarmony native SDK
-        id: ohos-sdk
-        uses: actions/cache@v4
-        with:
-          path: ~/ohos-sdk
-          key: ohos-native-sdk-${{ env.OHOS_NATIVE_SHA256 }}
-      - name: Download the OpenHarmony native SDK (checksum-verified)
-        if: steps.ohos-sdk.outputs.cache-hit != 'true'
-        run: |
-          curl -fsSL --retry 3 -o "$RUNNER_TEMP/ohos-sdk.tar.gz" "$OHOS_SDK_URL"
-          echo "$OHOS_SDK_SHA256  $RUNNER_TEMP/ohos-sdk.tar.gz" | sha256sum -c -
-          tar -xzf "$RUNNER_TEMP/ohos-sdk.tar.gz" -C "$RUNNER_TEMP" "$OHOS_NATIVE_ZIP"
-          rm "$RUNNER_TEMP/ohos-sdk.tar.gz"
-          echo "$OHOS_NATIVE_SHA256  $RUNNER_TEMP/$OHOS_NATIVE_ZIP" | sha256sum -c -
-          mkdir -p ~/ohos-sdk
-          unzip -q "$RUNNER_TEMP/$OHOS_NATIVE_ZIP" -d ~/ohos-sdk
-      - name: Configure
-        run: >
-          cmake -S . -B build-ohos -G Ninja -DCMAKE_BUILD_TYPE=Release
-          -DCMAKE_TOOLCHAIN_FILE=$HOME/ohos-sdk/native/build/cmake/ohos.toolchain.cmake
-          -DOHOS_ARCH=${{ matrix.arch }} -DOHOS_PLATFORM=OHOS -DOHOS_STL=c++_static
-      - name: Build (libConquerorEditor.so + libconqueror.so)
-        run: cmake --build build-ohos --target ConquerorEngine conqueror --parallel
-      - name: Check the libraries and package the HAP project (no hvigor on the runner)
-        run: |
-          for lib in libConquerorEditor.so libconqueror.so; do
-            f=build-ohos/lib/${{ matrix.arch }}/$lib
-            ls -l "$f"
-            # NAPI module registration and the GLFW layer must be inside; only system libraries may be needed at run time
-            ~/ohos-sdk/native/llvm/bin/llvm-nm -D --defined-only "$f" | grep -E "CQ_Register|glfwCreateWindow|NFD_OpenDialogU8"
-            ~/ohos-sdk/native/llvm/bin/llvm-readelf -d "$f" | grep NEEDED
-          done
-          python3 Tools/HarmonyOS/package_hap.py --out build-hap --build-dir build-ohos
-          test -f build-hap/entry/libs/${{ matrix.arch }}/libConquerorEditor.so
-          test -f build-hap/entry/src/main/resources/rawfile/cq_files.txt

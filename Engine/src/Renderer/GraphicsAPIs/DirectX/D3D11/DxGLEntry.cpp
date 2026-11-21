@@ -6,6 +6,9 @@
 #include "Core/Logging/Log.h"
 
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
+#include <set>
 #include <array>
 #include <cstring>
 #include <string>

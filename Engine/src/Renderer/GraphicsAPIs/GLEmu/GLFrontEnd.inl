@@ -7,6 +7,10 @@
 //   BeginOcclusion, EndOcclusion, ReadOcclusion (QueryObject'te Occlusion / Any alanları).
 // Gerekli başlıklar (glad, <algorithm>, <array>, <cstring>, <string>, <utility>, Log.h) içeren dosyadadır.
 
+#ifndef CQ_DIAG_LABEL
+#define CQ_DIAG_LABEL(x) ((void)0)
+#endif
+
     namespace
     {
         GLuint g_ActiveOcclusion = 0;   // etkin örtüşme sorgusu (BeginQuery)
@@ -1721,6 +1725,27 @@
         // derinlik ekiyle). Motor TAA'nın önceki kare derinliğini, Viewport ızgarasının altındaki görüntüyü, FSR 2 / yol izleme ara
         // sonuçlarını bununla kopyalar; VkGL, DxGL, D12GL ve MtlGL'de yoktu (çağrı hiçbir şey yapmıyordu): Vulkan'da zamansal kenar
         // yumuşatma açıkken ızgaralı Viewport boş görünüyordu (297). WebGPU kendi doğrudan kopyasını kurar
+        // CI TANI (yalnız ci/mtlgl-ios-ar dalı): CQ_GLEMU_TRACE=1 her farklı kopya / temizleme imzasını bir kez yazar;
+        // CQ_GLEMU_SKIP_COPYIMAGE / CQ_GLEMU_SKIP_DEPTHCOPY / CQ_GLEMU_SKIP_CLEARBUFFER / CQ_GLEMU_SKIP_CLEARDEPTH çağrıyı atlar
+        bool DiagEnv(const char* name)
+        {
+            const char* v = std::getenv(name);
+            return v && *v && *v != '0';
+        }
+        void DiagTrace(const std::string& line)
+        {
+            static const bool on = DiagEnv("CQ_GLEMU_TRACE");
+            static std::set<std::string> seen;
+            if (on && seen.size() < 300 && seen.insert(line).second)
+                CQ_CORE_WARN("[GLEmu trace] {0}", line);
+        }
+        std::string DiagHex(uint32_t v)
+        {
+            char b[16];
+            std::snprintf(b, sizeof(b), "0x%X", v);
+            return b;
+        }
+
         void APIENTRY CopyImageSubDataEntry(GLuint src, GLenum srcTarget, GLint srcLevel, GLint srcX, GLint srcY, GLint srcZ, GLuint dst,
                                             GLenum dstTarget, GLint dstLevel, GLint dstX, GLint dstY, GLint dstZ, GLsizei w, GLsizei h, GLsizei d)
         {
@@ -1729,13 +1754,34 @@
             const bool srcRb = srcTarget == GL_RENDERBUFFER, dstRb = dstTarget == GL_RENDERBUFFER;
             Texture* s = srcRb ? GetRenderbuffer(src) : GetTexture(src);
             Texture* t = dstRb ? GetRenderbuffer(dst) : GetTexture(dst);
+            DiagTrace(std::string("CopyImageSubData src ") +
+                      (s ? DiagHex(s->InternalFormat) + " " + std::to_string(s->Width) + "x" + std::to_string(s->Height) + " s" + std::to_string(s->Samples) +
+                               (s->Image ? "" : " noimage")
+                         : std::string("null")) +
+                      " -> dst " +
+                      (t ? DiagHex(t->InternalFormat) + " " + std::to_string(t->Width) + "x" + std::to_string(t->Height) + " s" + std::to_string(t->Samples) +
+                               (t->Image ? "" : " noimage")
+                         : std::string("null")) +
+                      " region " + std::to_string(srcX) + "," + std::to_string(srcY) + " -> " + std::to_string(dstX) + "," + std::to_string(dstY) + " " +
+                      std::to_string(w) + "x" + std::to_string(h) + "x" + std::to_string(d) + " lvl " + std::to_string(srcLevel) + "/" + std::to_string(dstLevel) +
+                      " z " + std::to_string(srcZ) + "/" + std::to_string(dstZ) + " targets " + DiagHex(srcTarget) + "/" + DiagHex(dstTarget));
             if (!s || !t || !s->Image || !t->Image)
                 return;
             const bool depth = IsDepthInternalFormat(s->InternalFormat);
             if (depth != IsDepthInternalFormat(t->InternalFormat))
                 return;
+            static const bool skipAll = DiagEnv("CQ_GLEMU_SKIP_COPYIMAGE"), skipDepth = DiagEnv("CQ_GLEMU_SKIP_DEPTHCOPY");
+            if (skipAll || (skipDepth && depth))
+                return;
             const GLenum f = s->InternalFormat;
             const bool stencil = f == GL_DEPTH_STENCIL || f == GL_DEPTH24_STENCIL8 || f == GL_DEPTH32F_STENCIL8;
+            static const bool isolate = DiagEnv("CQ_GLEMU_ISOLATE");
+            if (isolate)
+            {
+                CQ_DIAG_LABEL("work before CopyImageSubData");
+                FlushAndWaitGL();
+            }
+            CQ_DIAG_LABEL(depth ? "CopyImageSubData depth" : "CopyImageSubData color");
             auto& c = Ctx();
             const uint32_t prevDraw = c.S.DrawFBO, prevRead = c.S.ReadFBO;
             const uint32_t readName = NewName(), drawName = NewName();
@@ -1786,6 +1832,9 @@
                     EndRendering();
                 c.Framebuffers.erase(name);
             }
+            if (isolate)
+                FlushAndWaitGL();
+            CQ_DIAG_LABEL("frame after CopyImageSubData");
         }
 
         // glClearBufferfv: çizim arabelleğinin tek renk eki (drawbuffer) ya da derinlik, kendi temizleme değeriyle. Katmanın temizleme
@@ -1797,6 +1846,56 @@
                 return;
             auto& c = Ctx();
             auto& st = c.S;
+            {
+                Framebuffer* dfb = st.DrawFBO ? GetFramebuffer(st.DrawFBO) : nullptr;
+                std::string att;
+                if (dfb)
+                {
+                    for (int i = 0; i < 8; ++i)
+                        if (dfb->Color[i].Valid())
+                        {
+                            Texture* ct = AttachmentTexture(dfb->Color[i]);
+                            att += " c" + std::to_string(i) + "=" +
+                                   (ct ? DiagHex(ct->InternalFormat) + " " + std::to_string(ct->Width) + "x" + std::to_string(ct->Height) + " s" + std::to_string(ct->Samples)
+                                       : std::string("null"));
+                        }
+                    if (dfb->Depth.Valid())
+                    {
+                        Texture* dt = AttachmentTexture(dfb->Depth);
+                        att += " d=" + (dt ? DiagHex(dt->InternalFormat) + " " + std::to_string(dt->Width) + "x" + std::to_string(dt->Height) : std::string("null"));
+                    }
+                    if (dfb->Stencil.Valid())
+                        att += " st";
+                    att += " nbuf " + std::to_string(dfb->NumDrawBuffers);
+                }
+                DiagTrace(std::string("ClearBufferfv ") + (buffer == GL_DEPTH ? "depth" : buffer == GL_COLOR ? "color" : DiagHex(buffer)) + " db " +
+                          std::to_string(drawbuffer) + " fbo " + (st.DrawFBO ? "user" : "default") + att + " scissor " + std::to_string((int)st.ScissorTest) +
+                          " cmask " + std::to_string((int)st.ColorMask[0]) + std::to_string((int)st.ColorMask[1]) + std::to_string((int)st.ColorMask[2]) +
+                          std::to_string((int)st.ColorMask[3]) + " dmask " + std::to_string((int)st.DepthMask) + " v " + std::to_string(value[0]));
+                static const bool skipAll = DiagEnv("CQ_GLEMU_SKIP_CLEARBUFFER"), skipDepth = DiagEnv("CQ_GLEMU_SKIP_CLEARDEPTH");
+                if (skipAll || (skipDepth && buffer == GL_DEPTH))
+                    return;
+            }
+            static const bool isolate = DiagEnv("CQ_GLEMU_ISOLATE");
+            struct DiagScope
+            {
+                bool On;
+                explicit DiagScope(bool on, bool depth) : On(on)
+                {
+                    if (On)
+                    {
+                        CQ_DIAG_LABEL("work before ClearBufferfv");
+                        FlushAndWaitGL();
+                    }
+                    CQ_DIAG_LABEL(depth ? "ClearBufferfv depth" : "ClearBufferfv color");
+                }
+                ~DiagScope()
+                {
+                    if (On)
+                        FlushAndWaitGL();
+                    CQ_DIAG_LABEL("frame after ClearBufferfv");
+                }
+            } diagScope(isolate && (buffer == GL_DEPTH || buffer == GL_COLOR), buffer == GL_DEPTH);
             if (buffer == GL_DEPTH)
             {
                 const float saved = st.ClearDepth;

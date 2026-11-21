@@ -8,6 +8,9 @@
 #include "../OpenGL/GLMissingStubs.h"
 
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
+#include <set>
 #include <array>
 #include <chrono>
 #include <cstring>

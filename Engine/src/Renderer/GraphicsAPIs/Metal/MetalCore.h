@@ -15,6 +15,9 @@ struct GLFWwindow;
 
 namespace Conqueror::MTL
 {
+    // CI TANI (ci/mtlgl-ios-ar): son kodlanan işin etiketi; komut arabelleği hata verince günlüğe yazılır
+    extern const char* g_DiagLabel;
+
     // Arabellek dizinleri: köşe öznitelikleri 0..15, sabit arabellekler (yazmaç b) 16 + b
     constexpr uint32_t kConstantBufferBase = 16;
     constexpr uint32_t kMaxConstantBuffers = 12;

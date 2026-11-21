@@ -7,6 +7,9 @@
 #include "Renderer/ShaderCompiler/ShaderCompiler.h"
 
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
+#include <set>
 #include <array>
 #include <cstring>
 #include <string>
@@ -16,6 +19,7 @@ namespace Conqueror::MtlGL
 {
     using MTL::Core;
 
+#define CQ_DIAG_LABEL(x) (::Conqueror::MTL::g_DiagLabel = (x))
 #include "../GLEmu/GLFrontEnd.inl"
 
     void ReleaseDrawHelpers();   // MtlGLDraw.mm
