@@ -1,0 +1,54 @@
+# sample-project: Parkour
+# 297: Parkour Menu sahnesinde P1 platformunun üstü ızgara düzleminin (y = 0) 3 cm üstünde: ızgara yakından platformun altında
+# kalıyor, ~30 m'den uzakta platformun üstünde görünüyordu (ızgaranın öne alma payındaki "örnek pikselin merkezinde değil" terimi
+# MSAA olmadan da uygulanıyor, mesafeyle büyüyüp 3 cm'yi aşıyordu). Izgara her mesafede P1'in üstünü değiştirmemeli; y = 0'daki Start
+# platformunda (eş düzlemli) görünmeli. Sahnenin kendi ayarı (SMAA + Temporal Stability: ızgara son görüntüye eklenir) ve Temporal
+# Stability kapalı (ızgara sahneye çizilir) yollar. Örnek proje Vulkan'da açılır: son görüntüye ekleme glCopyImageSubData kullanır,
+# Vulkan katmanında yoktu ve Viewport boş kalıyordu (P1 denetimi bunu da yakalar)
+wait 60
+open_scene Assets/Scenes/Menu.cqscene
+wait 30
+focus Viewport
+camera 40 35 45 0.08 0.03 -16.14
+wait 20
+view_option grid off
+wait 10
+viewport_region_change mark 0.46 0.47 0.54 0.53
+view_option grid on
+wait 12
+viewport_region_change expect 0.46 0.47 0.54 0.53 <2
+camera 12 35 45 0.08 0.03 -16.14
+wait 20
+view_option grid off
+wait 10
+viewport_region_change mark 0.46 0.47 0.54 0.53
+view_option grid on
+wait 12
+viewport_region_change expect 0.46 0.47 0.54 0.53 <2
+camera 40 35 45 0 0 0
+wait 20
+view_option grid off
+wait 10
+viewport_region_change mark 0.46 0.47 0.54 0.53
+view_option grid on
+wait 12
+viewport_region_change expect 0.46 0.47 0.54 0.53 >3
+cvar r.TemporalStability 0
+wait 5
+camera 40 35 45 0.08 0.03 -16.14
+wait 20
+view_option grid off
+wait 10
+viewport_region_change mark 0.46 0.47 0.54 0.53
+view_option grid on
+wait 12
+viewport_region_change expect 0.46 0.47 0.54 0.53 <2
+camera 40 35 45 0 0 0
+wait 20
+view_option grid off
+wait 10
+viewport_region_change mark 0.46 0.47 0.54 0.53
+view_option grid on
+wait 12
+viewport_region_change expect 0.46 0.47 0.54 0.53 >3
+quit

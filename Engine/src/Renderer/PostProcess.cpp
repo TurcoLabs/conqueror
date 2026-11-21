@@ -1003,6 +1003,11 @@ namespace Conqueror
         s_ReactivePrevFramebuffer = 0;
     }
 
+    uint32_t PostProcessStack::GetCurrentSamples()
+    {
+        return s_Current ? std::max(1u, s_Current->m_Samples) : 1u;
+    }
+
     uint32_t PostProcessStack::GetCurrentSceneDepth()
     {
         if (!s_Current || !s_Current->m_SceneFramebuffer || s_Current->m_Samples > 1)

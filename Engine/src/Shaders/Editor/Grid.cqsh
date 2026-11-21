@@ -49,6 +49,8 @@ uniform vec3 u_MajorColor = vec3(1.0);
 uniform int u_Background = 0;         // 1: arka plan katmanı (2D görünüm; her şey ızgaranın önünde)
 uniform float u_DepthErrorQuad = 0.0;   // derinlik kuantalamasının mesafe hatası: d² · bu (perspektif)
 uniform float u_DepthErrorConst = 0.0;  // ortografik: sabit
+// 1: sahne derinliğinin örnekleri piksel merkezinde değil (MSAA: örnek başına derinlik testi ya da örnek 0'dan çözülmüş derinlik)
+uniform int u_SampleSpread = 0;
 // 1: son görüntünün üstüne (kenar yumuşatma ve ton eşlemeden sonra, TAA'ya girmeden; EditorGrid::RenderDeferred). Derinlik testi
 // sahne derinliğinden elle yapılır, karışım doğrusal uzayda u_Below (son görüntünün kopyası) ile
 uniform int u_Composite = 0;
@@ -176,14 +178,17 @@ void main()
     if (u_Background == 0)
     {
         // Zeminle eşit derinlik yarışı (z-fighting) olmasın: ızgara kameraya doğru yalnızca gerektiği kadar öne alınır:
-        //   - örnek konumları (MSAA, TAA titreşimi) pikselin merkezinden yarım piksele kadar uzakta: o sürede zeminin ışın
-        //     boyunca uzaklığı fwidth(gridDist) / 2 kadar değişir (yatık bakışta büyük, tepeden bakışta küçük),
-        //   - derinlik tamponunun kuantalama hatası (mesafenin karesiyle büyür).
-        // Eskiden mesafeyle doğrusal (%0.15) pay vardı: 20 m'den sonra 3 cm'yi aşıp y = 0'ın birkaç cm üstündeki yüzeylerin
-        // (ör. pistin asfaltı) içinden ızgarayı gösteriyordu; kamera hareket ettikçe sınır kaydığı için yanıp sönüyordu.
-        // Derinlik testi örnek başına yapıldığından duvar, kutu, merdiven gibi nesnelerin kenarları temiz kalır.
+        //   - derinlik tamponunun kuantalama hatası (mesafenin karesiyle büyür),
+        //   - yalnız MSAA'da: örnek konumları pikselin merkezinden yarım piksele kadar uzakta, o sürede zeminin ışın boyunca uzaklığı
+        //     fwidth(gridDist) / 2 kadar değişir (yatık bakışta büyük, tepeden bakışta küçük).
+        // Tek örnekli hedefte (TAA / FSR / SMAA / FXAA titreşimi dahil) sahne derinliği pikselin kendi (titreşimli) merkezindedir;
+        // ızgara aynı titreşimle çizilir ve son görüntüde her derinlik örneğinin ışını tam yeniden kurulur, yani o pay gerekmez.
+        // 297: MSAA olmayan görünümde de o pay uygulanıyordu: 30 m civarından sonra 3 cm'yi aşıp y = 0'ın 3 cm üstündeki Parkour
+        // platformunun (P1) üstünde ızgarayı gösteriyordu, yaklaşınca ızgara kayboluyordu. (Eskiden mesafeyle doğrusal %0.15 pay da
+        // vardı: aynı nedenle pistin asfaltının içinden görünüyordu.) Derinlik testi örnek başına yapıldığından duvar, kutu, merdiven
+        // gibi nesnelerin kenarları temiz kalır.
         float gridDist = length(world - u_CameraPos);
-        float slope = min(fwidth(gridDist), gridDist * 0.05);
+        float slope = u_SampleSpread == 1 ? min(fwidth(gridDist), gridDist * 0.05) : 0.0;
         pull = max(0.002, 0.75 * slope) + (u_DepthErrorQuad * gridDist * gridDist + u_DepthErrorConst) * 2.0;
         vec4 pc = u_ViewProjection * vec4(world - normalize(dir) * pull, 1.0);
         gridDepth = clamp(pc.z / pc.w * 0.5 + 0.5, 0.0, 1.0);

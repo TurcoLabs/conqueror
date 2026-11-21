@@ -23,6 +23,7 @@ namespace Conqueror
             bool Pending = false;
             RenderCamera Camera;            // titreşimsiz
             glm::vec2 JitterNDC{ 0.0f };    // bu karenin alt piksel titreşimi (sahne çözünürlüğünde, NDC)
+            bool SampleSpread = false;      // sahne MSAA: çözülmüş derinlik pikselin merkezinde değil, örnek 0'da
         };
         DeferredGrid s_Deferred;
         uint32_t s_BelowTexture = 0;        // son görüntünün kopyası (ızgara doğrusal uzayda onun üstüne karıştırılır)
@@ -137,6 +138,8 @@ namespace Conqueror
         s_GridShader->Bind();
         SetCommonUniforms(camera, viewProj, plane2D, linearOutput, background);
         s_GridShader->SetInt("u_Composite", 0);
+        // 297: örnek başına derinlik testi (MSAA) yoksa ızgara pikselin kendi derinliğiyle sınanır, eğim payı gerekmez
+        s_GridShader->SetInt("u_SampleSpread", PostProcessStack::GetCurrentSamples() > 1 ? 1 : 0);
         // Gölgelendiricinin 1. çıkışı (composite örtme payı) sahne hedefinin 1. ekine yazmasın
         GLboolean mask1[4] = { GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE };
         glGetBooleani_v(GL_COLOR_WRITEMASK, 1, mask1);
@@ -165,6 +168,7 @@ namespace Conqueror
         s_Deferred.Pending = true;
         s_Deferred.Camera = camera;
         s_Deferred.JitterNDC = jitter;
+        s_Deferred.SampleSpread = PostProcessStack::GetCurrentSamples() > 1;
         return true;
     }
 
@@ -268,6 +272,7 @@ namespace Conqueror
         SetCommonUniforms(camera, viewProj, false, true, false);
         s_GridShader->SetInt("u_Composite", 1);
         s_GridShader->SetFloat2("u_JitterNDC", s_Deferred.JitterNDC);
+        s_GridShader->SetInt("u_SampleSpread", s_Deferred.SampleSpread ? 1 : 0);
         s_GridShader->SetFloat2("u_OutputSize", glm::vec2((float)width, (float)height));
         s_GridShader->SetMat4("u_PrevViewProjection", h.PrevViewProj);
         s_GridShader->SetInt("u_CoverageHistoryValid", h.Valid ? 1 : 0);

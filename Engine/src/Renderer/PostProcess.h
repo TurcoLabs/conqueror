@@ -93,6 +93,8 @@ namespace Conqueror
         // Şu an bu görünümün (çok örneklemesiz) sahne hedefine çiziliyorsa sahne derinliği, değilse 0. Derinlik yazmayan
         // saydam çizimler (parçacıklar) örnekleyebilir: yüzeye yaklaşınca yumuşakça solarlar (soft particles)
         static uint32_t GetCurrentSceneDepth();
+        // Şu an çizilen görünümün sahne hedefinin örnek sayısı (MSAA / EQAA / CSAA > 1; görünüm yoksa 1)
+        static uint32_t GetCurrentSamples();
         // TAA tepki maskesi (reactive mask): derinlik / hareket bayrağı yazmayan saydam çizimler (parçacıklar) kapladıkları
         // pikselleri buraya yazar; TAA o piksellerde geçmişe güvenmez. Begin maskenin çerçeve tamponunu bağlar (bu görünümün
         // TAA'lı sahne hedefine çizilmiyorsa 0), End sahne hedefini geri bağlar
