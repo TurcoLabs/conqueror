@@ -1,0 +1,22 @@
+# hub
+# 304: Hub imlecin altında açılınca (uygulama ızgarasından ya da terminalden başlatınca) altında kalan proje kartı kullanıcı hiçbir şey
+# yapmadan mavi çerçeve ve açık renkle işaretli geliyordu, bir piksellik kıpırdamada yol ipucu da açılıyordu. Fare 6 pikselden fazla
+# kaymadan kart imlecin altında sayılmamalı; gerçekten kayınca normal şekilde işaretlenmeli ve ipucu 0.6 sn sonra açılmalı
+# (fare oynamadan tıklama: hub_resting_pointer_click). Proje, her koşuda yeniden açılan Hub ayar klasörüne kurulur
+wait 5
+hub create empty P304 {work}/_hubcfg_Reg_hub_resting_pointer
+wait 30
+move 380 230
+wait 60
+hub expect_hover -1
+hub expect_tip 0
+move 381 231
+wait 60
+hub expect_hover -1
+hub expect_tip 0
+move 400 250
+wait 5
+hub expect_hover 0
+wait 50
+hub expect_tip 1
+quit

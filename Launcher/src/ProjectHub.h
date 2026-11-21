@@ -13,6 +13,8 @@
 #include <unordered_map>
 #include <vector>
 
+struct ImGuiViewport;
+
 namespace Conqueror::Editor
 {
     struct ProjectInfo
@@ -127,7 +129,18 @@ namespace Conqueror::Editor
         bool m_GridView = true;
         // İpuçları yalnızca fare Hub açıldıktan sonra gerçekten hareket ettiyse açılır: açılışta imleç zaten bir projenin
         // üstünde duruyorsa kutu kendiliğinden çıkmaz (Unity Hub / tarayıcılar gibi)
+        // 304: imleç Hub açılırken bir kartın üstünde duruyorsa kart da mavi çerçeveyle işaretlenmiyor: fare birkaç pikselden fazla
+        // kayana (ya da tıklanana / tekerlek dönene) kadar Hub'daki hiçbir öğe imlecin altında sayılmaz; açılıştaki ilk yarım saniye
+        // ve pencere taşınırken başlangıç noktası yeniden alınır (pencere yöneticisinin yerleştirmesi hareket sayılmaz)
+        void DrawHub(ImGuiViewport* viewport);
         bool m_PointerMoved = false;
+        bool m_PointerHasStart = false;
+        float m_PointerStartX = 0.0f, m_PointerStartY = 0.0f;   // pencereye göre
+        float m_PointerViewX = 0.0f, m_PointerViewY = 0.0f;     // o sıradaki pencere konumu
+        static constexpr double kPointerSettle = 0.5;
+        static constexpr float kPointerMoveMin = 6.0f;
+        int m_HoverCard = -1, m_HoverCardNow = -1;  // otomasyon: son karede imlecin altında çizilen proje kartı / satırı
+        bool m_TipShown = false, m_TipNow = false;  // otomasyon: son karede kart ipucu açık mıydı
         int m_TipCard = -1;          // 284: üstünde durulan proje kartı ve ne zamandan beri (ipucu 0.6 sn sonra)
         double m_TipSince = 0.0;
         static constexpr double kCardTipDelay = 0.6;

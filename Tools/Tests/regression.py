@@ -232,6 +232,8 @@ def run_case_inner(case, env=None):
             if code != 0:
                 return False, f"setup failed: {cmd}: {out.strip()[-200:]}", time.time() - start
         if re.search(r"^#\s*hub\b", text, re.M):
+            # Hub testleri proje kopyası oluşturmaz: çalışma klasörü silinmişse (ör. disk temizliği) burada yeniden açılır
+            os.makedirs(WORK, exist_ok=True)
             script = os.path.join(WORK, f"_{name}.txt")
             with open(script, "w", encoding="utf-8") as f:
                 f.write(text)

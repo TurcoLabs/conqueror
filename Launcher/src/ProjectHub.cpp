@@ -514,13 +514,53 @@ namespace Conqueror::Editor
     {
         PollInstalls();
         PumpTemplateThumbnails();
+        ImGuiIO& io = ImGui::GetIO();
+        ImGuiViewport* viewport = ImGui::GetMainViewport();
+        // 304: Hub, imlecin hemen altında açıldığında (ör. uygulama ızgarasından ya da terminalden başlatınca) altında kalan kart
+        // kullanıcı hiçbir şey yapmadan mavi çerçeve, açık renk ve yol ipucuyla işaretli geliyordu: pencere imlecin altında belirince
+        // sistem imlecin konumunu bildiriyor ve öğe "üstünde duruluyor" sayılıyordu; ipucu da bir piksellik kıpırdamayla açılıyordu.
+        // Artık fare Hub açıldıktan sonra kPointerMoveMin pikselden fazla kayana, tıklanana ya da tekerlek dönene kadar imleç bu
+        // karedeki öğelerden gizlenir (kart, satır, yan çubuk, düğme, ipucu); tıklama aynı karede işler
         if (!m_PointerMoved)
         {
-            const ImGuiIO& io = ImGui::GetIO();
-            if (ImGui::IsMousePosValid() && (io.MouseDelta.x != 0.0f || io.MouseDelta.y != 0.0f))
+            const bool deliberate = io.MouseDown[0] || io.MouseDown[1] || io.MouseDown[2] || io.MouseWheel != 0.0f || io.MouseWheelH != 0.0f;
+            if (deliberate)
                 m_PointerMoved = true;
+            else if (ImGui::IsMousePosValid())
+            {
+                const float rx = io.MousePos.x - viewport->Pos.x, ry = io.MousePos.y - viewport->Pos.y;
+                const bool windowMoved = m_PointerHasStart && (viewport->Pos.x != m_PointerViewX || viewport->Pos.y != m_PointerViewY);
+                if (!m_PointerHasStart || windowMoved || ImGui::GetTime() < kPointerSettle)
+                {
+                    m_PointerStartX = rx;
+                    m_PointerStartY = ry;
+                    m_PointerHasStart = true;
+                }
+                else
+                {
+                    const float dx = rx - m_PointerStartX, dy = ry - m_PointerStartY, lim = kPointerMoveMin * m_UIScale;
+                    if (dx * dx + dy * dy > lim * lim)
+                        m_PointerMoved = true;
+                }
+                m_PointerViewX = viewport->Pos.x;
+                m_PointerViewY = viewport->Pos.y;
+            }
         }
-        ImGuiViewport* viewport = ImGui::GetMainViewport();
+        const ImVec2 realMousePos = io.MousePos;
+        const bool hidePointer = !m_PointerMoved;
+        if (hidePointer)
+            io.MousePos = ImVec2(-FLT_MAX, -FLT_MAX);
+        m_HoverCardNow = -1;
+        m_TipNow = false;
+        DrawHub(viewport);
+        m_HoverCard = m_HoverCardNow;
+        m_TipShown = m_TipNow;
+        if (hidePointer)
+            io.MousePos = realMousePos;
+    }
+
+    void ProjectHub::DrawHub(ImGuiViewport* viewport)
+    {
         ImGui::SetNextWindowPos(viewport->Pos);
         ImGui::SetNextWindowSize(viewport->Size);
         ImGui::SetNextWindowViewport(viewport->ID);
@@ -807,8 +847,13 @@ namespace Conqueror::Editor
         dl->PopClipRect();
         if (hovered)
             dl->AddRect(a, b, ImGui::GetColorU32(kAccent), 10.0f, 0, 1.5f);
+        if (hovered)
+            m_HoverCardNow = index;
         if (showTip)
+        {
+            m_TipNow = true;
             ImGui::SetTooltip("%s\n%s", project.Path.string().c_str(), project.Missing ? "The folder no longer exists" : "Click to open, right-click for options");
+        }
         if (clicked && !project.Missing)
             OpenProject(project);
         ImGui::PopID();
@@ -822,6 +867,8 @@ namespace Conqueror::Editor
         const float w = ImGui::GetContentRegionAvail().x;
         const bool clicked = ImGui::InvisibleButton("##row", ImVec2(w, h));
         const bool hovered = ImGui::IsItemHovered();
+        if (hovered)
+            m_HoverCardNow = index;
         DrawProjectContextMenu(project, index);
         ImDrawList* dl = ImGui::GetWindowDrawList();
         dl->AddRectFilled(a, ImVec2(a.x + w, a.y + h), hovered ? kCardHover : kCardBg, 8.0f);
@@ -1283,6 +1330,25 @@ namespace Conqueror::Editor
                 return true;
             }
             if (a[1] == "search") { m_Search = a.size() > 2 ? a[2] : ""; return true; }
+            // 304: hub expect_hover <kart sırası | -1> / expect_tip <0|1>: son karede imlecin altında çizilen proje kartı ve yol ipucu
+            if (a[1] == "expect_hover" && a.size() > 2)
+            {
+                const int want = std::atoi(a[2].c_str());
+                if (m_HoverCard != want) { err = "hovered card " + std::to_string(m_HoverCard) + " (pointer moved: " + (m_PointerMoved ? "yes" : "no") + ")"; return false; }
+                return true;
+            }
+            if (a[1] == "expect_page" && a.size() > 2)
+            {
+                static const char* names[] = { "projects", "new", "learn", "addons", "settings", "installs" };
+                if (a[2] != names[(int)m_Page]) { err = std::string("page is ") + names[(int)m_Page]; return false; }
+                return true;
+            }
+            if (a[1] == "expect_tip" && a.size() > 2)
+            {
+                const bool want = a[2] == "1";
+                if (m_TipShown != want) { err = std::string("card tooltip ") + (m_TipShown ? "shown" : "hidden"); return false; }
+                return true;
+            }
             if (a[1] == "learn" && a.size() > 2) { m_LearnTopic = std::atoi(a[2].c_str()); return true; }
             if (a[1] == "view" && a.size() > 2) { m_GridView = a[2] == "grid"; return true; }
             if (a[1] == "api_search") { m_ApiSearch = a.size() > 2 ? a[2] : ""; return true; }

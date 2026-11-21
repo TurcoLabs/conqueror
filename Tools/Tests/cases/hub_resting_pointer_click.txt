@@ -1,0 +1,11 @@
+# hub
+# 304: Hub açılınca imleç gerçekten kayana kadar öğeler imlecin altında sayılmıyor; fare hiç oynamadan yapılan tıklama yine de aynı
+# karede işlemeli (imleç yan çubuktaki Learn'ün üstünde dururken tıklanır)
+wait 30
+move 60 216
+wait 60
+hub expect_page projects
+click 60 216
+wait 5
+hub expect_page learn
+quit
