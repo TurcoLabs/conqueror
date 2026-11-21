@@ -460,7 +460,8 @@ namespace Conqueror::Editor
                 hooks.AddUI = [this](const std::string& item) { if (m_UIEditorPanel) m_UIEditorPanel->AddElement(item); };
                 hooks.BlueprintOpen = [this]() { return m_VisualScriptPanel && m_VisualScriptPanel->HasOpenGraph(); };
                 hooks.AddBlueprintNode = [this](const std::string& id) { if (m_VisualScriptPanel) m_VisualScriptPanel->QueuePaletteNode(id); };
-                hooks.ShaderOpen = [this]() { return m_ShaderEditorPanel && m_ShaderEditorPanel->HasOpenGraph(); };
+                // Shader Graph penceresi m_ShowShaderGraph ile görünür (kapatma düğmesi yok); gizliyken yüklü malzeme "açık" sayılmaz
+                hooks.ShaderOpen = [this]() { return m_ShowShaderGraph && m_ShaderEditorPanel && m_ShaderEditorPanel->HasOpenGraph(); };
                 hooks.AddShaderNode = [this](int type) { if (m_ShaderEditorPanel) m_ShaderEditorPanel->QueuePaletteNode(type); };
             }
             AudioAssetsInspector::SetOpenMixerWindow([this]() { m_ShowAudioMixer = true; });
@@ -1535,6 +1536,29 @@ namespace Conqueror::Editor
             ImGui::DockBuilderDockWindow("###TilePalette", terrain);
     }
 
+    // 306: Palette artık editör açılınca açık geldiği için Terrain'le aynı bölmede iki sekme oluyor: öndeki sekme 2D projede (Viewport
+    // 2D görünümde açıldıysa) Palette, 3D projede Terrain olur. Varsayılan yerleşim açılıştan birkaç kare sonra (ve Reset Layout'ta)
+    // yeniden kurulduğundan seçim her yeni bölmede bir kez yapılır; sonra kullanıcının tıkladığı sekme kalır. Yalnız seçili sekme
+    // değişir, klavye odağı değişmez; kullanıcı iki paneli ayrı bölmelere taşıdıysa dokunulmaz
+    void EditorLayer::SelectStartupToolTab()
+    {
+        if (m_StartupToolTabFrames <= 0)
+            return;
+        --m_StartupToolTabFrames;
+        if (!m_ShowTilePalette || !m_ShowTerrain || !m_ViewportPanel)
+            return;
+        ImGuiWindow* palette = ImGui::FindWindowByName("###TilePalette");
+        ImGuiWindow* terrain = ImGui::FindWindowByName("###Terrain");
+        if (!palette || !terrain || !palette->DockNode || palette->DockNode != terrain->DockNode || !palette->DockNode->TabBar)
+            return;
+        ImGuiDockNode* node = palette->DockNode;
+        if (node->ID == m_StartupToolTabNodeID)
+            return;
+        ImGuiWindow* front = m_ViewportPanel->GetEditorCamera().Is2D() ? palette : terrain;
+        node->TabBar->NextSelectedTabId = front->TabId;
+        m_StartupToolTabNodeID = node->ID;
+    }
+
     void EditorLayer::OnImGuiRender()
     {
         GameInput::CaptureImGuiFrameInput();
@@ -1799,6 +1823,9 @@ namespace Conqueror::Editor
                     m_StartupLayoutFrame = m_StartupFrames;
                 if (m_ResetLayout)
                     m_PendingFocusWindow = "Viewport";   // varsayılan yerleşimde Viewport sekmesi önde (Game arkasında)
+                // 306: yeni kurulan Terrain / Palette bölmesinde öndeki sekme yeniden seçilir (2D projede Palette, 3D'de Terrain)
+                m_StartupToolTabNodeID = 0;
+                m_StartupToolTabFrames = 120;
                 first_time = false;
                 m_ResetLayout = false;
 
@@ -2679,28 +2706,49 @@ namespace Conqueror::Editor
         m_PaletteWasShown = m_ShowTilePalette;
         if (m_ShowTilePalette && m_TilePalettePanel)
             m_TilePalettePanel->OnImGuiRender(&m_ShowTilePalette);
-        // 199: UI Editor açılınca Palette (UI kategorisi) açılır (Terrain'in yanında, 282), kapanınca onunla kapanır
-        if (m_UIEditorPanel)
+        // 306: açılışta Terrain ile Palette'in bölmesinde öndeki sekme (2D projede Palette, 3D projede Terrain)
+        SelectStartupToolTab();
+        // 199 + 306: UI Editor, Blueprint (Visual Script) ya da Shader Graph açılınca Palette o düzenleyicinin kategorisinde açılır
+        // (Terrain'in yanında, 282; UI Editor'le Bind Widgets de). Palette kapalıyken onu düzenleyiciler açtıysa, açan düzenleyicilerin
+        // hepsi kapanınca Palette de kapanır; kullanıcı Palette'i kendisi kapatırsa bu bağ kopar
         {
-            const bool uiOpen = m_UIEditorPanel->IsOpen();
-            if (uiOpen && !m_UIEditorWasOpen)
+            const auto& hooks = Palette::GetHooks();
+            const bool open[3] = {
+                m_UIEditorPanel && m_UIEditorPanel->IsOpen(),
+                hooks.BlueprintOpen && hooks.BlueprintOpen(),
+                hooks.ShaderOpen && hooks.ShaderOpen(),
+            };
+            static constexpr int kCategory[3] = { Palette::UI, Palette::Blueprint, Palette::Shader };
+            for (int i = 0; i < 3; ++i)
             {
-                m_PaletteOpenedByUIEditor = !m_ShowTilePalette;
-                m_ShowTilePalette = true;
-                m_ShowBindWidgets = true;
-                Palette::SetCategory(Palette::UI);
+                const unsigned bit = 1u << i;
+                if (open[i] && !m_GraphEditorWasOpen[i])
+                {
+                    if (!m_ShowTilePalette || m_PaletteOpenedBy != 0)
+                        m_PaletteOpenedBy |= bit;
+                    m_ShowTilePalette = true;
+                    Palette::SetCategory(kCategory[i]);
+                    if (i == 0)
+                        m_ShowBindWidgets = true;
+                }
+                if (!open[i] && m_GraphEditorWasOpen[i])
+                {
+                    if (i == 0)
+                        m_ShowBindWidgets = false;
+                    if (m_PaletteOpenedBy & bit)
+                    {
+                        m_PaletteOpenedBy &= ~bit;
+                        if (m_PaletteOpenedBy == 0)
+                            m_ShowTilePalette = false;
+                    }
+                }
+                m_GraphEditorWasOpen[i] = open[i];
             }
-            if (!uiOpen && m_UIEditorWasOpen)
-            {
-                m_ShowBindWidgets = false;
-                if (m_PaletteOpenedByUIEditor)
-                    m_ShowTilePalette = false;
-                m_PaletteOpenedByUIEditor = false;
-            }
-            m_UIEditorWasOpen = uiOpen;
-            if (m_ShowBindWidgets)
-                m_BindWidgetsPanel.OnImGuiRender(&m_ShowBindWidgets, m_UIEditorPanel->GetCanvasEntity());
+            if (!m_ShowTilePalette)
+                m_PaletteOpenedBy = 0;
         }
+        if (m_UIEditorPanel && m_ShowBindWidgets)
+            m_BindWidgetsPanel.OnImGuiRender(&m_ShowBindWidgets, m_UIEditorPanel->GetCanvasEntity());
         // 199: UI Debugger (Widget Reflector)
         m_UIDebuggerPanel.SetContext(m_ActiveScene);
         if (!EditorState::Get().IsEditing())
@@ -9453,6 +9501,38 @@ namespace Conqueror::Editor
             if (!flag) { err = "unknown panel '" + n + "'"; return false; }
             *flag = on;
             Automation::WaitFrames(2);
+            return true;
+        });
+        // 306: shader_graph new | close: yeni bir Shader Graph varlığı oluşturup Shader Graph düzenleyicisinde açar (malzemenin
+        // "Open Shader Graph" düğmesinin yaptığı gibi) ya da düzenleyiciyi kapatır
+        Automation::RegisterCommand("shader_graph", [this](const Args& a, std::string& err) {
+            if (a.size() < 2) { err = "shader_graph new|close"; return false; }
+            if (a[1] == "new")
+            {
+                if (!m_ContentBrowserPanel || !m_ShaderEditorPanel) { err = "no content browser / shader editor"; return false; }
+                const std::filesystem::path path = m_ContentBrowserPanel->CreateAssetOfKind("shadergraph");
+                if (path.empty()) { err = "could not create a shader graph"; return false; }
+                m_ShowShaderGraph = true;
+                m_ShaderEditorPanel->SetMaterialAsset(path.string());
+                m_PendingFocusWindow = "Shader Graph Editor";
+                Automation::WaitFrames(2);
+                return true;
+            }
+            if (a[1] == "close") { m_ShowShaderGraph = false; Automation::WaitFrames(2); return true; }
+            err = "shader_graph new|close";
+            return false;
+        });
+        // 306: expect_tab_front <pencere> <0|1>: pencerenin sekmesi bölmesinde öndeki (görünen) sekme mi ("###" kimlikli pencereler
+        // adın kendisiyle yazılır: otomasyon satırında "#" yorum başlatır, ör. TilePalette, Terrain)
+        Automation::RegisterCommand("expect_tab_front", [](const Args& a, std::string& err) {
+            if (a.size() < 3) { err = "expect_tab_front <window> <0|1>"; return false; }
+            ImGuiWindow* w = ImGui::FindWindowByName(a[1].c_str());
+            if (!w)
+                w = ImGui::FindWindowByName(("###" + a[1]).c_str());
+            if (!w) { err = "no window '" + a[1] + "'"; return false; }
+            const bool front = w->DockIsActive ? w->DockTabIsVisible : w->Active;
+            Automation::Report("TAB " + a[1] + (front ? " front" : " behind"));
+            if (front != (a[2] == "1")) { err = a[1] + (front ? " is the front tab" : " is not the front tab"); return false; }
             return true;
         });
         Automation::RegisterCommand("new_scene", [this](const Args&, std::string&) { NewScene(); return true; });

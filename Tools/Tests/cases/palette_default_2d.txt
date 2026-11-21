@@ -1,0 +1,15 @@
+# template: basic2d
+# 306: 2D projede (Viewport 2D görünümde açılır) Terrain ile Palette'in bölmesinde öndeki sekme Palette. Varsayılan yerleşim açılıştan
+# birkaç kare sonra yeniden kurulduğu için seçim o bölmede yapılır; kullanıcının geçtiği sekme önde kalır, Reset Layout'ta yine Palette
+wait 60
+uieditor palette expect_open 1
+expect_tab_front TilePalette 1
+expect_tab_front Terrain 0
+focus Terrain
+wait 30
+expect_tab_front Terrain 1
+expect_tab_front TilePalette 0
+layout reset
+wait 30
+expect_tab_front TilePalette 1
+quit

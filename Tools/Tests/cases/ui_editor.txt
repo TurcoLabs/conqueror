@@ -3,6 +3,9 @@
 # öğe ekleme (bırakılan noktaya), tıklayıp seçme, taşıma (geri alınabilir), kulpla boyutlandırma, klavye / gamepad gezinmesi
 # (otomatik ve Explicit) ve tasarım yüzeyinin görüntüsü; HUD canvas'ı sahne görünümünde çizilmez
 wait 30
+# 306: Palette editör açılınca açık gelir; burada kapatılır ki UI Editor onu açıp kendisiyle birlikte yeniden kapatsın
+panel tilepalette off
+wait 3
 uieditor new_canvas HUD
 uieditor resolution 1920 1080
 uieditor add Button 400 300

@@ -1,0 +1,34 @@
+# template: basic3d
+# 306: Palette editör açılınca Terrain'in yanında sekme olarak açık gelir; 3D projede öndeki sekme Terrain. Kullanıcı Palette'i
+# kapattıysa Blueprint (Visual Script) ya da Shader Graph açılınca Palette o kategoride açılır ve açan düzenleyici kapanınca yeniden
+# kapanır; Palette açıkken açılıp kapanan düzenleyici onu kapatmaz
+wait 60
+uieditor palette expect_open 1
+expect_tab_front Terrain 1
+expect_tab_front TilePalette 0
+panel tilepalette off
+wait 5
+uieditor palette expect_open 0
+vs new Assets/Scripts/BP306.cqgraph
+wait 10
+uieditor palette expect_open 1
+uieditor palette expect_category blueprint
+panel visualscript off
+wait 10
+uieditor palette expect_open 0
+shader_graph new
+wait 10
+uieditor palette expect_open 1
+uieditor palette expect_category shader
+shader_graph close
+wait 10
+uieditor palette expect_open 0
+panel tilepalette on
+wait 5
+open_asset Assets/Scripts/BP306.cqgraph
+wait 10
+uieditor palette expect_category blueprint
+panel visualscript off
+wait 10
+uieditor palette expect_open 1
+quit

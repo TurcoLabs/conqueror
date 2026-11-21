@@ -230,7 +230,9 @@ namespace Conqueror::Editor
         std::unique_ptr<ViewportPanel> m_ViewportPanel;
         std::unique_ptr<GamePanel> m_GamePanel;
         std::unique_ptr<UIEditorPanel> m_UIEditorPanel;   // 199
-        bool m_UIEditorWasOpen = false, m_PaletteOpenedByUIEditor = false;
+        // 199 + 306: UI Editor / Blueprint (Visual Script) / Shader Graph son karede açık mıydı; Palette'i hangileri açtı (bit)
+        bool m_GraphEditorWasOpen[3] = { false, false, false };
+        unsigned m_PaletteOpenedBy = 0;
         BindWidgetsPanel m_BindWidgetsPanel;
         bool m_ShowBindWidgets = false;
         UIDebuggerPanel m_UIDebuggerPanel;
@@ -278,9 +280,12 @@ namespace Conqueror::Editor
         bool m_ShowAnimation = false;
         bool m_ShowSpriteEditor = false;
         bool m_ShowTerrain = true;
-        bool m_ShowTilePalette = false;
+        bool m_ShowTilePalette = true;     // 306: Palette editör açılınca Terrain'in yanında sekme olarak açık gelir
         bool m_PaletteWasShown = false;
         void DockPaletteNextToTerrain();   // 282
+        int m_StartupToolTabFrames = 120;  // 306: Terrain / Palette bölmesinin öndeki sekmesi seçilene kadar denenecek kare
+        unsigned m_StartupToolTabNodeID = 0;  // seçimin yapıldığı bölme (yerleşim yeniden kurulunca yeniden seçilir)
+        void SelectStartupToolTab();
         bool m_ShowAddonManager = false;
         bool m_ShowProjectSettings = true;
         bool m_ShowStats = true;
