@@ -1,0 +1,11 @@
+# template: empty
+# 313: malzeme önizleme küresinin kenarı basamaklıydı: 256 x 256 kenar yumuşatmasız çiziliyordu, Inspector başlığındaki küçük küre
+# aynı dokuyu mipmap'siz ~18 piksele küçültüyordu. Şimdi 4x MSAA (silüet piksellerinin kısmen örtülü olanları %28 -> %66) ve her
+# çizimden sonra mipmap (küçük görüntü üç çizgisel örneklenir)
+wait 40
+focus Inspector
+select_asset {dir}/assets/matpreview/PreviewRed.cqmat
+wait 30
+material_preview edge 50
+material_preview mip 4
+quit

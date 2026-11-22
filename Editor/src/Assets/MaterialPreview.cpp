@@ -92,6 +92,10 @@ namespace Conqueror::Editor::MaterialPreview
             rt.Width = kSize;
             rt.Height = kSize;
             rt.UpdateMode = RenderTargetUpdate::Always;
+            // 313: kürenin kenarları basamaklıydı (kenar yumuşatmasız 256 x 256 çizim; Inspector başlığındaki küçük küre aynı dokuyu
+            // mipmap'siz ~18 piksele küçültüyordu). Unity'nin önizlemesi gibi 4x MSAA, küçük görüntü için mipmap
+            rt.AntiAliasing = 2;
+            rt.GenerateMipmaps = true;
         }
 
         // Anahtar için yuva (yoksa en uzun süredir kullanılmayan yuva bu malzemeye geçer)

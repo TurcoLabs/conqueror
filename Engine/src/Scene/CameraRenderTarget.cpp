@@ -25,6 +25,9 @@ namespace Conqueror
         {
             GLuint Framebuffer = 0, Color = 0, Depth = 0;
             uint32_t Width = 0, Height = 0;
+            // 313: çok örnekli çizim hedefi (renk + derinlik çok örnekli dokular); çizimden sonra Framebuffer'a çözülür
+            GLuint MSFramebuffer = 0, MSColor = 0, MSDepth = 0;
+            int Samples = 1;
         };
 
         std::unordered_map<std::string, HDRTarget> s_HDR;
@@ -64,16 +67,20 @@ namespace Conqueror
             if (t.Framebuffer) glDeleteFramebuffers(1, &t.Framebuffer);
             if (t.Color) glDeleteTextures(1, &t.Color);
             if (t.Depth) glDeleteRenderbuffers(1, &t.Depth);
+            if (t.MSFramebuffer) glDeleteFramebuffers(1, &t.MSFramebuffer);
+            if (t.MSColor) glDeleteTextures(1, &t.MSColor);
+            if (t.MSDepth) glDeleteTextures(1, &t.MSDepth);
             t = {};
         }
 
-        void EnsureHDR(HDRTarget& t, uint32_t width, uint32_t height)
+        void EnsureHDR(HDRTarget& t, uint32_t width, uint32_t height, int samples)
         {
-            if (t.Framebuffer && t.Width == width && t.Height == height)
+            if (t.Framebuffer && t.Width == width && t.Height == height && t.Samples == samples)
                 return;
             ReleaseHDR(t);
             t.Width = width;
             t.Height = height;
+            t.Samples = samples;
             glGenTextures(1, &t.Color);
             glBindTexture(GL_TEXTURE_2D, t.Color);
             glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, (GLsizei)width, (GLsizei)height, 0, GL_RGBA, GL_FLOAT, nullptr);
@@ -89,6 +96,27 @@ namespace Conqueror
             glBindFramebuffer(GL_FRAMEBUFFER, t.Framebuffer);
             glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, t.Color, 0);
             glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, t.Depth);
+            if (samples <= 1)
+                return;
+            glGenTextures(1, &t.MSColor);
+            glBindTexture(GL_TEXTURE_2D_MULTISAMPLE, t.MSColor);
+            glTexImage2DMultisample(GL_TEXTURE_2D_MULTISAMPLE, samples, GL_RGBA16F, (GLsizei)width, (GLsizei)height, GL_TRUE);
+            glGenTextures(1, &t.MSDepth);
+            glBindTexture(GL_TEXTURE_2D_MULTISAMPLE, t.MSDepth);
+            glTexImage2DMultisample(GL_TEXTURE_2D_MULTISAMPLE, samples, GL_DEPTH24_STENCIL8, (GLsizei)width, (GLsizei)height, GL_TRUE);
+            glBindTexture(GL_TEXTURE_2D_MULTISAMPLE, 0);
+            glGenFramebuffers(1, &t.MSFramebuffer);
+            glBindFramebuffer(GL_FRAMEBUFFER, t.MSFramebuffer);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D_MULTISAMPLE, t.MSColor, 0);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D_MULTISAMPLE, t.MSDepth, 0);
+            if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+            {
+                // Çok örnekli hedef kurulamadı (WebGL 2, sürücü): tek örnekli çizim
+                glDeleteFramebuffers(1, &t.MSFramebuffer);
+                glDeleteTextures(1, &t.MSColor);
+                glDeleteTextures(1, &t.MSDepth);
+                t.MSFramebuffer = t.MSColor = t.MSDepth = 0;
+            }
         }
     }
 
@@ -145,9 +173,13 @@ namespace Conqueror
                     continue;
                 target->Resize(width, height);
                 HDRTarget& hdr = s_HDR[rt.Name];
-                EnsureHDR(hdr, width, height);
+                GLint maxSamples = 1;
+                glGetIntegerv(GL_MAX_SAMPLES, &maxSamples);
+                const int samples = std::min(1 << std::clamp(rt.AntiAliasing, 0, 3), std::max(maxSamples, 1));
+                EnsureHDR(hdr, width, height, samples);
+                target->SetMipmaps(rt.GenerateMipmaps);
 
-                glBindFramebuffer(GL_FRAMEBUFFER, hdr.Framebuffer);
+                glBindFramebuffer(GL_FRAMEBUFFER, hdr.MSFramebuffer ? hdr.MSFramebuffer : hdr.Framebuffer);
                 glViewport(0, 0, (GLsizei)width, (GLsizei)height);
                 // Unity Camera.targetTexture gibi: gökyüzü çizilmeyen kamera (Solid Color) dokuyu kendi arka plan rengiyle temizler
                 // (eskiden hep siyah). Renk sRGB, HDR hedefi doğrusal
@@ -162,6 +194,13 @@ namespace Conqueror
                 glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
                 glEnable(GL_DEPTH_TEST);
                 scene.RenderSceneFromCamera(e, width, height);
+                if (hdr.MSFramebuffer)
+                {
+                    // Çok örnekli renk tek örnekli HDR dokusuna çözülür (kenarlar örneklerin ortalaması)
+                    glBindFramebuffer(GL_READ_FRAMEBUFFER, hdr.MSFramebuffer);
+                    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, hdr.Framebuffer);
+                    glBlitFramebuffer(0, 0, (GLint)width, (GLint)height, 0, 0, (GLint)width, (GLint)height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+                }
 
                 // Çözüm: ton eşleme + sRGB, herkesin örneklediği dokuya
                 glBindFramebuffer(GL_FRAMEBUFFER, target->GetFramebuffer());
@@ -175,6 +214,7 @@ namespace Conqueror
                 const float ev = scene.GetRenderSettings().Post.Exposure + rt.Exposure;
                 s_Resolve->SetFloat("u_Exposure", std::exp2(ev));
                 PostProcess::DrawFullscreenQuad();
+                target->UpdateMipmaps();
 
                 target->RenderCount++;
                 rt.RenderedOnce = true;
@@ -215,6 +255,10 @@ namespace Conqueror
             .Field("Height", "Height", &C::Height).Range(1.0f, 4096.0f, 1.0f)
             .Field("UpdateMode", "Update Mode", &C::UpdateMode).Options({ "Always", "Once", "Disabled" })
             .Field("Exposure", "Exposure (EV)", &C::Exposure).Range(-10.0f, 10.0f, 0.05f)
+            .Field("AntiAliasing", "Anti-aliasing", &C::AntiAliasing).Options({ "None", "2 samples", "4 samples", "8 samples" })
+                .Tooltip("MSAA for this camera's texture (Unity Render Texture Anti-aliasing): smooth edges at the cost of memory and fill rate.")
+            .Field("GenerateMipmaps", "Generate Mip Maps", &C::GenerateMipmaps)
+                .Tooltip("Builds mip maps after every render (Unity Render Texture Mip Maps + Auto Generate): the texture stays smooth when shown smaller than its size.")
             .Field("Renders", "Renders", &C::Renders).ReadOnly();
     }
 }

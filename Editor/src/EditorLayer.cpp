@@ -7956,6 +7956,72 @@ namespace Conqueror::Editor
             if (!ok) { err = "the material preview was not drawn (is a .cqmat selected?)"; return false; }
             if (a.size() >= 3 && a[1] == "save")
                 return WriteProjectThumbnail(MaterialPreview::LastTexture(), 256, 256, a[2], 256, 256);
+            // edge [min%] (313): şeklin silüetindeki ara tonlu (kısmen örtülü) piksellerin oranı; kenar yumuşatmasız çizimde silüet pikselleri
+            // ya arka plan ya tam şekil rengidir (basamaklı kenar). mip <seviye>: o mipmap seviyesi var ve şekil orada da görünüyor
+            // (Inspector başlığındaki küçük küre dokuyu ~18 piksele küçültür; mipmap'siz küçültme kenarı pikselli yapıyordu)
+            if (a.size() >= 2 && (a[1] == "edge" || a[1] == "mip"))
+            {
+                const uint32_t tex = MaterialPreview::LastTexture();
+                if (!tex) { err = "no preview texture"; return false; }
+                int level = 0;
+                if (a[1] == "mip")
+                {
+                    if (a.size() < 3) { err = "material_preview mip <level>"; return false; }
+                    level = std::atoi(a[2].c_str());
+                }
+                GLint w = 0, h = 0;
+                glGetTextureLevelParameteriv(tex, level, GL_TEXTURE_WIDTH, &w);
+                glGetTextureLevelParameteriv(tex, level, GL_TEXTURE_HEIGHT, &h);
+                if (w <= 0 || h <= 0) { err = "the preview texture has no mip level " + std::to_string(level); return false; }
+                std::vector<uint8_t> px((size_t)w * h * 4);
+                glGetTextureImage(tex, level, GL_RGBA, GL_UNSIGNED_BYTE, (GLsizei)px.size(), px.data());
+                auto at = [&](int x, int y) { return &px[((size_t)y * w + x) * 4]; };
+                const uint8_t* bg = at(0, 0);
+                std::vector<int> d((size_t)w * h);
+                for (int y = 0; y < h; ++y)
+                    for (int x = 0; x < w; ++x)
+                    {
+                        const uint8_t* c = at(x, y);
+                        d[(size_t)y * w + x] = std::max({ std::abs(c[0] - bg[0]), std::abs(c[1] - bg[1]), std::abs(c[2] - bg[2]) });
+                    }
+                if (a[1] == "mip")
+                {
+                    const int center = d[(size_t)(h / 2) * w + w / 2];
+                    char m[160];
+                    std::snprintf(m, sizeof(m), "material preview mip %d: %dx%d, center difference from background %d", level, w, h, center);
+                    Automation::Report(m);
+                    if (center < 30) { err = std::string("the shape is missing at this mip level: ") + m; return false; }
+                    return true;
+                }
+                // İç renk farkı: şekil piksellerinin (fark > 40) ortancası; silüet: 4 komşusundan biri arka plan (fark < 8) olan şekil tarafı
+                std::vector<int> inside;
+                for (int v : d)
+                    if (v > 40)
+                        inside.push_back(v);
+                if (inside.empty()) { err = "no shape in the preview"; return false; }
+                std::nth_element(inside.begin(), inside.begin() + inside.size() / 2, inside.end());
+                const int full = inside[inside.size() / 2];
+                int boundary = 0, partial = 0;
+                for (int y = 1; y + 1 < h; ++y)
+                    for (int x = 1; x + 1 < w; ++x)
+                    {
+                        const int v = d[(size_t)y * w + x];
+                        if (v < 8)
+                            continue;
+                        const bool nearBg = d[(size_t)y * w + x - 1] < 8 || d[(size_t)y * w + x + 1] < 8 || d[(size_t)(y - 1) * w + x] < 8 || d[(size_t)(y + 1) * w + x] < 8;
+                        if (!nearBg)
+                            continue;
+                        ++boundary;
+                        partial += v < full * 0.7f;
+                    }
+                const float pct = boundary ? 100.0f * (float)partial / (float)boundary : 0.0f;
+                char m[200];
+                std::snprintf(m, sizeof(m), "material preview edge: %d silhouette pixels, %.1f%% partially covered (shape difference %d)", boundary, pct, full);
+                Automation::Report(m);
+                const float minPct = a.size() > 2 ? (float)std::atof(a[2].c_str()) : -1.0f;
+                if (minPct >= 0.0f && pct < minPct) { err = std::string("the preview's edge is stair-stepped: ") + m; return false; }
+                return true;
+            }
             // mark | expect_same [tol]: önizleme kareden kareye aynı mı (300: açık sahneyle ortam haritasını paylaşırken yanıp sönüyordu)
             static float s_Marked[3] = { -1.0f, -1.0f, -1.0f };
             if (a.size() >= 2 && a[1] == "mark")
