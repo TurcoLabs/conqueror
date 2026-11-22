@@ -10,6 +10,7 @@ name: CI
 # Fourth run: the third one showed slow GPU frames (0.3-5 s) in every variant, also in frames without a copy / clear, and a stuck grep;
 # now the old behaviour (copy / clears skipped, as before a42424d6) and the new one alternate three times each, plus runs without
 # the 3D game, with the per-frame count of new pipelines / textures.
+# Fifth run: the new behaviour against the same with only TAA's previous-depth copy skipped, four times each.
 on:
   push:
     branches: ["ci/**"]

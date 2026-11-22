@@ -86,16 +86,17 @@ variant() {
   fi
 }
 
-STUBS="SIMCTL_CHILD_CQ_GLEMU_SKIP_COPYIMAGE=1 SIMCTL_CHILD_CQ_GLEMU_SKIP_CLEARBUFFER=1 SIMCTL_CHILD_CQ_GLEMU_SKIP_CLEARDEPTH=1"
-variant old_1 1 $STUBS
+# Beşinci koşu: yeni davranış ile yalnız TAA'nın önceki kare derinliği kopyası atlanmış hali sırayla dörder kez (3D oyun arkada açık,
+# ana CI'daki gibi). Dördüncü koşuda yeni davranışta 6 koşunun 4'ünde zaman aşımı, 2'sinde SimMetalHost yeniden başlaması; eskide 3'te 1 zaman aşımı
+NODEPTH="SIMCTL_CHILD_CQ_GLEMU_SKIP_DEPTHCOPY=1"
 variant new_1 1 SIMCTL_CHILD_CQ_GLEMU_NONE=1
-variant old_2 1 $STUBS
+variant nodepth_1 1 $NODEPTH
 variant new_2 1 SIMCTL_CHILD_CQ_GLEMU_NONE=1
-variant old_3 1 $STUBS
+variant nodepth_2 1 $NODEPTH
 variant new_3 1 SIMCTL_CHILD_CQ_GLEMU_NONE=1
-variant new_alone_1 0 SIMCTL_CHILD_CQ_GLEMU_NONE=1
-variant new_alone_2 0 SIMCTL_CHILD_CQ_GLEMU_NONE=1
-variant new_3d_closed k SIMCTL_CHILD_CQ_GLEMU_NONE=1
+variant nodepth_3 1 $NODEPTH
+variant new_4 1 SIMCTL_CHILD_CQ_GLEMU_NONE=1
+variant nodepth_4 1 $NODEPTH
 
 tmo 120 xcrun simctl shutdown all > /dev/null 2>&1
 cat diag/summary.txt >> "$GITHUB_STEP_SUMMARY"
