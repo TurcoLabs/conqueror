@@ -196,7 +196,19 @@ namespace Conqueror::MtlGL
         p.GlobalsDirty = true;
         p.Id = c.NextProgramId++;
         p.Linked = true;
+        if (!p.Label.empty())
+            ProgramLabelGL(p);   // yeniden bağlamada yeni nesneler de adını alır
         return true;
+    }
+
+    // 323: Metal label (Xcode GPU yakalamasında görünür); çizim boru hattının adı oluşturulurken verilir (MtlGLDraw)
+    void ProgramLabelGL(Program& p)
+    {
+        NSString* name = p.Label.empty() ? nil : [NSString stringWithUTF8String:p.Label.c_str()];
+        if (p.VS)
+            p.VS.label = name;
+        if (p.PS)
+            p.PS.label = name;
     }
 
     UniformSlot* FindUniform(Program& p, GLint location)

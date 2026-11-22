@@ -272,7 +272,8 @@
             if (index < kMaxStubs && !g_StubReported[index])
             {
                 g_StubReported[index] = true;
-                CQ_CORE_WARN("[VkGL] Unimplemented GL function called: {0}", g_StubNames[index] ? g_StubNames[index] : "?");
+                CQ_CORE_WARN("[GLEmu] Unimplemented GL function called: {0}", g_StubNames[index] ? g_StubNames[index] : "?");
+                GLEmu::NoteUnimplementedCall(g_StubNames[index]);
             }
         }
 
@@ -1341,6 +1342,52 @@
         }
 
         GLboolean APIENTRY IsProgram(GLuint program) { return GetProgram(program) ? GL_TRUE : GL_FALSE; }
+
+        // glObjectLabel / glGetObjectLabel (323): hata ayıklama adları. Programın adı arka uca da geçer (ProgramLabelGL: Vulkan nesne
+        // adı, Direct3D hata ayıklama adı, Metal label; RenderDoc / PIX / Xcode yakalamalarında görünür); diğer nesnelerin adı saklanır.
+        // Eskiden uygulanmamış işlev olarak her açılışta uyarı veriyordu (motor her gölgelendiriciye adını verir)
+        std::unordered_map<uint64_t, std::string> g_ObjectLabels;
+
+        void APIENTRY ObjectLabel(GLenum identifier, GLuint name, GLsizei length, const GLchar* label)
+        {
+            std::string text = !label ? std::string() : length < 0 ? std::string(label) : std::string(label, (size_t)length);
+            if (identifier == GL_PROGRAM)
+            {
+                if (Program* p = GetProgram(name))
+                {
+                    p->Label = std::move(text);
+                    ProgramLabelGL(*p);
+                }
+                return;
+            }
+            const uint64_t key = ((uint64_t)identifier << 32) | name;
+            if (text.empty())
+                g_ObjectLabels.erase(key);
+            else
+                g_ObjectLabels[key] = std::move(text);
+        }
+
+        void APIENTRY GetObjectLabel(GLenum identifier, GLuint name, GLsizei bufSize, GLsizei* length, GLchar* label)
+        {
+            std::string text;
+            if (identifier == GL_PROGRAM)
+            {
+                if (Program* p = GetProgram(name))
+                    text = p->Label;
+            }
+            else if (auto it = g_ObjectLabels.find(((uint64_t)identifier << 32) | name); it != g_ObjectLabels.end())
+                text = it->second;
+            // GL: label boşsa length adın tamamının uzunluğudur (sonlandırıcısız)
+            GLsizei n = (GLsizei)text.size();
+            if (label && bufSize > 0)
+            {
+                n = (GLsizei)std::min<size_t>(text.size(), (size_t)bufSize - 1);
+                std::memcpy(label, text.data(), (size_t)n);
+                label[n] = 0;
+            }
+            if (length)
+                *length = n;
+        }
 
         void APIENTRY GetProgramiv(GLuint program, GLenum pname, GLint* params)
         {
@@ -2753,7 +2800,8 @@
             CQ_VKGL_FN(GetNamedRenderbufferParameteriv, GetNamedRenderbufferParameteriv), CQ_VKGL_FN(GetTextureLevelParameteriv, GetTextureLevelParameteriv),
             CQ_VKGL_FN(BeginQuery, BeginQuery), CQ_VKGL_FN(EndQuery, EndQuery), CQ_VKGL_FN(GetQueryObjectuiv, GetQueryObjectuiv), CQ_VKGL_FN(GetTextureSubImage, GetTextureSubImage), CQ_VKGL_FN(GetUniformLocation, GetUniformLocation),
             CQ_VKGL_FN(GetVertexAttribiv, GetVertexAttribiv), CQ_VKGL_FN(GetVertexAttribPointerv, GetVertexAttribPointerv),
-            CQ_VKGL_FN(IsEnabled, IsEnabled), CQ_VKGL_FN(IsProgram, IsProgram), CQ_VKGL_FN(LineWidth, LineWidth), CQ_VKGL_FN(LinkProgram, LinkProgramEntry),
+            CQ_VKGL_FN(IsEnabled, IsEnabled), CQ_VKGL_FN(IsProgram, IsProgram), CQ_VKGL_FN(ObjectLabel, ObjectLabel),
+            CQ_VKGL_FN(GetObjectLabel, GetObjectLabel), CQ_VKGL_FN(LineWidth, LineWidth), CQ_VKGL_FN(LinkProgram, LinkProgramEntry),
             CQ_VKGL_FN(NamedBufferSubData, NamedBufferSubData), CQ_VKGL_FN(PixelStorei, PixelStorei), CQ_VKGL_FN(PolygonMode, PolygonMode),
             CQ_VKGL_FN(PolygonOffset, PolygonOffset), CQ_VKGL_FN(QueryCounter, QueryCounter), CQ_VKGL_FN(ReadBuffer, ReadBuffer),
             CQ_VKGL_FN(ReadPixels, ReadPixels), CQ_VKGL_FN(RenderbufferStorage, RenderbufferStorage), CQ_VKGL_FN(Scissor, Scissor),

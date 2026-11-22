@@ -357,6 +357,7 @@ namespace Conqueror::WgpuGL
     // Hesaplama gölgelendiricisi (307): geçerli program IsCompute ise dispatch (indirectBuffer 0: doğrudan x / y / z; değilse o arabellekte
     // indirectOffset'teki üç uint), glMemoryBarrier
     void DispatchComputeGL(uint32_t x, uint32_t y, uint32_t z, uint32_t indirectBuffer, int64_t indirectOffset);
+    void ProgramLabelGL(Program& p);       // 323: ad Program::Label'da, boru hattı oluşturulurken kullanılır
     void MemoryBarrierGL(GLbitfield barriers);
     // 307: GPU'ya ait arabellek (hesaplama gölgelendiricisinin yazdığı) kopyası / geri okuması (false: ön yüz gölge kopyayı kullanır),
     // glFenceSync gönderim sayacı, dolaylı çizim ve katmanın sağlamadığı GL işlevleri (GetProcAddress boş döner)

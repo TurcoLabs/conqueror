@@ -42,4 +42,6 @@ screenshot {work}/vkgl_compute_{matrix}_taa_fsr2.png
 cvar r.Upscaler 0
 cvar r.AntiAliasing 0
 script_errors expect 0
+# 323: açılışta ve bütün bu kiplerde çeviri katmanı uygulanmamış GL işlevi çağırmadı (glObjectLabel her açılışta uyarı veriyordu)
+gpu expect_no_unimplemented
 quit

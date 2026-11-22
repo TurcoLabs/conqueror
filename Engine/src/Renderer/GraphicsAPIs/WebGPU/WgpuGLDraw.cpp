@@ -1180,6 +1180,7 @@ struct VO { @builtin(position) pos : vec4f, @location(0) uv : vec2f };
     }
 
     void MemoryBarrierGL(GLbitfield) {}
+    void ProgramLabelGL(Program&) {}   // 323: ad Program::Label'da, boru hattı oluşturulurken kullanılır
 
     // 307: bu katmanda hesaplama yok: GPU'ya ait arabellek oluşmaz (kopya / geri okuma gölge kopyayla), çitler hemen işaretli (geri okumalar
     // zaten bekler), dolaylı çizim işlevleri GetProcAddress'te yok (motor CPU yoluna düşer)

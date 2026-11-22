@@ -712,7 +712,40 @@ namespace Conqueror::VkGL
         p.Linked = compute ? (p.Comp && p.Layout && p.ComputePipeline) : (p.Vert && p.Frag && p.Layout);
         if (!p.Linked)
             p.Log = compute ? "Vulkan compute pipeline creation failed" : "Vulkan shader module creation failed";
+        else if (!p.Label.empty())
+            ProgramLabelGL(p);   // yeniden bağlamada yeni nesneler de adını alır
         return p.Linked;
+    }
+
+    // 323: VK_EXT_debug_utils nesne adı (uzantı yoksa sessizce atlanır)
+    void NameVkObject(VkObjectType type, uint64_t handle, const std::string& name)
+    {
+        static PFN_vkSetDebugUtilsObjectNameEXT fn = nullptr;
+        static VkInstance looked = VK_NULL_HANDLE;
+        auto& core = VK::Core::Get();
+        if (!core.HasDebugUtils() || !handle || name.empty())
+            return;
+        if (looked != core.Instance())
+        {
+            looked = core.Instance();
+            fn = (PFN_vkSetDebugUtilsObjectNameEXT)vkGetInstanceProcAddr(core.Instance(), "vkSetDebugUtilsObjectNameEXT");
+        }
+        if (!fn)
+            return;
+        VkDebugUtilsObjectNameInfoEXT info{ VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT };
+        info.objectType = type;
+        info.objectHandle = handle;
+        info.pObjectName = name.c_str();
+        fn(core.Device(), &info);
+    }
+
+    void ProgramLabelGL(Program& p)
+    {
+        NameVkObject(VK_OBJECT_TYPE_SHADER_MODULE, (uint64_t)p.Vert, p.Label + " (vertex)");
+        NameVkObject(VK_OBJECT_TYPE_SHADER_MODULE, (uint64_t)p.Frag, p.Label + " (fragment)");
+        NameVkObject(VK_OBJECT_TYPE_SHADER_MODULE, (uint64_t)p.Comp, p.Label + " (compute)");
+        NameVkObject(VK_OBJECT_TYPE_PIPELINE, (uint64_t)p.ComputePipeline, p.Label);
+        NameVkObject(VK_OBJECT_TYPE_PIPELINE_LAYOUT, (uint64_t)p.Layout, p.Label);
     }
 
     UniformSlot* FindUniform(Program& p, GLint location)
