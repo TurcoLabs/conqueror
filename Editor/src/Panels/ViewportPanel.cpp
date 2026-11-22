@@ -312,8 +312,25 @@ namespace Conqueror::Editor
         // Post Process Volume'lar sahne görünümünde de (editör kamerasının konumuna göre) etkilidir
         PostProcessSettings post = m_Context ? PostProcessVolumes::Resolve(*m_Context, m_Context->GetRenderSettings().Post, m_EditorCamera.GetPosition()) : PostProcessSettings{};
         // Hata ayıklama görünümlerinde ton eşleme dışındaki efektler yanıltıcıdır
-        if (!m_ViewOptions.PostEffects || (m_Shading != ViewportShading::Shaded && m_Shading != ViewportShading::Wireframe))
+        if (!m_ViewOptions.PostEffects || (m_Shading != ViewportShading::Shaded && m_Shading != ViewportShading::Wireframe &&
+                                           m_Shading != ViewportShading::PathTracing))
             post.Enabled = false;
+        if (m_Shading == ViewportShading::PathTracing)
+        {
+            // 315: Path Tracing, Unreal'daki gibi sahnenin pozlaması, ton eşleyicisi, renk derecelendirmesi ve bloom'uyla gösterilir;
+            // eskiden son işleme tamamen kapalıydı, HDR görüntü ton eşlemesiz kırpılıp soluk ve aşırı parlak çıkıyordu. Işın izlemenin
+            // zaten hesapladığı ekran uzayı efektleri (AO, yansıma, GI) ve kendi birikimiyle çakışan zamansal AA / yükseltme kapalı
+            post.AntiAliasing = AntiAliasingMode::None;
+            post.Upscaler = UpscalerMode::None;
+            post.TemporalStability = false;
+            post.AmbientOcclusion = false;
+            post.ScreenSpaceReflections = false;
+            post.ScreenSpaceGI = false;
+            post.RayTracedGI = false;
+            post.VolumetricFog = false;
+            post.VolumetricClouds = false;
+            post.MotionBlur = false;
+        }
         // 317: Ambient Occlusion görünümü malzeme AO'su x ekran uzayı AO (SSAO) gösterir; eskiden yalnız malzeme AO dokusu çıkıyordu
         // (dokusu olmayan şablonlarda her yer bembeyaz). Sahnenin SSAO ayarları (yarıçap, yoğunluk, açık / kapalı) kullanılır
         m_PostStack.SetAmbientOcclusionView(m_Shading == ViewportShading::AmbientOcclusion);
