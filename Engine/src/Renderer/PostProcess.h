@@ -99,6 +99,9 @@ namespace Conqueror
         static uint32_t GetCurrentSceneDepth();
         // Şu an çizilen görünümün sahne hedefinin örnek sayısı (MSAA / EQAA / CSAA > 1; görünüm yoksa 1)
         static uint32_t GetCurrentSamples();
+        // Son karede çözülen yükseltici ve (310) çıktı çözünürlüğünde yalnız keskinleştiren uzamsal yükseltici (yoksa None)
+        UpscalerMode GetResolvedUpscaler() const { return m_Upscaler; }
+        UpscalerMode GetSpatialSharpener() const { return m_SpatialSharpener; }
         // TAA tepki maskesi (reactive mask): derinlik / hareket bayrağı yazmayan saydam çizimler (parçacıklar) kapladıkları
         // pikselleri buraya yazar; TAA o piksellerde geçmişe güvenmez. Begin maskenin çerçeve tamponunu bağlar (bu görünümün
         // TAA'lı sahne hedefine çizilmiyorsa 0), End sahne hedefini geri bağlar
@@ -156,6 +159,9 @@ namespace Conqueror
         void RunFinal(const PostProcessSettings& settings, uint32_t outputFramebuffer, const int outputViewport[4]);
         // Zamansal yükselticinin çıktısı için kamera dururken titreşim tutucu (FSR2Hold.cqsh); sonuç dokusu. owner: 1 FSR 2, 2 SGSR 2, 3 TAA (NIS'ten önce)
         uint32_t RunStillHold(int owner, uint32_t source, uint32_t w, uint32_t h, uint32_t reactive, uint32_t motion, bool still, bool reset);
+        // 310 / 149: zamansal yükselticinin çıktısına (çıktı çözünürlüğünde) seçilen uzamsal yükselticinin keskinleştirmesi (NIS -> NVSharpen,
+        // FSR 1 -> RCAS, CAS -> CAS); m_SpatialSharpener yoksa source döner
+        uint32_t RunSpatialSharpener(uint32_t source, uint32_t w, uint32_t h, float sharpness);
 
         // Unreal render paketi (PostProcessEffects.cpp): SSR + hacimsel sis/bulut birleştirme, TAA, alan derinliği,
         // hareket bulanıklığı, otomatik pozlama. Her biri yalnızca açıkken çalışır ve hedeflerini ilk kullanımda kurar.
@@ -266,6 +272,9 @@ namespace Conqueror
         AntiAliasingMode m_AAMode = AntiAliasingMode::None;
         float m_LastCameraStep = 0.0f;   // önceki karede kameranın yer değiştirmesi (m): kamera kesmesi algılama
         UpscalerMode m_Upscaler = UpscalerMode::None;
+        UpscalerMode m_SpatialSharpener = UpscalerMode::None;   // zamansal AA + uzamsal yükseltici: AA'nın zamansal yükselticisi büyütür,
+                                                                // bu yalnız keskinleştirir (310 / 149)
+        RenderTarget m_SpatialSharpen;                          // keskinleştiricinin çıktısı (çıktı çözünürlüğünde)
         bool m_CASSharpen = false;                                 // keskinleştirme AMD CAS ile
         float m_CASStrength = 0.0f;
         float m_RenderScale = 1.0f, m_WantRenderScale = 1.0f;     // iç çözünürlük / çıktı çözünürlüğü

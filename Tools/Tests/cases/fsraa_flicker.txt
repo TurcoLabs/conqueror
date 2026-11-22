@@ -1,8 +1,8 @@
 # template: fps
 # 260: FSR AA'da (FSR 2 yerel çözünürlükte) mavi küplerin arasındaki ince boşluklar kamera dururken jitter yüzünden yanıp sönüyordu;
 # FSR AA + NIS'te FSR 2 kendisi büyütüp RCAS ile keskinleştirdiği için çok daha belirgindi (piksellerin %1.7'si 8 birimden fazla
-# oynuyordu). Şimdi: FSR AA'da ince boşluk tutucu (FSR2Hold), FSR AA + uzamsal yükselticide FSR 2 iç çözünürlükte kenar yumuşatır,
-# büyütmeyi NIS yapar. Ölçü: 120 karede piksel parlaklık aralığı (silahsız bölge, oyuncu küplerin önünde durur)
+# oynuyordu). Şimdi: FSR AA'da ince boşluk tutucu (FSR2Hold); 310'dan beri FSR AA + uzamsal yükselticide FSR 2 büyütür ve kendi RCAS'ıyla
+# keskinleştirir. Ölçü: 120 karede piksel parlaklık aralığı (silahsız bölge, oyuncu küplerin önünde durur)
 wait 40
 entity move Player -2 0.9 5.5
 focus Game
@@ -17,7 +17,7 @@ wait 125
 cvar r.Upscaler 3
 wait 90
 # 285: FSR AA + NIS'te tutucu NIS ve FXAA'dan sonra çıktı çözünürlüğünde (NIS'in keskinleştirmesi ve FXAA'nın titreşimli derinlikten kenar
-# maskesi tutucudan geçen kıpırtıyı yeniden büyütüyordu): >8 seviye %0.53 -> %0.33, >16 seviye %0.065 -> %0.036
+# maskesi tutucudan geçen kıpırtıyı yeniden büyütüyordu): >8 seviye %0.53 -> %0.33, >16 seviye %0.065 -> %0.036. 310: artık FSR 2 büyütür
 game_flicker 120 0.0 0.3 0.55 0.95 max8% 0.5 max% 0.06
 wait 125
 # 288: TAA + FSR 2 yükseltici (iç çözünürlük %67): merdiven basamakları ve zemin çizgileri FSR 2'nin 18 karelik titreşim döngüsüyle
@@ -27,7 +27,8 @@ cvar r.Upscaler 10
 wait 150
 game_flicker 120 0.0 0.3 0.55 0.95 max8% 0.3 max% 0.08
 wait 125
-# 288: TAA + NIS: NIS'in keskinleştirmesi TAA'nın kalan titreşimini büyütüyordu (>8 seviye %0.12); NIS'ten önce TAA çıktısında tutucu
+# 288: TAA + NIS: NIS'in keskinleştirmesi TAA'nın kalan titreşimini büyütüyordu (>8 seviye %0.12); NIS'ten önce TAA çıktısında tutucu.
+# 310: TAAU büyütür, NIS tutucudan sonra yalnız keskinleştirir
 cvar r.Upscaler 3
 wait 150
 game_flicker 120 0.0 0.3 0.55 0.95 max8% 0.1 max% 0.03

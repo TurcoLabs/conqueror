@@ -1,0 +1,88 @@
+# template: fps
+# 310 / 149: zamansal AA + uzamsal yükseltici diğer motorlardaki gibi: büyütmeyi AA'nın zamansal yükselticisi yapar (TAA -> TAAU,
+# FSR AA -> FSR 2; Zamansal Kararlılık açıkken FXAA / SMAA da TAA çözümüyle biriktiği için TAAU), NIS / FSR 1 / CAS çıktı çözünürlüğünde
+# yalnız keskinleştirir (FSR AA'da FSR 2'nin kendi RCAS'ı); NIS'ten sonraki standart dışı FXAA yok. Eskiden TAA iç çözünürlükte çalışıp NIS
+# büyütüyordu: ileri geri giderken küplerin arası yanıp sönüyordu, FSR AA + NIS bulanıktı. Ölçü: kullanıcının Viewport kadrajı (piramit ve
+# mavi küpler), kamera dururken 120 karelik parlaklık aralığı, ileri / geri uçarken mavi yüzeyler arasındaki aralıkların görünürlüğünün
+# kareden kareye ikinci farkı (eski TAA + NIS'te ~0.3, eski FXAA / SMAA + NIS ~0.3; şimdi 0.16-0.21)
+wait 40
+focus Viewport
+cvar r.TemporalStability 1
+# TAA + NIS: TAAU büyütür, NIS yarı keskinlikte keskinleştirir (duran %0.030, uçuş 0.16 / 0.17)
+camera 16 10 0 -1.5 1.5 2
+cvar r.AntiAliasing 3
+cvar r.Upscaler 3
+wait 200
+viewport_route TAAU NIS
+viewport_flicker 120 0.35 0.2 0.65 0.7 max8% 0.1
+wait 125
+camera_fly 0 0 5 60
+viewport_motion_blink 56 0.3 0.25 0.65 0.75 blue max 0.25
+wait 62
+camera_fly 0 0 -5 60
+viewport_motion_blink 56 0.3 0.25 0.65 0.75 blue max 0.25
+wait 70
+# FXAA + NIS (Zamansal Kararlılık): TAAU + tam keskinlikte NIS (duran %0.048, uçuş 0.18 / 0.19)
+camera 16 10 0 -1.5 1.5 2
+cvar r.AntiAliasing 1
+cvar r.Upscaler 3
+wait 200
+viewport_route TAAU NIS
+viewport_flicker 120 0.35 0.2 0.65 0.7 max8% 0.12
+wait 125
+camera_fly 0 0 5 60
+viewport_motion_blink 56 0.3 0.25 0.65 0.75 blue max 0.26
+wait 62
+camera_fly 0 0 -5 60
+viewport_motion_blink 56 0.3 0.25 0.65 0.75 blue max 0.26
+wait 70
+# SMAA + NIS (Zamansal Kararlılık): TAAU + NIS (duran %0.066, uçuş 0.20 / 0.21)
+camera 16 10 0 -1.5 1.5 2
+cvar r.AntiAliasing 2
+cvar r.Upscaler 3
+wait 200
+viewport_route TAAU NIS
+viewport_flicker 120 0.35 0.2 0.65 0.7 max8% 0.15
+wait 125
+camera_fly 0 0 5 60
+viewport_motion_blink 56 0.3 0.25 0.65 0.75 blue max 0.28
+wait 62
+camera_fly 0 0 -5 60
+viewport_motion_blink 56 0.3 0.25 0.65 0.75 blue max 0.28
+wait 70
+# FSR AA + NIS: FSR 2 büyütür, kendi RCAS'ıyla keskinleştirir
+camera 16 10 0 -1.5 1.5 2
+cvar r.AntiAliasing 26
+cvar r.Upscaler 3
+wait 200
+viewport_route "FSR 2" none
+viewport_flicker 120 0.35 0.2 0.65 0.7 max8% 0.15
+wait 125
+camera_fly 0 0 5 60
+viewport_motion_blink 56 0.3 0.25 0.65 0.75 blue max 0.25
+wait 62
+camera_fly 0 0 -5 60
+viewport_motion_blink 56 0.3 0.25 0.65 0.75 blue max 0.25
+wait 70
+# TAA + FSR 1: RCAS keskinleştirir
+cvar r.AntiAliasing 3
+cvar r.Upscaler 1
+wait 20
+viewport_route TAAU "FSR 1"
+# TAA + CAS
+cvar r.AntiAliasing 3
+cvar r.Upscaler 2
+wait 20
+viewport_route TAAU CAS
+# TAA + Bilinear: keskinleştirme yok
+cvar r.AntiAliasing 3
+cvar r.Upscaler 11
+wait 20
+viewport_route TAAU none
+cvar r.TemporalStability 0
+# Zamansal Kararlılık kapalı FXAA + NIS: birikim yok, NIS büyütür (Unreal'daki gibi FXAA iç çözünürlükte, sonra uzamsal yükseltici)
+cvar r.AntiAliasing 1
+cvar r.Upscaler 3
+wait 20
+viewport_route NIS none
+quit
