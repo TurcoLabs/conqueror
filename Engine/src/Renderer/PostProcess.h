@@ -329,6 +329,7 @@ namespace Conqueror
         RenderTarget m_GI, m_GITemp, m_GIHistory[2];
         int m_GIHistoryIndex = 0;
         bool m_GIHistoryValid = false;
+        int m_SyncAfterRebuild = 0;     // sahne hedefleri yeni kuruldu: sonraki 3 karede sahne çiziminden sonra GPU beklenir (EndScene)
         RenderTarget m_SSRHit;          // SSR isabet uzaklığı (m_SSR çerçeve tamponunun ikinci eki)
         RenderTarget m_SSRHistory[2];   // SSR zamansal birikimi (m_SSR bu karenin izi)
         int m_SSRHistoryIndex = 0;

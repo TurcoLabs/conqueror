@@ -350,6 +350,7 @@ namespace Conqueror
         // başlar. Eskiden yalnız boyut değişince sıfırlanıyordu: aynı boyutta ek / örnek değişince TAA, SSGI ve bulut geçmişi geçerli
         // sayılıp yeni hedeflerle uyuşmayan eski içeriği okuyabiliyordu
         ResetTemporalHistory();
+        m_SyncAfterRebuild = 3;
         m_Width = width;
         m_Height = height;
         m_Samples = samples;
@@ -1050,6 +1051,21 @@ namespace Conqueror
 
     void PostProcessStack::EndScene()
     {
+        // Sahne hedefleri yeniden kurulduktan sonraki 3 karede, sahne çizildikten sonra GPU'nun bitirmesi beklenir. AMD Polaris
+        // (radeonsi, Mesa 25.3) bu karelerde bazı nesneleri ekran karoları (16 px dama) ya da bant halinde çizmiyordu: TAA <-> FSAA,
+        // pencere boyutu ya da Stop ile hedefler yeniden kurulunca küplerin orta sırası, merdiven yok, arkadaki duvar görünüyordu
+        // (AA'yı 20 kez değiştiren testte 37 koşunun 36'sında, koşu başına 1-3 kez). Bozuk ve sağlam karelerde gönderilen GL
+        // komutları birebir aynı; Vulkan arka ucunda ve Hyper-Z kapalıyken (AMD_DEBUG=nohyperz) hiç çıkmıyor: sürücüde, yeni
+        // dokular GPU'da ilk kullanıldıktan sonraki bir zamanlama yarışı. Yeniden kurulumdan hemen sonra (çizimden önce) beklemek
+        // hiç önlemiyor, yalnız ilk karede beklemek yetmiyor (5 koşunun 4'ü bozuk); ilk 3 karede beklemek tamamen önlüyor.
+        // Yalnız hedef yeniden kurulan karelerde ve gerçek OpenGL sürücüsünde çalışır (çeviri katmanlarında glFinish yok, gerek de
+        // yok): sıradan karelerin hızı, Hyper-Z ve görüntü değişmez
+        if (m_SyncAfterRebuild > 0)
+        {
+            --m_SyncAfterRebuild;
+            if (RendererAPI::GetBackend() == RendererAPI::Backend::OpenGL)
+                glFinish();
+        }
         if (m_SampleShading)
         {
             glDisable(GL_SAMPLE_SHADING);
