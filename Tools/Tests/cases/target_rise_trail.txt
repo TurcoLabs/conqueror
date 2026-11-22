@@ -1,0 +1,34 @@
+# template: fps
+# 324: TAA + NIS'te (310'dan beri TAAU büyütür) vurulan hedef tahtası kalkarken arkasındaki duvarda tahtanın kenarlarından çizgi çizgi
+# iz, gölgesinde noktalı leke kalıyordu: TAAU'da TAA'nın "nesnenin ayrıldığı piksel" (291) ve "hareket eden gölge hacmi" yolları
+# yoktu. Aynı vuruş sabit adımla iki kez kaydedilir: önce kenar yumuşatmasız (referans), sonra TAA + NIS; referansın düz olduğu yerde
+# ondan belirgin sapan piksel sayısı (devrilme + kalkış, kare başına ortalama: eski TAAU 36.2, şimdi 7.2)
+timeout 400
+wait 60
+focus Game
+play
+wait 30
+entity move Player -10.2 0.9 -24.0
+wait 4
+script set Player@FirstPersonShooter yaw float 31
+script set Player@FirstPersonShooter pitch float -5
+cvar r.AntiAliasing 0
+cvar r.Upscaler 0
+wait 90
+record_start png fixed fps=60 out={work}/trail324_ref
+script call "Target 0" OnShot Player -12.0 1.45 -27.0
+wait 260
+record_stop
+wait 400
+cvar r.AntiAliasing 3
+cvar r.Upscaler 3
+wait 90
+record_start png fixed fps=60 out={work}/trail324_nis
+script call "Target 0" OnShot Player -12.0 1.45 -27.0
+wait 260
+record_stop
+# Devrilme (ilk ~40 kare) ve 3 s sonra kalkış (kare 180-222) birlikte
+image_seq_trail {work}/trail324_ref {work}/trail324_nis 2 250 420 150 800 400 max 15
+stop
+wait 5
+quit

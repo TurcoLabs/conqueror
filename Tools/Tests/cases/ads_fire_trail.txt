@@ -1,0 +1,53 @@
+# template: fps
+# 322: TAA + NIS'te (TAAU) nişan alıp ateş edince namlu alevinin çevresinde mavi / pikselli lekeler, nişanı bırakınca zeminde bir an
+# açık renkli iz kalıyordu (324 ile aynı neden: TAAU'da nesnenin ayrıldığı piksel ve hareket eden gölge hacmi yolları yoktu). Aynı
+# nişanlı atış sabit adımla iki kez kaydedilir (geri tepme ve saçılma kapalı, iki dizi aynı olsun): önce kenar yumuşatmasız referans,
+# sonra TAA + NIS; referansın düz olduğu yerde ondan belirgin sapan piksel sayısı. İpucu yazısının bölgesi dışarıda (zamanla kaybolur)
+timeout 400
+wait 60
+focus Game
+play
+wait 30
+entity move Player 0 0.9 9
+wait 4
+script set Player@FirstPersonShooter yaw float 0
+script set Player@FirstPersonShooter pitch float -3
+script set Pistol@Weapon recoilPitch float 0
+script set Pistol@Weapon recoilYaw float 0
+script set Pistol@Weapon hipSpread float 0
+script set Pistol@Weapon aimSpread float 0
+script set Pistol@Weapon moveSpread float 0
+cvar r.AntiAliasing 0
+cvar r.Upscaler 0
+wait 90
+record_start png fixed fps=60 out={work}/ads322_ref
+script set Player@FirstPersonShooter aimInput bool true
+wait 30
+script set Player@FirstPersonShooter fireInput bool true
+wait 2
+script set Player@FirstPersonShooter fireInput bool false
+wait 30
+script set Player@FirstPersonShooter aimInput bool false
+wait 40
+record_stop
+wait 60
+cvar r.AntiAliasing 3
+cvar r.Upscaler 3
+wait 90
+record_start png fixed fps=60 out={work}/ads322_nis
+script set Player@FirstPersonShooter aimInput bool true
+wait 30
+script set Player@FirstPersonShooter fireInput bool true
+wait 2
+script set Player@FirstPersonShooter fireInput bool false
+wait 30
+script set Player@FirstPersonShooter aimInput bool false
+wait 40
+record_stop
+# İlk atış (namlu alevi; yalnız rapor: alev karelerinde TAA'nın ışık dondurması referanstan zaten farklı, eski TAAU 549, şimdi 416)
+image_seq_trail {work}/ads322_ref {work}/ads322_nis 30 35 300 230 760 560
+# Nişan bırakıldıktan sonra: eski TAAU kare başına 6.5 (en çok 93), şimdi 0.2
+image_seq_trail {work}/ads322_ref {work}/ads322_nis 64 100 300 230 760 560 max 2
+stop
+wait 5
+quit
