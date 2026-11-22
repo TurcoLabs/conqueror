@@ -826,6 +826,7 @@ namespace Conqueror
         m_T2xValid = false;
         m_StabValid = false;
         m_GIHistoryValid = false;
+        m_SSRHistoryValid = false;
         m_CloudHistoryValid = false;
         m_PrevDepthValid = false;
     }

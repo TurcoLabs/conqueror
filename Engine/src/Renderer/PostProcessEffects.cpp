@@ -78,7 +78,7 @@ namespace Conqueror
     void PostProcessStack::ReleaseEffectTargets()
     {
         for (auto* rt : { &m_HDR[0], &m_HDR[1], &m_SSR, &m_Fog, &m_Clouds, &m_DOFHalf, &m_DOFBlur, &m_History[0], &m_History[1], &m_Adapt[0], &m_Adapt[1],
-                          &m_GI, &m_GITemp, &m_GIHistory[0], &m_GIHistory[1], &m_CloudHistory[0], &m_CloudHistory[1], &m_TAAState[0], &m_TAAState[1],
+                          &m_GI, &m_GITemp, &m_GIHistory[0], &m_GIHistory[1], &m_SSRHit, &m_SSRHistory[0], &m_SSRHistory[1], &m_CloudHistory[0], &m_CloudHistory[1], &m_TAAState[0], &m_TAAState[1],
                           &m_Velocity, &m_TAADebug, &m_TAADisplay, &m_Reactive, &m_StabHistory[0], &m_StabHistory[1], &m_StabState[0], &m_StabState[1], &m_FSR2Reactive, &m_FSR2PrevShadow })
             DestroyTarget(*rt);
         m_StabValid = false;
@@ -132,6 +132,8 @@ namespace Conqueror
         const bool fog = settings.VolumetricFog && !camera.Orthographic;
         if (!clouds)
             m_CloudHistoryValid = false;
+        if (!ssr)
+            m_SSRHistoryValid = false;
         // AO da burada (TAA'dan önce) uygulanır: yalnız AO açıkken erken dönülüyordu, AO TAA'dan SONRA Composite'te bindiriliyordu.
         // Titreşimli derinlikten her karede hesaplanan AO yumuşatılmadan görüntüye biniyor, ince ayrıntı (yapraklar, küplerin
         // arası) titreşim döngüsüyle (16 kare) titriyordu
@@ -149,7 +151,22 @@ namespace Conqueror
         const uint32_t halfW = std::max(m_Width / 2, 1u), halfH = std::max(m_Height / 2, 1u);
 
         bool ssrDone = false, cloudsDone = false, fogDone = false, giDone = false;
-        uint32_t cloudsTexture = 0;
+        uint32_t cloudsTexture = 0, ssrTexture = 0;
+        // Işın gürültüsü (SSGI, SSR) her karede değişir (TAA ve kendi birikimleri ortalar). TAA olmayan kipte (FXAA, SMAA,
+        // MSAA ...) bu değişim ortalanmıyordu: kamera dururken bile küplerin arası ve köşeler (dolaylı ışığın en etkili olduğu
+        // yerler) kare kare yanıp sönüyordu. Titreşimsiz kipte kamera dururken desen sabit: görüntü kare kare aynı
+        bool cameraStill = m_HasPrevViewProj;
+        {
+            const glm::mat4 now = camera.Projection * camera.View;
+            for (int c = 0; c < 4 && cameraStill; ++c)
+                for (int r = 0; r < 4; ++r)
+                    if (std::abs(now[c][r] - m_PrevViewProj[c][r]) > 1e-6f * std::max(1.0f, std::abs(now[c][r])))
+                    {
+                        cameraStill = false;
+                        break;
+                    }
+        }
+        const bool fixedNoise = !m_JitterActive && cameraStill;
         if (gi)
         {
             auto shader = PostProcess::GetShader("SSGI");
@@ -167,6 +184,8 @@ namespace Conqueror
                 shader->SetInt("u_GNormal", 2);
                 shader->SetInt("u_Source", 3);
                 shader->SetInt("u_History", 4);
+                shader->SetInt("u_HitDistance", 5);
+                shader->SetFloat3("u_CameraPos", camera.Position);
                 shader->SetMat4("u_Projection", projection);
                 shader->SetMat4("u_InvProjection", glm::inverse(projection));
                 shader->SetMat4("u_View", camera.View);
@@ -174,21 +193,6 @@ namespace Conqueror
                 shader->SetMat4("u_PrevViewProj", m_HasPrevViewProj ? m_PrevViewProj : camera.Projection * camera.View);
                 shader->SetFloat("u_Radius", std::max(settings.SSGIRadius, 0.1f));
                 shader->SetInt("u_Rays", std::clamp(settings.SSGIRays, 1, 16));
-                // Işın gürültüsü her karede değişir (TAA birikimi 64 deseni ortalar). TAA olmayan kipte (FXAA, SMAA, MSAA ...)
-                // bu değişim ortalanmıyordu: kamera dururken bile küplerin arası ve köşeler (dolaylı ışığın en etkili olduğu
-                // yerler) kare kare yanıp sönüyordu. Titreşimsiz kipte kamera dururken desen sabit: görüntü kare kare aynı
-                bool cameraStill = m_HasPrevViewProj;
-                {
-                    const glm::mat4 now = camera.Projection * camera.View;
-                    for (int c = 0; c < 4 && cameraStill; ++c)
-                        for (int r = 0; r < 4; ++r)
-                            if (std::abs(now[c][r] - m_PrevViewProj[c][r]) > 1e-6f * std::max(1.0f, std::abs(now[c][r])))
-                            {
-                                cameraStill = false;
-                                break;
-                            }
-                }
-                const bool fixedNoise = !m_JitterActive && cameraStill;
                 shader->SetFloat("u_Frame", fixedNoise ? 0.0f : (float)(m_FrameIndex % 64u));
                 shader->SetFloat("u_Feedback", 0.88f);
                 shader->SetFloat2("u_Texel", texel);
@@ -228,25 +232,65 @@ namespace Conqueror
             auto shader = PostProcess::GetShader("SSR");
             if (Valid(shader))
             {
+                CQ_PROFILE_SAMPLE("Render.PostProcess.SSR", Rendering); CQ_PROFILE_GPU("SSR");
                 EnsureTarget(m_SSR, halfW, halfH, GL_RGBA16F);
-                glBindFramebuffer(GL_FRAMEBUFFER, m_SSR.Framebuffer);
+                EnsureTarget(m_SSRHit, halfW, halfH, GL_R16F);
+                EnsureTarget(m_SSRHistory[0], halfW, halfH, GL_RGBA16F);
+                EnsureTarget(m_SSRHistory[1], halfW, halfH, GL_RGBA16F);
                 glViewport(0, 0, m_SSR.Width, m_SSR.Height);
                 shader->Bind();
                 shader->SetInt("u_Scene", 0);
                 shader->SetInt("u_Depth", 1);
                 shader->SetInt("u_GNormal", 2);
+                shader->SetInt("u_Source", 3);
+                shader->SetInt("u_History", 4);
+                shader->SetInt("u_HitDistance", 5);
+                shader->SetFloat3("u_CameraPos", camera.Position);
                 shader->SetMat4("u_Projection", projection);
                 shader->SetMat4("u_InvProjection", glm::inverse(projection));
                 shader->SetMat4("u_View", camera.View);
+                shader->SetMat4("u_InvViewProj", invViewProj);
+                shader->SetMat4("u_PrevViewProj", m_HasPrevViewProj ? m_PrevViewProj : camera.Projection * camera.View);
                 shader->SetFloat("u_MaxDistance", std::max(settings.SSRMaxDistance, 1.0f));
                 shader->SetFloat("u_Thickness", std::max(settings.SSRThickness, 0.01f));
                 shader->SetFloat("u_MaxRoughness", std::clamp(settings.SSRMaxRoughness, 0.01f, 1.0f));
-                shader->SetFloat("u_Time", time);
+                shader->SetFloat("u_Frame", fixedNoise ? 0.0f : (float)(m_FrameIndex % 64u));
+                // Yansıyan görüntünün kendi konumundan yeniden izdüşüldüğü için geçmiş uzun tutulabilir (0.88: yürürken
+                // TV ekranında nokta oranı %1.6, 0.95: %1.3; yansıma kapalıyken %0.4)
+                shader->SetFloat("u_Feedback", 0.95f);
+                shader->SetFloat2("u_Texel", glm::vec2(1.0f / (float)halfW, 1.0f / (float)halfH));
                 BindTexture(0, m_Source);
                 BindTexture(1, depth);
                 BindTexture(2, GetSceneNormalTexture());
+                // 1) İz: ışının başlangıcı piksel başına gürültüyle kayar (bantlaşma yok); tek karede yansıma noktalıdır.
+                // İkinci ek isabet uzaklığı (birikimde yansıyan görüntünün yeniden izdüşümü için)
+                glNamedFramebufferTexture(m_SSR.Framebuffer, GL_COLOR_ATTACHMENT1, m_SSRHit.Texture, 0);
+                const GLenum traceBuffers[2] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1 };
+                glNamedFramebufferDrawBuffers(m_SSR.Framebuffer, 2, traceBuffers);
+                glBindFramebuffer(GL_FRAMEBUFFER, m_SSR.Framebuffer);
+                shader->SetInt("u_Mode", 0);
                 PostProcess::DrawFullscreenQuad();
-                Renderer::GetStats().PostProcessPasses++;
+                // 2) Zamansal birikim (Unreal r.SSR.Temporal, Unity HDRP SSR birikimi gibi). Yalnız TAA'ya bırakılınca kamera
+                // yürürken TAA geçmişi yansımayı tutamıyor, televizyon ekranı / parlak yüzeyler noktalı görünüyordu
+                const int next = 1 - m_SSRHistoryIndex;
+                glBindFramebuffer(GL_FRAMEBUFFER, m_SSRHistory[next].Framebuffer);
+                shader->SetInt("u_Mode", 1);
+                shader->SetInt("u_HistoryValid", (m_SSRHistoryValid && m_HasPrevViewProj) ? 1 : 0);
+                BindTexture(3, m_SSR.Texture);
+                BindTexture(4, m_SSRHistory[m_SSRHistoryIndex].Texture);
+                BindTexture(5, m_SSRHit.Texture);
+                PostProcess::DrawFullscreenQuad();
+                BindTexture(3, 0);
+                BindTexture(4, 0);
+                BindTexture(5, 0);
+                ssrTexture = m_SSRHistory[next].Texture;
+                // Hata ayıklama görünümünde (tel kafes) geçmiş son ışıklı karede kalır (275, SSGI gibi)
+                if (!m_HoldTemporalHistory)
+                {
+                    m_SSRHistoryIndex = next;
+                    m_SSRHistoryValid = true;
+                }
+                Renderer::GetStats().PostProcessPasses += 2;
                 ssrDone = true;
             }
         }
@@ -397,7 +441,7 @@ namespace Conqueror
         BindTexture(0, m_Source);
         BindTexture(1, depth);
         BindTexture(2, m_AOBlur.Texture);
-        BindTexture(3, ssrDone ? m_SSR.Texture : 0);
+        BindTexture(3, ssrDone ? ssrTexture : 0);
         BindTexture(4, ssrDone ? GetSceneNormalTexture() : 0);
         BindTexture(5, cloudsDone ? cloudsTexture : 0);
         BindTexture(6, fogDone ? m_Fog.Texture : 0);

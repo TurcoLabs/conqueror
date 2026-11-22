@@ -100,7 +100,7 @@ void main()
             float f0 = mix(0.04, 0.75, metallic);
             float NdotV = clamp(dot(N, V), 0.0, 1.0);
             float fresnel = f0 + (max(1.0 - roughness, f0) - f0) * pow(1.0 - NdotV, 5.0);
-            color += r.rgb * fresnel * r.a * u_SSRIntensity * (1.0 - roughness);
+            color += r.rgb * fresnel * u_SSRIntensity * (1.0 - roughness);   // r.rgb ön çarpımlı (renk x güven)
         }
     }
     if (u_UseClouds == 1 && depth >= 1.0)
