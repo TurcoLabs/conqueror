@@ -37,6 +37,9 @@ namespace Conqueror
         // Tüm zinciri çalıştırıp sonucu ŞU AN bağlı framebuffer'a yazar.
         // litScene: sahnede aydınlatılan 3D içerik var (Scene::HasRenderable3D); saf 2D'de nötr ton eşleme renkleri korur
         void Render(const PostProcessSettings& settings, const RenderCamera& camera, float time, bool litScene = true);
+        // 317: editörün Ambient Occlusion görünümü: diğer efektler kapalıyken de SSAO hesaplanır ve görüntüyle (malzeme AO'su) ham
+        // olarak çarpılır (ton eşleme / pozlama yok), Unreal'ın AO görselleştirmesi ve Unity HDRP'nin SSAO hata ayıklama görünümü gibi
+        void SetAmbientOcclusionView(bool on) { m_AOView = on; }
 
         void ApplyHaloFlare(const glm::vec2& lightScreenPos, const glm::vec3& lightColor,
                             bool lightVisible, bool haloEnabled, std::shared_ptr<class Texture2D> haloTexture,
@@ -303,6 +306,7 @@ namespace Conqueror
         // Efekt zinciri
         uint32_t m_Source = 0;          // zincirin şu anki HDR kaynağı (sahne ya da bir efekt çıktısı)
         bool m_AOApplied = false;       // AO sahne efektlerinde uygulandı (birleştirmede tekrar uygulanmaz)
+        bool m_AOView = false;          // 317: Ambient Occlusion hata ayıklama görünümü
         RenderTarget m_HDR[2];          // RGBA16F ara hedefler (sırayla)
         RenderTarget m_SSR, m_Fog, m_Clouds, m_DOFHalf, m_DOFBlur;
         RenderTarget m_History[2];      // TAA geçmişi

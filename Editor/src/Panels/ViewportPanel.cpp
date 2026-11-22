@@ -308,6 +308,9 @@ namespace Conqueror::Editor
         // Hata ayıklama görünümlerinde ton eşleme dışındaki efektler yanıltıcıdır
         if (!m_ViewOptions.PostEffects || (m_Shading != ViewportShading::Shaded && m_Shading != ViewportShading::Wireframe))
             post.Enabled = false;
+        // 317: Ambient Occlusion görünümü malzeme AO'su x ekran uzayı AO (SSAO) gösterir; eskiden yalnız malzeme AO dokusu çıkıyordu
+        // (dokusu olmayan şablonlarda her yer bembeyaz). Sahnenin SSAO ayarları (yarıçap, yoğunluk, açık / kapalı) kullanılır
+        m_PostStack.SetAmbientOcclusionView(m_Shading == ViewportShading::AmbientOcclusion);
         // Ton eşleme yalnızca saf 2D sahnede kapalı; görünen bir gökyüzü (HDR) her zaman ton eşlenir.
         // (Boş sahnede gökyüzünün güneşli kısmı kırpılıp beyaza patlıyordu.)
         const bool skyVisible = m_Context && !m_EditorCamera.Is2D() && m_ViewOptions.Skybox

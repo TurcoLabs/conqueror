@@ -1564,7 +1564,7 @@ namespace Conqueror
         composite->SetInt("u_LitScene", m_LitScene ? 1 : 0);
         composite->SetInt("u_UseBloom", (on && settings.Bloom && m_BloomResult) ? 1 : 0);
         // AO yalnızca bu karede hesaplandıysa (ortografik kamerada atlanır; eski sonuç kullanılmaz)
-        composite->SetInt("u_UseAO", (on && settings.AmbientOcclusion && m_AOBlur.Texture && m_AOValid && !m_AOApplied) ? 1 : 0);
+        composite->SetInt("u_UseAO", ((on || m_AOView) && settings.AmbientOcclusion && m_AOBlur.Texture && m_AOValid && !m_AOApplied) ? 1 : 0);
         composite->SetInt("u_AutoExposure", 4);
         composite->SetInt("u_UseAutoExposure", m_UseAutoExposure ? 1 : 0);
         composite->SetFloat2("u_AutoExposureRange", glm::vec2(settings.AutoExposureMin, std::max(settings.AutoExposureMax, settings.AutoExposureMin)));
@@ -2621,7 +2621,7 @@ namespace Conqueror
 
         m_AOValid = false;
         const QualityPreset& quality = QualitySettings::GetPreset();
-        if (settings.Enabled && settings.AmbientOcclusion && quality.EnableSSAO)
+        if ((settings.Enabled || m_AOView) && settings.AmbientOcclusion && quality.EnableSSAO)
             RunSSAO(settings, camera, time);
 
         // HDR efekt zinciri: sahne -> (SSR + bulut + hacimsel sis) -> TAA -> alan derinliği -> hareket bulanıklığı
