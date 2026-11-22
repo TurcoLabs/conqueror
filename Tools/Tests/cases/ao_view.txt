@@ -1,0 +1,18 @@
+# template: fps
+# 317: Viewport'un Ambient Occlusion görünümü bembeyazdı: hata ayıklama görünümlerinde son işleme kapalı olduğu için SSAO hiç
+# hesaplanmıyor, yalnız malzemenin AO dokusu (şablonlarda yok, 1) görünüyordu. Şimdi malzeme AO'su x SSAO ham olarak gösterilir
+# (Unreal'ın AO görselleştirmesi, Unity HDRP'nin SSAO hata ayıklama görünümü gibi): piramidin küp araları ve diplerindeki koyuluk
+wait_until 3000 layout_settled
+wait 10
+focus Viewport
+camera 16 10 0 -1.5 1.5 2
+cvar r.AntiAliasing 0
+shading ao
+wait 40
+viewport_region 0.41 0.45 0.56 0.62 lum min <200
+cvar r.SSAO 0
+wait 30
+# SSAO kapalıyken yalnız malzeme AO'su: beyaz
+viewport_region 0.41 0.45 0.56 0.62 lum min >235
+shading shaded
+quit
