@@ -41,6 +41,24 @@ namespace Conqueror
             glBindTextureUnit(slot, m_Texture);
     }
 
+    void RenderTargetTexture::SetMipmaps(bool on)
+    {
+        if (m_Mipmaps == on)
+            return;
+        m_Mipmaps = on;
+        if (!m_Texture)
+            return;
+        if (on)
+            glGenerateTextureMipmap(m_Texture);   // seviyeler hemen tam olsun (bir sonraki çizime kadar eksik doku siyah örneklenirdi)
+        glTextureParameteri(m_Texture, GL_TEXTURE_MIN_FILTER, on ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR);
+    }
+
+    void RenderTargetTexture::UpdateMipmaps()
+    {
+        if (m_Mipmaps && m_Texture)
+            glGenerateTextureMipmap(m_Texture);
+    }
+
     void RenderTargetTexture::Resize(uint32_t width, uint32_t height)
     {
         width = std::clamp<uint32_t>(width, 1u, 8192u);
@@ -53,7 +71,7 @@ namespace Conqueror
         glGenTextures(1, &m_Texture);
         glBindTexture(GL_TEXTURE_2D, m_Texture);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, (GLsizei)width, (GLsizei)height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, m_Mipmaps ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
@@ -68,6 +86,8 @@ namespace Conqueror
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
         glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)previous);
+        if (m_Mipmaps)
+            glGenerateTextureMipmap(m_Texture);
     }
 
     namespace

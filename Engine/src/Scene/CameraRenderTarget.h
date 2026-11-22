@@ -22,6 +22,11 @@ namespace Conqueror
         int Height = 512;
         RenderTargetUpdate UpdateMode = RenderTargetUpdate::Always;
         float Exposure = 0.0f;                // EV (sahnenin pozlamasına eklenir)
+        // 313: Unity RenderTexture.antiAliasing / useMipMap + autoGenerateMips. Kenar yumuşatma: 0 yok, 1 2x, 2 4x, 3 8x MSAA
+        // (sahne çok örnekli hedefe çizilir, sonra çözülür); mipmap: her çizimden sonra üretilir, küçültülen doku (küçük önizleme,
+        // uzaktaki monitör) basamaklı / karıncalı görünmez
+        int AntiAliasing = 0;
+        bool GenerateMipmaps = false;
 
         // Çalışma zamanı
         bool RenderedOnce = false;

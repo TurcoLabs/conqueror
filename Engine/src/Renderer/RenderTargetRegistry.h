@@ -34,6 +34,10 @@ namespace Conqueror
         void Resize(uint32_t width, uint32_t height);
         // Bu dokuya çizen çerçeve tamponu (tonlama çözümü buraya yazar)
         uint32_t GetFramebuffer() const { return m_Framebuffer; }
+        // 313: mipmap (Unity RenderTexture useMipMap + autoGenerateMips): açıkken küçültme üç çizgisel örnekler, her çizimden sonra
+        // UpdateMipmaps üretir
+        void SetMipmaps(bool on);
+        void UpdateMipmaps();
         // Kaç kez çizildi (otomasyon / tanılama)
         uint64_t RenderCount = 0;
 
@@ -43,6 +47,7 @@ namespace Conqueror
         std::string m_Name, m_Path;
         uint32_t m_Texture = 0, m_Framebuffer = 0;
         uint32_t m_Width = 0, m_Height = 0;
+        bool m_Mipmaps = false;
     };
 
     namespace RenderTargetRegistry
