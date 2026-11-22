@@ -90,6 +90,8 @@ def main():
     ap.add_argument("--screenshot", type=Path, required=True)
     ap.add_argument("--wait", type=float, default=40.0)
     ap.add_argument("--expect-log", default=None)
+    ap.add_argument("--close", action="append", default=[],
+                    help="bundle id of an app to terminate before the launch (e.g. the game an earlier step left running)")
     args = ap.parse_args()
 
     bundle_id = plistlib.load(open(args.app / "Info.plist", "rb"))["CFBundleIdentifier"]
@@ -103,38 +105,56 @@ def main():
     sh(["xcrun", "simctl", "boot", udid], check=False)
     sh(["xcrun", "simctl", "bootstatus", udid, "-b"])
     sh(["xcrun", "simctl", "install", udid, args.app])
+    # Önceki adımın bıraktığı oyun kapatılır: test oyunu simülatörün GPU sunucusunu (SimMetalHost) tek başına kullanır
+    for other in args.close:
+        if other != bundle_id:
+            sh(["xcrun", "simctl", "terminate", udid, other], check=False)
     # Simülatör uygulamayı kendi tarafında başlatır: göreli yol orada çözülür, açılamayınca SpringBoard başlatmayı reddediyordu
     out_log = Path(args.screenshot).resolve().with_suffix(".log")
-    launch = ["xcrun", "simctl", "launch"]
-    if args.expect_log:
-        launch += [f"--stdout={out_log}", f"--stderr={out_log}"]
-    launched = sh(launch + [udid, bundle_id])
-    pid = launched.stdout.strip().split(":")[-1].strip()
-    log(f"Started {bundle_id} (pid {pid}), waiting {args.wait:.0f} s")
-    time.sleep(args.wait)
-    sh(["xcrun", "simctl", "io", udid, "screenshot", args.screenshot])
-    running = sh(["xcrun", "simctl", "spawn", udid, "launchctl", "list"], check=False).stdout
-    alive = bundle_id in running
-    width, height, mean, std = png_stats(args.screenshot)
-    log(f"Screenshot {width}x{height}: mean {mean:.1f}, std {std:.1f}, app running: {alive}")
-    ok = alive and mean > 8.0 and std > 3.0
-    if args.expect_log:
-        text = out_log.read_text(errors="replace") if out_log.exists() else ""
-        # Motorun kendi günlük dosyaları da (uygulamanın veri kapsayıcısında)
-        container = sh(["xcrun", "simctl", "get_app_container", udid, bundle_id, "data"], check=False).stdout.strip()
-        if container and Path(container).is_dir():
-            for f in sorted(Path(container).rglob("*.log"))[:20]:
-                text += "\n" + f.read_text(errors="replace")
-        hits = [l for l in text.splitlines() if re.search(args.expect_log, l)]
-        log(f"Game log: {len(text.splitlines())} lines, {len(hits)} matching {args.expect_log!r}")
-        for l in hits[:5]:
-            log("  " + l.strip())
-        if not hits:
-            print("\n".join(text.splitlines()[-80:]))
-            ok = False
+
+    def attempt():
+        launch = ["xcrun", "simctl", "launch"]
+        if args.expect_log:
+            launch += [f"--stdout={out_log}", f"--stderr={out_log}"]
+        launched = sh(launch + [udid, bundle_id])
+        pid = launched.stdout.strip().split(":")[-1].strip()
+        log(f"Started {bundle_id} (pid {pid}), waiting {args.wait:.0f} s")
+        time.sleep(args.wait)
+        sh(["xcrun", "simctl", "io", udid, "screenshot", args.screenshot])
+        running = sh(["xcrun", "simctl", "spawn", udid, "launchctl", "list"], check=False).stdout
+        alive = bundle_id in running
+        width, height, mean, std = png_stats(args.screenshot)
+        log(f"Screenshot {width}x{height}: mean {mean:.1f}, std {std:.1f}, app running: {alive}")
+        ok = alive and mean > 8.0 and std > 3.0
+        if args.expect_log:
+            text = out_log.read_text(errors="replace") if out_log.exists() else ""
+            # Motorun kendi günlük dosyaları da (uygulamanın veri kapsayıcısında)
+            container = sh(["xcrun", "simctl", "get_app_container", udid, bundle_id, "data"], check=False).stdout.strip()
+            if container and Path(container).is_dir():
+                for f in sorted(Path(container).rglob("*.log"))[:20]:
+                    text += "\n" + f.read_text(errors="replace")
+            hits = [l for l in text.splitlines() if re.search(args.expect_log, l)]
+            log(f"Game log: {len(text.splitlines())} lines, {len(hits)} matching {args.expect_log!r}")
+            for l in hits[:5]:
+                log("  " + l.strip())
+            if not hits:
+                print("\n".join(text.splitlines()[-80:]))
+                ok = False
+        logs = "" if ok else sh(["xcrun", "simctl", "spawn", udid, "log", "show", "--last", "3m", "--style", "compact", "--predicate",
+                                 'process == "conqueror"'], check=False).stdout
+        return ok, alive, logs
+
+    ok, alive, logs = attempt()
+    # iOS Simulator'ün Metal sunucusu (SimMetalHost) ara sıra çöküp yeniden başlıyor (komut arabelleği hatası 2 / 4, "XPC service was
+    # lost"); oyun o anda kapanıyor. Bu simülatörün kendi hatası (a42424d6 öncesi ve sonrası aynı oranda: CI tanı koşuları 4-6): bir kez
+    # yeniden denenir ve uyarı olarak bildirilir
+    host_lost = "XPC service was lost" in logs or "MTLCommandBufferErrorDomain error 4" in logs
+    if not ok and host_lost:
+        print("::warning title=iOS Simulator::the simulator's Metal host (SimMetalHost) restarted during the run; the game is launched once more")
+        sh(["xcrun", "simctl", "terminate", udid, bundle_id], check=False)
+        time.sleep(5)
+        ok, alive, logs = attempt()
     if not ok:
-        logs = sh(["xcrun", "simctl", "spawn", udid, "log", "show", "--last", "3m", "--style", "compact", "--predicate",
-                   'process == "conqueror"'], check=False).stdout
         print("\n".join(logs.splitlines()[-120:]))
         crash_dir = Path.home() / "Library" / "Logs" / "DiagnosticReports"
         for report in sorted(crash_dir.glob("conqueror*"))[-1:]:
