@@ -4810,8 +4810,8 @@ namespace Conqueror::Editor
         });
         Automation::RegisterCommand("play", [this](const Args&, std::string&) { OnPlayButtonPressed(); return true; });
         Automation::RegisterCommand("shading", [this](const Args& a, std::string& err) {
-            if (a.size() < 2 || !m_ViewportPanel) { err = "shading <shaded|wireframe|unlit|normals|lighting|metalrough|ao|pathtracing>"; return false; }
-            static const char* names[] = { "shaded", "wireframe", "unlit", "normals", "lighting", "metalrough", "ao", "pathtracing" };
+            if (a.size() < 2 || !m_ViewportPanel) { err = "shading <shaded|wireframe|unlit|normals|lighting|metalrough|ao|pathtracing|metallic|roughness>"; return false; }
+            static const char* names[] = { "shaded", "wireframe", "unlit", "normals", "lighting", "metalrough", "ao", "pathtracing", "metallic", "roughness" };
             static_assert(sizeof(names) / sizeof(names[0]) == (size_t)ViewportShading::Count, "shading names");
             for (int i = 0; i < (int)ViewportShading::Count; ++i)
                 if (a[1] == names[i]) { m_ViewportPanel->SetShading((ViewportShading)i); return true; }

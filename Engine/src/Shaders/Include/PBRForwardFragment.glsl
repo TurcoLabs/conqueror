@@ -205,6 +205,12 @@ void main()
         FragColor = CQ_FinalizeOutput(vec4(SRGBToLinear(vec3(surface.AO)), 1.0));
         return;
     }
+    else if (debugView == 6 || debugView == 7)
+    {
+        // 318: ayrı gri tonlu Metallic / Roughness (ekranda ham değer: 0.75 pürüzlülük 191 gri)
+        FragColor = CQ_FinalizeOutput(vec4(SRGBToLinear(vec3(debugView == 6 ? surface.Metallic : surface.Roughness)), 1.0));
+        return;
+    }
 
     if (unlit && debugView == 0)
     {

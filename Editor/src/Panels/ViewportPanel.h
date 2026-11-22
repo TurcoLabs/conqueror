@@ -63,6 +63,8 @@ namespace Conqueror::Editor
         MetallicRoughness,
         AmbientOcclusion,
         PathTracing,          // Unreal "Path Tracing" görünüm kipi: ilerleyen GPU ışın izleme (Renderer/PathTracer.h)
+        Metallic,             // 318: ayrı gri tonlu görünümler (Unreal Buffer Visualization, Unity HDRP Material > Metal / Smoothness);
+        Roughness,            //      kayıtlı ayarlardaki sayısal değerler değişmesin diye sona eklendi
         Count
     };
 

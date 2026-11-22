@@ -103,6 +103,8 @@ namespace Conqueror::Editor
                 case ViewportShading::Normals: return ICON_FA_ARROWS_UP_TO_LINE;
                 case ViewportShading::LightingOnly: return ICON_FA_SUN;
                 case ViewportShading::MetallicRoughness: return ICON_FA_GEM;
+                case ViewportShading::Metallic: return ICON_FA_GEM;
+                case ViewportShading::Roughness: return ICON_FA_CIRCLE_HALF_STROKE;
                 case ViewportShading::AmbientOcclusion: return ICON_FA_CIRCLE_HALF_STROKE;
                 case ViewportShading::PathTracing: return ICON_FA_WAND_MAGIC_SPARKLES;
                 default: return ICON_FA_CUBE;
@@ -120,6 +122,8 @@ namespace Conqueror::Editor
             case ViewportShading::Normals: return "Normals";
             case ViewportShading::LightingOnly: return "Lighting Only";
             case ViewportShading::MetallicRoughness: return "Metallic / Roughness";
+            case ViewportShading::Metallic: return "Metallic";
+            case ViewportShading::Roughness: return "Roughness";
             case ViewportShading::AmbientOcclusion: return "Ambient Occlusion";
             case ViewportShading::PathTracing: return "Path Tracing";
             default: return "?";
@@ -211,6 +215,8 @@ namespace Conqueror::Editor
                 case ViewportShading::Normals: debugView = Renderer3D::DebugView::Normals; break;
                 case ViewportShading::LightingOnly: debugView = Renderer3D::DebugView::LightingOnly; break;
                 case ViewportShading::MetallicRoughness: debugView = Renderer3D::DebugView::MetallicRoughness; break;
+                case ViewportShading::Metallic: debugView = Renderer3D::DebugView::Metallic; break;
+                case ViewportShading::Roughness: debugView = Renderer3D::DebugView::Roughness; break;
                 case ViewportShading::AmbientOcclusion: debugView = Renderer3D::DebugView::AmbientOcclusion; break;
                 default: break;
             }
@@ -608,7 +614,8 @@ namespace Conqueror::Editor
                 ImGui::TextDisabled("Shading Mode");
                 static const ViewportShading kOrder[] = { ViewportShading::Shaded, ViewportShading::Wireframe, ViewportShading::PathTracing,
                                                           ViewportShading::Unlit, ViewportShading::Normals, ViewportShading::LightingOnly,
-                                                          ViewportShading::MetallicRoughness, ViewportShading::AmbientOcclusion };
+                                                          ViewportShading::MetallicRoughness, ViewportShading::Metallic, ViewportShading::Roughness,
+                                                          ViewportShading::AmbientOcclusion };
                 static_assert(sizeof(kOrder) / sizeof(kOrder[0]) == (size_t)ViewportShading::Count, "every shading mode in the menu");
                 for (int i = 0; i < (int)ViewportShading::Count; ++i)
                 {
