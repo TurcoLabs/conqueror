@@ -50,7 +50,7 @@ variant() {
   t0=$(date +%s)
   fresh
   if [ "$withbasic" != 0 ]; then
-    tmo 60 xcrun simctl launch "$udid" "$basic_id" > /dev/null 2>&1
+    tmo 60 env "$@" xcrun simctl launch "$udid" "$basic_id" > /dev/null 2>&1   # arkadaki 3D oyun da aynı davranışla
     sleep 30
     if [ "$withbasic" = k ]; then
       tmo 30 xcrun simctl terminate "$udid" "$basic_id" > /dev/null 2>&1
@@ -86,17 +86,13 @@ variant() {
   fi
 }
 
-# Beşinci koşu: yeni davranış ile yalnız TAA'nın önceki kare derinliği kopyası atlanmış hali sırayla dörder kez (3D oyun arkada açık,
-# ana CI'daki gibi). Dördüncü koşuda yeni davranışta 6 koşunun 4'ünde zaman aşımı, 2'sinde SimMetalHost yeniden başlaması; eskide 3'te 1 zaman aşımı
-NODEPTH="SIMCTL_CHILD_CQ_GLEMU_SKIP_DEPTHCOPY=1"
-variant new_1 1 SIMCTL_CHILD_CQ_GLEMU_NONE=1
-variant nodepth_1 1 $NODEPTH
-variant new_2 1 SIMCTL_CHILD_CQ_GLEMU_NONE=1
-variant nodepth_2 1 $NODEPTH
-variant new_3 1 SIMCTL_CHILD_CQ_GLEMU_NONE=1
-variant nodepth_3 1 $NODEPTH
-variant new_4 1 SIMCTL_CHILD_CQ_GLEMU_NONE=1
-variant nodepth_4 1 $NODEPTH
+# Altıncı koşu: beşincide TAA'nın derinlik kopyasını atlamak zaman aşımını azaltmadı (yeni 1/4, kopyasız 2/4). Şimdi a42424d6 öncesi davranış
+# (glCopyImageSubData / glClearBufferfv atlanır) ile yenisi beşer kez sırayla; ana CI'daki gibi 3D oyun arkada açık ve o da aynı davranışla
+STUBS="SIMCTL_CHILD_CQ_GLEMU_SKIP_COPYIMAGE=1 SIMCTL_CHILD_CQ_GLEMU_SKIP_CLEARBUFFER=1 SIMCTL_CHILD_CQ_GLEMU_SKIP_CLEARDEPTH=1"
+for i in 1 2 3 4 5; do
+  variant old_$i 1 $STUBS
+  variant new_$i 1 SIMCTL_CHILD_CQ_GLEMU_NONE=1
+done
 
 tmo 120 xcrun simctl shutdown all > /dev/null 2>&1
 cat diag/summary.txt >> "$GITHUB_STEP_SUMMARY"
