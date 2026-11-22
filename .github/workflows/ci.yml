@@ -6,6 +6,7 @@ name: CI
 # Second run: the first runner lost communication with the server (log cut during the build, files never uploaded); each variant now
 # runs on a freshly booted simulator with time limits, results also go to annotations, and two alternative depth copies are tried
 # (CQ_MTLGL_DEPTHCOPY=buffer / draw).
+# Third run: the second one ran no variant (exit 127 everywhere: macOS has no GNU timeout); the script now uses a perl helper.
 on:
   push:
     branches: ["ci/**"]
