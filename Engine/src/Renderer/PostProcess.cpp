@@ -57,6 +57,8 @@ namespace Conqueror
         // Şu an sahnesi çizilen yığın (Temporal AA titreşimi için)
         PostProcessStack* s_Current = nullptr;
 
+        void MergeShadowBoxes(std::vector<glm::vec4>& minMax, size_t maxBoxes);   // aşağıda (gölge kutularını birleştirir)
+
         // SMAA T2x titreşimi ve SMAA alt örnek indisleri. SMAA.hlsl: jitters { (0.25, -0.25), (-0.25, 0.25) } ile
         // subsampleIndices { (1, 1, 1, 0), (2, 2, 2, 0) } D3D doku uzayında (y aşağı); OpenGL doku uzayında y yukarı olduğundan
         // titreşimin y bileşeni ters: (0.25, 0.25) -> S0, (-0.25, -0.25) -> S1
@@ -798,6 +800,20 @@ namespace Conqueror
         // Kamera durduktan sonra 20 kare beklenir: yükselticinin geçmişi hareketten sonra yakınsarken (kenarlar netleşirken) ortalama
         // bu netleşmeyi geciktirirdi
         m_FSR2HoldStillFrames = still ? m_FSR2HoldStillFrames + 1 : 0;
+        {
+            // 291: hareket eden / silinen gölge düşürücülerin gölge hacmindeki pikseller tutulmaz (TAAU ile aynı kutular): tutucu derinlik
+            // kenarlarındaki yavaş ortalamayla silinen küpün duvara düşen gölgesini kenarda ince bir çizgi olarak yarım saniye tutuyordu
+            static std::vector<glm::vec4> s_HoldShadowBoxes;
+            glm::vec3 towardSun(0.0f, 1.0f, 0.0f);
+            if (!Renderer3D::GetMovingShadowBoxes(this, s_HoldShadowBoxes, towardSun))
+                s_HoldShadowBoxes.clear();
+            MergeShadowBoxes(s_HoldShadowBoxes, 32);
+            hold->SetInt("u_ShadowBoxCount", (int)(s_HoldShadowBoxes.size() / 2));
+            hold->SetFloat3("u_TowardSun", towardSun);
+            for (size_t i = 0; i < s_HoldShadowBoxes.size(); ++i)
+                hold->SetFloat4("u_ShadowBoxes[" + std::to_string(i) + "]", s_HoldShadowBoxes[i]);
+            hold->SetMat4("u_InvViewProj", m_FinalInvViewProj);
+        }
         hold->SetInt("u_Hold", (still && m_FSR2HoldStillFrames > 20 && m_FSR2HoldValid && !reset && !lightingChanged) ? 1 : 0);
         hold->SetFloat2("u_Texel", glm::vec2(1.0f / (float)w, 1.0f / (float)h));
         hold->SetFloat("u_Near", m_FinalNear);

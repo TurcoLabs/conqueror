@@ -7237,7 +7237,7 @@ namespace Conqueror::Editor
             if (a[1] != "expect" || a.size() < 7) { err = "viewport_region_change mark|expect u0 v0 u1 v1 [cond]"; return false; }
             if (w != s_W || h != s_H || s_Marked.size() != px.size()) { err = "region differs from the marked one"; return false; }
             double sum = 0.0;
-            int over20 = 0, peak = 0;
+            int over20 = 0, peak = 0, darker20 = 0;
             for (size_t i = 0; i < px.size(); i += 4)
             {
                 int d = 0;
@@ -7249,9 +7249,15 @@ namespace Conqueror::Editor
                 }
                 over20 += d > 20 ? 1 : 0;
                 peak = std::max(peak, d);
+                // İşaretlendiği anda şimdikinden 20 seviyeden çok koyu olan piksel: silinen nesnenin bıraktığı koyu kalıntı (gölge / AO, 291);
+                // açılan alanın yeniden birikmesi iki yönde de değiştiğinden bu sayıyı az etkiler
+                const int lumNow = (int)px[i] * 54 + (int)px[i + 1] * 183 + (int)px[i + 2] * 19;
+                const int lumMarked = (int)s_Marked[i] * 54 + (int)s_Marked[i + 1] * 183 + (int)s_Marked[i + 2] * 19;
+                darker20 += (lumNow - lumMarked) > 20 * 256 ? 1 : 0;
             }
             const float have = (float)(sum / (3.0 * (double)w * h));
-            Automation::Report("REGION_CHANGE " + std::to_string(have) + " pixels>20 " + std::to_string(over20) + " max " + std::to_string(peak));
+            Automation::Report("REGION_CHANGE " + std::to_string(have) + " pixels>20 " + std::to_string(over20) + " darker-at-mark>20 " + std::to_string(darker20) +
+                               " max " + std::to_string(peak));
             const std::string& cond = a[6];
             bool ok;
             if (cond.rfind("<last+", 0) == 0 || cond.rfind("<last*", 0) == 0)
@@ -7267,6 +7273,12 @@ namespace Conqueror::Editor
                 // px20<N: 20 seviyeden çok değişen piksel sayısı N'den az (ince çizgi izi: ortalama titreşim gürültüsünde kaybolur, 291 / 292)
                 ok = over20 < std::stoi(cond.substr(5));
                 if (!ok) err = std::to_string(over20) + " pixels changed by more than 20 levels";
+            }
+            else if (cond.rfind("dark20<", 0) == 0)
+            {
+                // dark20<N: işaretlendiği anda şimdikinden 20 seviyeden çok koyu olan piksel sayısı N'den az (silinen nesnenin koyu kalıntısı, 291)
+                ok = darker20 < std::stoi(cond.substr(7));
+                if (!ok) err = std::to_string(darker20) + " pixels were more than 20 levels darker at the mark";
             }
             else
             {

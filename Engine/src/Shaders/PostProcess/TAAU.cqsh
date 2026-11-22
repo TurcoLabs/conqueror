@@ -276,12 +276,19 @@ void main()
     }
     // 324: hareket eden nesnenin gölge hacmindeki durağan yüzey: gölge kayar, geçmiş tutulmaz / genişletilmiş kutuyla saklanmaz
     // (kalkan hedefin gölgesinin kenarı titreşim örnekleriyle noktalı kalıyordu); TAA'daki gölge kutusu yolu gibi sıkı kırpılır
+    // 3x3'ün herhangi bir iç örneği gölge hacmindeyse (291): kenar pikselinde (duvar üstü ile ötedeki gölgeli zemin arası) merkez örnek
+    // ötedeki yüzeye düşüyor, pikselin geçmişindeki silinen küpün gölgesi korunmuyor, komşulukta koyu zemin olduğu için kırpılmıyordu
     bool movingShadow = false;
-    if (u_ShadowBoxCount > 0 && cDepth < 1.0)
-    {
-        vec4 wp = u_InvViewProj * vec4(cUV * 2.0 - 1.0, cDepth * 2.0 - 1.0, 1.0);
-        movingShadow = InMovingShadow(wp.xyz / wp.w);
-    }
+    if (u_ShadowBoxCount > 0)
+        for (int i = 0; i < 9 && !movingShadow; ++i)
+        {
+            ivec2 t = clamp(base + ivec2(i % 3 - 1, i / 3 - 1), ivec2(0), inMax);
+            float sd = texelFetch(u_Depth, t, 0).r;
+            if (sd >= 1.0)
+                continue;
+            vec4 wp = u_InvViewProj * vec4(((vec2(t) + 0.5) * u_InTexel) * 2.0 - 1.0, sd * 2.0 - 1.0, 1.0);
+            movingShadow = InMovingShadow(wp.xyz / wp.w);
+        }
     vec3 history = SampleHistory(prevUV);
     // Geçmişin alfası durum: 64 x (2 x biriken örnek ağırlığı, 0..31) + 2 x titreme puanı (0..16) + geçmiş geçen karede kutunun dışındaydı
     vec2 outSize = 1.0 / u_OutTexel;
@@ -358,6 +365,15 @@ void main()
     {
         alpha = max(alpha, wmax / (accBefore + wmax));
         acc = min(accBefore + wmax, 4.0);
+    }
+    if (movingShadow && !vacated)
+    {
+        // 291: hareket eden / silinen nesnenin gölge hacmi: hacim sürdükçe (silinen düşürücüde 8 kare) bu kare en az yarı ağırlıkla
+        // girer, kalıntı birkaç karede silinir. Yalnız kırpma sıkılaşınca kenar pikselinde (duvar üstü ile ötedeki gölgeli zemin) silinen
+        // küpün gölgesi geçmişte kalıyor, yüksek birikim ağırlığıyla yarım saniye ince koyu çizgi olarak sönüyordu. Birikim ağırlığı
+        // sıfırlanmaz: hacim bitince "kamera dururken" yolu dar süzgeçli tek kareye yüksek ağırlık verip kenarı noktalı gösteriyordu
+        alpha = max(alpha, 0.5);
+        flicker = 0.0;
     }
     if (vacated)
     {

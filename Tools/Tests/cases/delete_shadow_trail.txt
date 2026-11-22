@@ -1,0 +1,23 @@
+# template: fps
+# matrix: UP=0 3
+# 291: kullanıcının kadrajı (kamera kuzey duvarın arkasından ve üstünden bakar), duvarın üstündeki küp silinir. TAA + NIS'te (TAAU) küpün
+# duvara düşen gölgesinin / AO'sunun kenarı yarım saniye ince koyu çizgiler halinde kalıyordu: TAAU silinen gölge düşürücünün gölge
+# hacmini yalnız merkez örnekte ve tek karede görüyor, birikimi sıfırlamıyordu; kamera dururken çalışan ince boşluk tutucu da derinlik
+# kenarındaki kalıntıyı yavaş ortalamayla tutuyordu. Silmeden 15 kare sonra işaretlenir (TAAU'nun kenarı yeniden oturttuğu ilk kareler
+# geçtikten sonra), 40 kare sonra işaretteki koyu kalıntı sayılır (eski TAAU 83, şimdi 3; yerel TAA 0). UP=0: yerel TAA, UP=3: TAA + NIS
+wait_until 3000 layout_settled
+wait 10
+cvar r.TemporalStability 1
+cvar r.AntiAliasing 3
+cvar r.Upscaler {matrix}
+camera 14 18 180 0 4 -25
+create_primitive Cube GhostCube -3 4.5 -30.5
+select GhostCube
+focus Viewport
+wait 150
+key delete
+wait 15
+viewport_region_change mark 0.0 0.0 1.0 1.0
+wait 40
+viewport_region_change expect 0.0 0.0 1.0 1.0 dark20<40
+quit
