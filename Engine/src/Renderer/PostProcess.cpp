@@ -2371,6 +2371,19 @@ namespace Conqueror
                 const float focalPrev = focalOf(m_PrevViewProj), focalNow = focalOf(m_FinalViewProj);
                 taau->SetFloat("u_ProjScale", (focalPrev > 1e-6f && focalNow > 1e-6f) ? focalNow / focalPrev : 1.0f);
             }
+            {
+                // 324: hareket eden nesnelerin gölge hacimleri (TAA / Temporal Stability ile aynı kutular): kayan gölgenin kenarı
+                // durağan zeminde tutulmasın (TAA + NIS'te kalkan hedefin gölgesi noktalı / lekeli kalıyordu)
+                static std::vector<glm::vec4> s_TAAUShadowBoxes;
+                glm::vec3 towardSun(0.0f, 1.0f, 0.0f);
+                if (!Renderer3D::GetMovingShadowBoxes(this, s_TAAUShadowBoxes, towardSun))
+                    s_TAAUShadowBoxes.clear();
+                MergeShadowBoxes(s_TAAUShadowBoxes, 32);
+                taau->SetInt("u_ShadowBoxCount", (int)(s_TAAUShadowBoxes.size() / 2));
+                taau->SetFloat3("u_TowardSun", towardSun);
+                for (size_t i = 0; i < s_TAAUShadowBoxes.size(); ++i)
+                    taau->SetFloat4("u_ShadowBoxes[" + std::to_string(i) + "]", s_TAAUShadowBoxes[i]);
+            }
             BindTexture(6, prevDepth ? m_PrevDepth : 0);
             glTextureParameteri(cur, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
             BindTexture(0, cur);

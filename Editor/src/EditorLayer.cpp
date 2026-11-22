@@ -28,6 +28,7 @@
 #include "Build/AndroidSigning.h"
 #include "Core/ImGui/ImGuiLayer.h"
 #include "stb_image_write.h"
+#include <stb_image.h>
 #include <thread>
 #include "Renderer/GameViewModes.h"
 #include <yaml-cpp/yaml.h>
@@ -7096,6 +7097,73 @@ namespace Conqueror::Editor
                 if (limit >= 0.0f && sum / std::max<size_t>(1, n) > limit) { e = std::string("motion blink over the limit: ") + line; return false; }
                 return true;
             });
+            return true;
+        });
+        // image_seq_trail <ref dir> <test dir> <first> <last> x0 y0 x1 y1 [max <n>] (324): iki kayıt dizisini (record_start png fixed, aynı
+        // girdiler: önce kenar yumuşatmasız referans, sonra denenen kip) karşılaştırır. Referansın düz olduğu yerde (5x5 aralığı < 16) 28
+        // seviyeden çok sapan piksel = hareket eden nesnenin bıraktığı iz / gölgedeki lekeler (kenarlar sayılmaz: kenar yumuşatma onları
+        // zaten değiştirir). Kare başına ortalama ve en çok sayı raporlanır; max verilirse ortalama onu aşınca FAIL
+        Automation::RegisterCommand("image_seq_trail", [](const Args& a, std::string& err) {
+            if (a.size() < 9) { err = "image_seq_trail <ref dir> <test dir> <first> <last> x0 y0 x1 y1 [max n]"; return false; }
+            // record_start çıktı klasörünün içinde Recording_<zaman> alt klasörü açar
+            auto frameDir = [](const std::string& dir) {
+                std::error_code ec;
+                std::filesystem::path best = dir;
+                for (const auto& e : std::filesystem::directory_iterator(dir, ec))
+                    if (e.is_directory() && e.path().filename().string().rfind("Recording_", 0) == 0 &&
+                        (best == std::filesystem::path(dir) || e.path().filename() > best.filename()))
+                        best = e.path();   // en yeni kayıt (ad zaman damgası)
+                return best;
+            };
+            const auto refDir = frameDir(a[1]), testDir = frameDir(a[2]);
+            const int first = std::atoi(a[3].c_str()), last = std::atoi(a[4].c_str());
+            const int x0 = std::atoi(a[5].c_str()), y0 = std::atoi(a[6].c_str()), x1 = std::atoi(a[7].c_str()), y1 = std::atoi(a[8].c_str());
+            float limit = -1.0f;
+            if (a.size() > 10 && a[9] == "max")
+                limit = (float)std::atof(a[10].c_str());
+            auto load = [](const std::filesystem::path& p, int& w, int& h) {
+                int n = 0;
+                unsigned char* d = stbi_load(p.string().c_str(), &w, &h, &n, 1);
+                std::vector<int> out;
+                if (d)
+                {
+                    out.assign(d, d + (size_t)w * h);
+                    stbi_image_free(d);
+                }
+                return out;
+            };
+            double sum = 0.0;
+            int worst = 0, frames = 0;
+            for (int f = first; f <= last; ++f)
+            {
+                char name[32];
+                std::snprintf(name, sizeof(name), "frame_%06d.png", f);
+                int wr = 0, hr = 0, wt = 0, ht = 0;
+                const auto r = load(refDir / name, wr, hr), t = load(testDir / name, wt, ht);
+                if (r.empty() || t.empty() || wr != wt || hr != ht) { err = std::string("missing or mismatched frame ") + name; return false; }
+                int count = 0;
+                for (int y = std::max(y0, 2); y < std::min(y1, hr - 2); ++y)
+                    for (int x = std::max(x0, 2); x < std::min(x1, wr - 2); ++x)
+                    {
+                        int lo = 255, hi = 0;
+                        for (int dy = -2; dy <= 2; ++dy)
+                            for (int dx = -2; dx <= 2; ++dx)
+                            {
+                                const int v = r[(size_t)(y + dy) * wr + x + dx];
+                                lo = std::min(lo, v);
+                                hi = std::max(hi, v);
+                            }
+                        if (hi - lo < 16 && std::abs(t[(size_t)y * wr + x] - r[(size_t)y * wr + x]) > 28)
+                            ++count;
+                    }
+                sum += count;
+                worst = std::max(worst, count);
+                ++frames;
+            }
+            char line[160];
+            std::snprintf(line, sizeof(line), "SEQ TRAIL %d frames: mean %.1f, max %d pixels off the reference in flat areas", frames, sum / std::max(frames, 1), worst);
+            Automation::Report(line);
+            if (limit >= 0.0f && sum / std::max(frames, 1) > limit) { err = std::string("trail over the limit: ") + line; return false; }
             return true;
         });
         Automation::RegisterCommand("game_region_change", [this](const Args& a, std::string& err) {
