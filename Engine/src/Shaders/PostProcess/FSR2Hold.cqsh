@@ -32,6 +32,28 @@ uniform sampler2D u_Velocity;   // nesne hız tamponu (iç çözünürlük; x >=
 uniform int u_HasVelocity = 0;
 uniform int u_Hold = 0;         // 1: kamera duruyor, durum geçerli, ışık değişmedi
 uniform vec2 u_Texel;
+uniform vec4 u_ShadowBoxes[64];   // 291: hareket eden / silinen gölge düşürücülerin dünya kutuları ([2i] min, [2i+1] max)
+uniform int u_ShadowBoxCount = 0;
+uniform vec3 u_TowardSun = vec3(0.0, 1.0, 0.0);
+uniform mat4 u_InvViewProj;
+
+bool InMovingShadow(vec3 p)
+{
+    vec3 dir = u_TowardSun;
+    dir = mix(dir, vec3(1e-6), lessThan(abs(dir), vec3(1e-6)));
+    vec3 inv = 1.0 / dir;
+    for (int i = 0; i < u_ShadowBoxCount; ++i)
+    {
+        vec3 t1 = (u_ShadowBoxes[2 * i].xyz - p) * inv;
+        vec3 t2 = (u_ShadowBoxes[2 * i + 1].xyz - p) * inv;
+        vec3 tn = min(t1, t2), tf = max(t1, t2);
+        float tNear = max(max(tn.x, tn.y), max(tn.z, 0.0));
+        float tFar = min(min(tf.x, tf.y), tf.z);
+        if (tFar >= tNear)
+            return true;
+    }
+    return false;
+}
 uniform float u_Near = 0.1;
 uniform float u_Far = 1000.0;
 
@@ -87,7 +109,18 @@ void main()
                 o_State = vec4(cur, -1.0);
                 return;
             }
-            float z = LinearDepth(texture(u_Depth, uv).r);
+            float rawDepth = texture(u_Depth, uv).r;
+            // 291: hareket eden / silinen nesnenin gölge hacmi (5x5'in köşeleri ve merkezi yeterli: hacim büyük)
+            if (u_ShadowBoxCount > 0 && rawDepth < 1.0 && (x * y == 0 || abs(x) == 2) && abs(x) + abs(y) != 3)
+            {
+                vec4 wp = u_InvViewProj * vec4(uv * 2.0 - 1.0, rawDepth * 2.0 - 1.0, 1.0);
+                if (InMovingShadow(wp.xyz / wp.w))
+                {
+                    o_State = vec4(cur, -1.0);
+                    return;
+                }
+            }
+            float z = LinearDepth(rawDepth);
             zMin = min(zMin, z);
             zMax = max(zMax, z);
         }

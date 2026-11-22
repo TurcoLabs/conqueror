@@ -363,6 +363,16 @@ namespace Conqueror
             // gölgeli piksellerde geçmişe güvenmez (gölge eski yerinde iz bırakmaz, yeni yerine gecikmeden geçer)
             std::vector<glm::vec4> LastShadowBoxes;
             std::vector<glm::vec4> ShadowBoxes;
+            // 291: silinen / gizlenen gölge düşürücünün kutusu birkaç kare daha verilir: gölge haritası bir iki kare geç güncellenebilir,
+            // eski gölge o karelerde ekranda kalır; TAAU / TAA ancak kutu varken o pikselin birikimini yeniden başlatır (yoksa silinen
+            // küpün duvara düşen gölgesinin kenarı yüksek birikimle yarım saniye ince çizgiler halinde sönüyordu)
+            struct VanishedCaster
+            {
+                uint64_t Key = 0;
+                glm::vec4 Lo{ 0.0f }, Hi{ 0.0f };
+                int FramesLeft = 0;
+            };
+            std::vector<VanishedCaster> Vanished;
             // Nesne hareket vektörü çizimleri (bu kare): katı meshler önceki dönüşümleriyle, animasyonlu modeller bu karenin
             // kemikleriyle
             struct VelocityDraw
@@ -1132,16 +1142,26 @@ namespace Conqueror
         if (it == s_Motion.end())
             return true;
         minMax = it->second.ShadowBoxes;
-        // Silinen / gizlenen gölge düşürücü: eski gölgesi de bu karede kalkar (gölgenin eski yeri geçmişte iz bırakmasın)
+        // Silinen / gizlenen gölge düşürücü: eski gölgesi de kalkar (gölgenin eski yeri geçmişte iz bırakmasın). Kutusu 8 kare tutulur
+        // (gölge haritasının gecikmeli güncellemesi, 291)
+        auto& vanished = it->second.Vanished;
         for (const auto& [key, f] : it->second.PrevFoot)
         {
             if (it->second.Cur.count(key) || !f.MeshRef || f.MeshRef->GetBoundsRadius() <= 0.0f)
                 continue;
+            // Yapısal bağlama lambda'da yakalanamaz (C++17; OpenHarmony NDK clang'ı reddeder): kopya
+            const auto vanishedKey = key;
+            if (std::any_of(vanished.begin(), vanished.end(), [&](const auto& v) { return v.Key == vanishedKey; }))
+                continue;
             glm::vec3 c, e;
             TransformBox(f.Transform, f.MeshRef->GetBoundsCenter(), f.MeshRef->GetBoundsExtents(), c, e);
             const float margin = 0.15f + 0.1f * std::max(e.x, std::max(e.y, e.z));
-            minMax.push_back(glm::vec4(c - e - margin, 0.0f));
-            minMax.push_back(glm::vec4(c + e + margin, 0.0f));
+            vanished.push_back({ key, glm::vec4(c - e - margin, 0.0f), glm::vec4(c + e + margin, 0.0f), 8 });
+        }
+        for (const auto& v : vanished)
+        {
+            minMax.push_back(v.Lo);
+            minMax.push_back(v.Hi);
         }
         minMax.insert(minMax.end(), it->second.LastShadowBoxes.begin(), it->second.LastShadowBoxes.end());
         return true;
@@ -1201,6 +1221,10 @@ namespace Conqueror
             track.Rects.clear();
             track.LastShadowBoxes.swap(track.ShadowBoxes);
             track.ShadowBoxes.clear();
+            for (auto& v : track.Vanished)
+                --v.FramesLeft;
+            track.Vanished.erase(std::remove_if(track.Vanished.begin(), track.Vanished.end(), [](const auto& v) { return v.FramesLeft <= 0; }),
+                                 track.Vanished.end());
             track.Velocity.clear();
             track.SkinnedVelocity.clear();
             std::swap(track.PrevSkinned, track.CurSkinned);
