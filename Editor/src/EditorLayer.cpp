@@ -6815,6 +6815,34 @@ namespace Conqueror::Editor
         Automation::RegisterCommand("viewport_region", [this, regionProbe](const Args& a, std::string& err) {
             return regionProbe(m_ViewportPanel ? m_ViewportPanel->GetFramebuffer() : nullptr, a, err);
         });
+        // game_region_compare <A: u0 v0 u1 v1> <B: u0 v0 u1 v1> <v | >v | <v>: Game görünümünde iki bölgenin ortalama parlaklık farkı
+        // |A - B| (0-255; u, v 0..1, sol alt köşe 0,0). Pozlamadan bağımsız komşu bölge karşılaştırması (ör. zeminde keskin sınır)
+        Automation::RegisterCommand("game_region_compare", [this](const Args& a, std::string& err) {
+            const std::shared_ptr<Framebuffer> fb = m_GamePanel ? m_GamePanel->GetFramebuffer() : nullptr;
+            if (a.size() < 10 || !fb) { err = "game_region_compare u0 v0 u1 v1 u0 v0 u1 v1 <cond>"; return false; }
+            const auto& spec = fb->GetSpecification();
+            auto meanLum = [&](size_t k) {
+                auto toPx = [](const std::string& v, uint32_t size) { return std::clamp((int)(std::stof(v) * (float)size), 0, (int)size - 1); };
+                const int x0 = toPx(a[k], spec.Width), y0 = toPx(a[k + 1], spec.Height), x1 = toPx(a[k + 2], spec.Width), y1 = toPx(a[k + 3], spec.Height);
+                const int w = std::max(1, std::abs(x1 - x0) + 1), h = std::max(1, std::abs(y1 - y0) + 1);
+                std::vector<uint8_t> px((size_t)w * h * 4);
+                glGetTextureSubImage(fb->GetColorAttachmentRendererID(0), 0, std::min(x0, x1), std::min(y0, y1), 0, w, h, 1, GL_RGBA,
+                                     GL_UNSIGNED_BYTE, (GLsizei)px.size(), px.data());
+                double sum = 0.0;
+                for (size_t i = 0; i < (size_t)w * h; ++i)
+                    sum += 0.299 * px[i * 4] + 0.587 * px[i * 4 + 1] + 0.114 * px[i * 4 + 2];
+                return (float)(sum / ((double)w * h));
+            };
+            const float ma = meanLum(1), mb = meanLum(5), have = std::abs(ma - mb);
+            Automation::Report("REGION COMPARE A=" + std::to_string(ma) + " B=" + std::to_string(mb) + " |A-B|=" + std::to_string(have));
+            const std::string& cond = a[9];
+            bool ok;
+            if (cond[0] == '>') ok = have > std::stof(cond.substr(1));
+            else if (cond[0] == '<') ok = have < std::stof(cond.substr(1));
+            else ok = std::abs(have - std::stof(cond)) <= 6.0f;
+            if (!ok) err = "|A-B| is " + std::to_string(have);
+            return ok;
+        });
         // game_region_change mark <u0 v0 u1 v1> | expect <u0 v0 u1 v1> <v | >v | <v>: Game görünümündeki bölgenin işaretlenen
         // andan bu yana piksel başına ortalama değişimi (0-255, RGB ortalaması). Hareket / salınım / durağanlık denetimi
         // game_flicker <kare> [u0 v0 u1 v1] [max% <yüzde>] [max8% <yüzde>] [save <png>]: kamera dururken sonraki N karede Game görüntüsünün her pikselinin

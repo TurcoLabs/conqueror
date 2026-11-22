@@ -586,17 +586,16 @@ vec3 CQ_AreaLightContribution(CQ_Surface s, CQ_AreaLight al, vec3 V, vec3 F0, ve
     vec3 kD = (1.0 - Fd) * (1.0 - s.Metallic);
     vec3 diffuse = kD * s.Albedo * radiance * ff;
 
-    // Yansıma: yansıyan ışının ışık düzlemini kestiği nokta, şekle kırpılır
+    // Yansıma: yansıyan ışının ışık düzlemini kestiği nokta, şekle kırpılır. Işın düzleme gitmiyorsa (paralel ya da
+    // uzaklaşıyor) düzlemde ışına açıca en yakın yer, ışın paralelleşirken kesişimin gittiği yer: ayak noktasından ışının
+    // düzlem bileşeni boyunca uzakta (kırpınca şeklin kenarı); iki durum kesintisiz birleşir. Eskiden ayak noktası
+    // alınıyordu: sıçrama yapıyordu ve yansıyan ışının ışık düzlemine paralel olduğu çizgide zeminde kamerayla birlikte
+    // yürüyen keskin açık / koyu sınır çıkıyordu (ArchViz bahçe ışığı: kameranın 0,34 m yanında, 10-15 seviye; o tarafta
+    // yansıma gerçek integralin 10-30 katıydı)
     vec3 R = reflect(-V, N);
     float denom = dot(R, Nl);
-    vec3 P;
-    if (abs(denom) > 1e-4)
-    {
-        float t = dot(C - s.Position, Nl) / denom;
-        P = t > 0.0 ? s.Position + R * t : s.Position - Nl * side;
-    }
-    else
-        P = s.Position - Nl * side;
+    float t = abs(denom) > 1e-6 ? -side / denom : -1.0;
+    vec3 P = s.Position - Nl * side + (R - Nl * denom) * (t > 0.0 ? min(t, 1e4) : 1e4);
     vec3 local = P - C;
     float u = dot(local, Xn), v = dot(local, Yn);
     if (disc)

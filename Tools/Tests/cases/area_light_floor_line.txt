@@ -1,0 +1,17 @@
+# template: archviz
+# Pre-HN madde 10: ArchViz zemininde kamerayla birlikte yürüyen keskin açık / koyu sınır. Alan ışığının yansıma "temsilci noktası",
+# yansıyan ışın ışık düzlemine gitmeyince (paralel ya da uzaklaşıyor) şeklin ayak noktasına sıçrıyordu; pencerenin dışındaki bahçe
+# ışığında (22 x 4 m, 12 derece eğik) sıçrama çizgisi kameranın 0,34 m yanında, zeminde düz bir çizgi. Kullanıcının kanepe yanı
+# kadrajı (View 1 oraya taşınır, 1 tuşu): çizginin iki yanındaki zemin bölgelerinin ortalama farkı eski gölgelendiricide 11-14,
+# şimdi 2-3 seviye (tahta deseni)
+wait 60
+entity move "View 1" 2.2 0.9 -1.4
+entity rotate "View 1" -25 85 0
+focus Game
+play
+wait 40
+key 1
+wait 150
+game_region_compare 0.44 0.41 0.50 0.47 0.527 0.41 0.571 0.47 <6
+stop
+quit
