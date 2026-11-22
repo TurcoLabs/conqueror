@@ -126,6 +126,13 @@ namespace Conqueror::MtlGL
         c.Version = "4.6.0 Conqueror MtlGL";
         c.Extensions = { "GL_ARB_clip_control", "GL_ARB_direct_state_access", "GL_ARB_texture_storage", "GL_ARB_texture_filter_anisotropic",
                          "GL_EXT_texture_filter_anisotropic" };
+        // 307: hesaplama gölgelendiricisi (MSL çekirdekleri, hesaplama kodlayıcısı): NIS, CMAA2, FSR 2, ışın izleme, GPU parçacıkları
+        s_Limits.Compute = true;
+        for (const char* e : { "GL_ARB_compute_shader", "GL_ARB_shader_image_load_store", "GL_ARB_shader_storage_buffer_object" })
+            c.Extensions.push_back(e);
+        // Görüntü atomikleri yalnız doku atomikleriyle (Metal 3.1, Apple7+ / Mac2); yoksa CMAA 2 / FSR 2 kullanılamaz
+        if (core.SupportsTextureAtomics())
+            c.Extensions.push_back("GL_CQ_image_atomics");
         s_Limits.MaxTextureSize = 16384;
         s_Limits.MaxCubeMapSize = 16384;
         s_Limits.MaxTextureUnits = 31;

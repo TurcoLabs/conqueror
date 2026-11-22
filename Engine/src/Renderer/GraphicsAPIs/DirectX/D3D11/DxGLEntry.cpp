@@ -4,6 +4,7 @@
 
 #include "DxGL.h"
 #include "Core/Logging/Log.h"
+#include "Renderer/ShaderCompiler/ShaderCompiler.h"
 
 #include <algorithm>
 #include <array>
@@ -48,6 +49,15 @@ namespace Conqueror::DxGL
         SafeRelease(b.Geometry);
         SafeRelease(b.Constant);
         b.GeometrySize = b.ConstantSize = 0;
+        for (auto& [k, v] : b.StorageUAVs)
+            if (v) v->Release();
+        for (auto& [k, v] : b.StorageSRVs)
+            if (v) v->Release();
+        b.StorageUAVs.clear();
+        b.StorageSRVs.clear();
+        SafeRelease(b.Storage);
+        SafeRelease(b.StorageConstant);
+        b.StorageSize = b.StorageConstantSize = 0;
     }
 
     void WriteTimestamp(QueryObject& q)
@@ -145,9 +155,22 @@ namespace Conqueror::DxGL
         c.Version = "4.6.0 Conqueror DxGL";
         c.Extensions = { "GL_ARB_clip_control", "GL_ARB_direct_state_access", "GL_ARB_texture_storage", "GL_ARB_texture_filter_anisotropic",
                          "GL_EXT_texture_filter_anisotropic" };
+        // 307: hesaplama gölgelendiricisi (cs_5_0, özellik düzeyi 11_0+): NIS, CMAA2, FSR 2, ışın izleme, GPU parçacıkları
+        if (core.FeatureLevel() >= D3D_FEATURE_LEVEL_11_0)
+        {
+            s_Limits.Compute = true;
+            for (const char* e : { "GL_ARB_compute_shader", "GL_ARB_shader_image_load_store", "GL_ARB_shader_storage_buffer_object",
+                               "GL_CQ_image_atomics" })
+                c.Extensions.push_back(e);
+        }
         s_Limits.MaxTextureSize = D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION;
         s_Limits.MaxCubeMapSize = D3D11_REQ_TEXTURECUBE_DIMENSION;
         s_Limits.MaxTextureUnits = 32;   // 16'dan büyük örnekleyici dizileri ayrık doku + ortak örnekleyiciye çevrilir
+        // D3D11 aşama başına en çok 16 örnekleyici (D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT / kök tablosu) bağlar: PBR, PBRSkinned ve
+        // Terrain 19-22 birleşik örnekleyiciyle bağlanamıyor, sahnede yalnız gökyüzü çiziliyordu (Ray Traced GI'nin üç dokusu eklendiğinden
+        // beri; Metal ve WebGPU'daki gibi 16 dokuluk bütçe: yansıtma probu gökyüzü yansımasını kullanır, APV / dinamik GI / düzlemsel
+        // yansıma örneklenmez, 2B toplu çizim 14 yuva)
+        ShaderCompiler::SetTextureBudget16(true);
         s_Limits.MaxVertexAttribs = 16;
         s_Limits.MaxUniformBufferBindings = D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT;
         s_Limits.MaxUniformBlockSize = D3D11_REQ_CONSTANT_BUFFER_ELEMENT_COUNT * 16;
@@ -213,6 +236,8 @@ namespace Conqueror::DxGL
         DestroyTextureImage(c.BackColor);
         DestroyTextureImage(c.BackDepth);
         for (auto& [n, b] : c.Buffers) ReleaseBuffer(*b);
+        for (auto& [serial, q] : c.SyncQueries) if (q) q->Release();
+        c.SyncQueries.clear();
         for (auto& [n, p] : c.Programs) DestroyProgram(*p);
         for (auto& [k, s] : c.BlendStates) if (s) s->Release();
         for (auto& [k, s] : c.DepthStates) if (s) s->Release();

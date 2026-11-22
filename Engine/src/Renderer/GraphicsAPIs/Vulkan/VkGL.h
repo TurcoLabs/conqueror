@@ -53,6 +53,7 @@ namespace Conqueror::VkGL
         VkDeviceMemory Memory = VK_NULL_HANDLE;
         VkImageView SampledView = VK_NULL_HANDLE;
         int SampledViewLevels = 0;
+        bool StorageCapable = false;        // görüntü VK_IMAGE_USAGE_STORAGE_BIT ile (ilk glBindImageTexture'da yükseltilir, 307)
         std::unordered_map<uint32_t, VkImageView> AttachmentViews;   // düzey | katman << 8
         // Örnekleyici parametreleri
         GLenum MinFilter = GL_NEAREST_MIPMAP_LINEAR, MagFilter = GL_LINEAR;
@@ -66,6 +67,7 @@ namespace Conqueror::VkGL
     struct Buffer
     {
         std::vector<uint8_t> Shadow;        // GL'nin gördüğü içerik
+        size_t DirtyBegin = SIZE_MAX, DirtyEnd = 0;  // CPU'nun yazdığı aralık (GPU'ya ait arabellekte yalnız bu yüklenir, 307)
         GLenum Usage = GL_STATIC_DRAW;
         bool Dirty = true;                  // gölge kopya GPU sürümünden yeni
         // Kalıcı (adanmış) sürüm
@@ -80,6 +82,9 @@ namespace Conqueror::VkGL
         bool CurrentIsRing = false;
         uint64_t RingFrame = 0;
         size_t HighWater = 0;               // yazılmış en yüksek bayt (kopyalar bununla sınırlı)
+        bool GpuOwned = false;              // hesaplama gölgelendiricisi yazar (depolama / dolaylı arabellek): içerik GPU'dadır, yeniden
+                                            // adlandırılmaz; CPU yazımları komut sırasıyla adanmış sürüme kopyalanır (307)
+        bool GpuResident = false;           // adanmış sürüm GPU'ya ait olarak oluşturuldu (gölgeyle yeniden doldurulmaz)
     };
 
     struct Attachment
@@ -139,6 +144,7 @@ namespace Conqueror::VkGL
         uint32_t MatrixStride = 16;
         int Sampler = -1;                   // örnekleyici ise Samplers dizini
         int SamplerElement = 0;
+        int Image = -1;                     // görüntü uniform'u ise Images dizini (değer görüntü birimi)
         uint32_t ArrayStride = 0;           // dizi tabanı için (glUniform*v sayımı)
         int ArrayRemaining = 1;             // bu elemandan itibaren kalan eleman
     };
@@ -176,9 +182,16 @@ namespace Conqueror::VkGL
     {
         uint64_t Id = 0;                    // boru hattı önbellek anahtarı (yeniden bağlamada değişir)
         std::vector<uint32_t> Shaders;
+        // Hesaplama gölgelendiricisi (307): görüntü uniform'ları ve depolama blokları; IsCompute ise köşe / parça aşaması yok
+        bool IsCompute = false;
+        uint32_t LocalSize[3] = { 1, 1, 1 };
+        std::vector<GLEmu::ImageBinding> Images;
+        std::vector<GLEmu::StorageBlockBinding> StorageBlocks;
         bool Linked = false;
         std::string Log;
         VkShaderModule Vert = VK_NULL_HANDLE, Frag = VK_NULL_HANDLE;
+        VkShaderModule Comp = VK_NULL_HANDLE;          // hesaplama programı (307)
+        VkPipeline ComputePipeline = VK_NULL_HANDLE;
         VkDescriptorSetLayout SetLayout = VK_NULL_HANDLE;
         VkPipelineLayout Layout = VK_NULL_HANDLE;
         int GlobalsBinding = -1;
@@ -213,6 +226,7 @@ namespace Conqueror::VkGL
     // GL durum makinesi
     struct State
     {
+        GLEmu::ComputeBindings Compute;     // glBindImageTexture / depolama arabelleği / dolaylı dispatch (307)
         // Etkinleştirmeler
         bool Blend = false, DepthTest = false, CullFace = false, ScissorTest = false, StencilTest = false;
         bool PolygonOffsetFill = false, PrimitiveRestart = false;
@@ -270,6 +284,7 @@ namespace Conqueror::VkGL
         std::unordered_map<uint32_t, std::unique_ptr<ShaderObject>> ShaderObjects;
         std::unordered_map<uint32_t, std::unique_ptr<Program>> Programs;
         std::unordered_map<uint32_t, std::unique_ptr<Texture>> SamplerObjects;   // yalnızca parametreler
+        uint32_t NextSamplerName = 1;           // glGenSamplers / glCreateSamplers
         std::unordered_map<uint32_t, QueryObject> QueryObjects;
         uint32_t NextName = 1;
         uint32_t NextQueryIndex = 0;
@@ -349,6 +364,7 @@ namespace Conqueror::VkGL
     void UploadTexture(Texture& t, int level, int layer, int x, int y, int w, int h, GLenum format, GLenum type, const void* data);
     void ReadImage(Texture& t, int level, int layer, int x, int y, int w, int h, GLenum format, GLenum type, void* out, int packAlignment);
     void BufferRef(Buffer& b, VkBuffer& outBuffer, VkDeviceSize& outOffset);
+    bool EnsureStorageImage(Texture& t);    // 307: görüntüye depolama kullanımı (gerekirse yeniden oluşturup kopyalar)
 
     // ── GL ön yüzü kancaları (GLEmu/GLFrontEnd.inl) ──
     using GLEmu::Limits;
@@ -378,6 +394,19 @@ namespace Conqueror::VkGL
     void ClearCurrent(GLbitfield mask);
 
     bool LinkProgram(Program& p);
+    // Hesaplama gölgelendiricisi (307): geçerli program IsCompute ise dispatch (indirectBuffer 0: doğrudan x / y / z; değilse o arabellekte
+    // indirectOffset'teki üç uint), glMemoryBarrier
+    void DispatchComputeGL(uint32_t x, uint32_t y, uint32_t z, uint32_t indirectBuffer, int64_t indirectOffset);
+    void MemoryBarrierGL(GLbitfield barriers);
+    // 307: GPU'ya ait arabellek (hesaplama gölgelendiricisinin yazdığı) kopyası / geri okuması (false: ön yüz gölge kopyayı kullanır),
+    // glFenceSync gönderim sayacı, dolaylı çizim ve katmanın sağlamadığı GL işlevleri (GetProcAddress boş döner)
+    bool CopyBufferGL(Buffer& src, Buffer& dst, size_t srcOffset, size_t dstOffset, size_t size);
+    bool ReadBufferGL(Buffer& b, size_t offset, size_t size, void* out);
+    uint64_t SubmitSerialGL();
+    bool SerialCompletedGL(uint64_t serial);
+    void DrawIndirectGL(GLenum mode, bool indexed, GLenum indexType, uint32_t indirectBuffer, int64_t offset, GLsizei drawCount, GLsizei stride,
+                        uint32_t countBuffer, int64_t countOffset);
+    bool BackendSupportsGL(const char* name);
     void DestroyProgram(Program& p);
     UniformSlot* FindUniform(Program& p, GLint location);
 }

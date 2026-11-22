@@ -1168,6 +1168,31 @@ struct VO { @builtin(position) pos : vec4f, @location(0) uv : vec2f };
         }
     }
 
+    // Hesaplama gölgelendiricisi (307): bu katmanda henüz yok (GL_ARB_compute_shader bildirilmez, motor NIS / CMAA2 / FSR 2'yi kapatır)
+    void DispatchComputeGL(uint32_t, uint32_t, uint32_t, uint32_t, int64_t)
+    {
+        static bool s_Logged = false;
+        if (!s_Logged)
+        {
+            s_Logged = true;
+            CQ_CORE_WARN("[GLEmu] Compute shaders are not supported by this backend yet");
+        }
+    }
+
+    void MemoryBarrierGL(GLbitfield) {}
+
+    // 307: bu katmanda hesaplama yok: GPU'ya ait arabellek oluşmaz (kopya / geri okuma gölge kopyayla), çitler hemen işaretli (geri okumalar
+    // zaten bekler), dolaylı çizim işlevleri GetProcAddress'te yok (motor CPU yoluna düşer)
+    bool CopyBufferGL(Buffer&, Buffer&, size_t, size_t, size_t) { return false; }
+    bool ReadBufferGL(Buffer&, size_t, size_t, void*) { return false; }
+    uint64_t SubmitSerialGL() { return 0; }
+    bool SerialCompletedGL(uint64_t) { return true; }
+    void DrawIndirectGL(GLenum, bool, GLenum, uint32_t, int64_t, GLsizei, GLsizei, uint32_t, int64_t) {}
+    bool BackendSupportsGL(const char* name)
+    {
+        return std::strstr(name, "Indirect") == nullptr || std::strncmp(name, "glDispatchCompute", 17) == 0;
+    }
+
     void BeginFrameResources()
     {
         auto& c = Ctx();

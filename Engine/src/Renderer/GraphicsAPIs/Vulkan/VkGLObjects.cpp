@@ -94,6 +94,25 @@ namespace Conqueror::VkGL
             case GL_RGBA32I: integer = true; return VK_FORMAT_R32G32B32A32_SINT;
             case GL_R8I: integer = true; return VK_FORMAT_R8_SINT;
             case GL_R8UI: integer = true; return VK_FORMAT_R8_UINT;
+            // 307: FSR 2'nin biçimleri (R16_SNORM Lanczos / en büyük sapma tabloları, R16UI / RG16UI) ve diğer GL tamsayı / işaretli biçimleri
+            case GL_RG8UI: integer = true; return VK_FORMAT_R8G8_UINT;
+            case GL_RGBA8UI: integer = true; return VK_FORMAT_R8G8B8A8_UINT;
+            case GL_RG8I: integer = true; return VK_FORMAT_R8G8_SINT;
+            case GL_RGBA8I: integer = true; return VK_FORMAT_R8G8B8A8_SINT;
+            case GL_R16UI: integer = true; return VK_FORMAT_R16_UINT;
+            case GL_RG16UI: integer = true; return VK_FORMAT_R16G16_UINT;
+            case GL_RGBA16UI: integer = true; return VK_FORMAT_R16G16B16A16_UINT;
+            case GL_R16I: integer = true; return VK_FORMAT_R16_SINT;
+            case GL_RG16I: integer = true; return VK_FORMAT_R16G16_SINT;
+            case GL_RGBA16I: integer = true; return VK_FORMAT_R16G16B16A16_SINT;
+            case GL_RG32UI: integer = true; return VK_FORMAT_R32G32_UINT;
+            case GL_RGBA32UI: integer = true; return VK_FORMAT_R32G32B32A32_UINT;
+            case GL_R8_SNORM: return VK_FORMAT_R8_SNORM;
+            case GL_RG8_SNORM: return VK_FORMAT_R8G8_SNORM;
+            case GL_RGBA8_SNORM: return VK_FORMAT_R8G8B8A8_SNORM;
+            case GL_R16_SNORM: return VK_FORMAT_R16_SNORM;
+            case GL_RG16_SNORM: return VK_FORMAT_R16G16_SNORM;
+            case GL_RGBA16_SNORM: return VK_FORMAT_R16G16B16A16_SNORM;
             case GL_DEPTH_COMPONENT16: aspect = VK_IMAGE_ASPECT_DEPTH_BIT; return VK_FORMAT_D16_UNORM;
             case GL_DEPTH_COMPONENT: case GL_DEPTH_COMPONENT24: case GL_DEPTH_COMPONENT32: case GL_DEPTH_COMPONENT32F:
                 aspect = VK_IMAGE_ASPECT_DEPTH_BIT;
@@ -113,7 +132,7 @@ namespace Conqueror::VkGL
     namespace
     {
         // Hedef biçimin piksel düzeni
-        enum class Comp : uint8_t { UNorm8, SNorm8, UNorm16, Half, Float, SInt32, UInt32, SInt8, UInt8, B10G11R11, D32F, D16, D24S8, D32S8 };
+        enum class Comp : uint8_t { UNorm8, SNorm8, UNorm16, SNorm16, UInt16, SInt16, Half, Float, SInt32, UInt32, SInt8, UInt8, B10G11R11, D32F, D16, D24S8, D32S8 };
         struct VkLayout
         {
             int Channels = 4;
@@ -144,6 +163,24 @@ namespace Conqueror::VkGL
                 case VK_FORMAT_R32G32B32A32_SINT: return { 4, Comp::SInt32, 16 };
                 case VK_FORMAT_R8_SINT: return { 1, Comp::SInt8, 1 };
                 case VK_FORMAT_R8_UINT: return { 1, Comp::UInt8, 1 };
+                case VK_FORMAT_R8G8_UINT: return { 2, Comp::UInt8, 2 };
+                case VK_FORMAT_R8G8B8A8_UINT: return { 4, Comp::UInt8, 4 };
+                case VK_FORMAT_R8G8_SINT: return { 2, Comp::SInt8, 2 };
+                case VK_FORMAT_R8G8B8A8_SINT: return { 4, Comp::SInt8, 4 };
+                case VK_FORMAT_R16_UINT: return { 1, Comp::UInt16, 2 };
+                case VK_FORMAT_R16G16_UINT: return { 2, Comp::UInt16, 4 };
+                case VK_FORMAT_R16G16B16A16_UINT: return { 4, Comp::UInt16, 8 };
+                case VK_FORMAT_R16_SINT: return { 1, Comp::SInt16, 2 };
+                case VK_FORMAT_R16G16_SINT: return { 2, Comp::SInt16, 4 };
+                case VK_FORMAT_R16G16B16A16_SINT: return { 4, Comp::SInt16, 8 };
+                case VK_FORMAT_R32G32_UINT: return { 2, Comp::UInt32, 8 };
+                case VK_FORMAT_R32G32B32A32_UINT: return { 4, Comp::UInt32, 16 };
+                case VK_FORMAT_R8_SNORM: return { 1, Comp::SNorm8, 1 };
+                case VK_FORMAT_R8G8_SNORM: return { 2, Comp::SNorm8, 2 };
+                case VK_FORMAT_R8G8B8A8_SNORM: return { 4, Comp::SNorm8, 4 };
+                case VK_FORMAT_R16_SNORM: return { 1, Comp::SNorm16, 2 };
+                case VK_FORMAT_R16G16_SNORM: return { 2, Comp::SNorm16, 4 };
+                case VK_FORMAT_R16G16B16A16_SNORM: return { 4, Comp::SNorm16, 8 };
                 case VK_FORMAT_D32_SFLOAT: return { 1, Comp::D32F, 4 };
                 case VK_FORMAT_D16_UNORM: return { 1, Comp::D16, 2 };
                 case VK_FORMAT_D24_UNORM_S8_UINT: return { 1, Comp::D24S8, 4 };
@@ -216,8 +253,12 @@ namespace Conqueror::VkGL
                 case Comp::Float: case Comp::D32F: for (int i = 0; i < l.Channels; ++i) { float v; std::memcpy(&v, p + i * 4, 4); out[i] = v; } break;
                 case Comp::SInt32: for (int i = 0; i < l.Channels; ++i) { int32_t v; std::memcpy(&v, p + i * 4, 4); out[i] = v; } break;
                 case Comp::UInt32: for (int i = 0; i < l.Channels; ++i) { uint32_t v; std::memcpy(&v, p + i * 4, 4); out[i] = v; } break;
-                case Comp::SInt8: out[0] = (int8_t)p[0]; break;
-                case Comp::UInt8: out[0] = p[0]; break;
+                case Comp::SInt8: for (int i = 0; i < l.Channels; ++i) out[i] = (int8_t)p[i]; break;
+                case Comp::UInt8: for (int i = 0; i < l.Channels; ++i) out[i] = p[i]; break;
+                case Comp::SNorm8: for (int i = 0; i < l.Channels; ++i) out[i] = std::max(-1.0, (int8_t)p[i] / 127.0); break;
+                case Comp::SNorm16: for (int i = 0; i < l.Channels; ++i) { int16_t v; std::memcpy(&v, p + i * 2, 2); out[i] = std::max(-1.0, v / 32767.0); } break;
+                case Comp::UInt16: for (int i = 0; i < l.Channels; ++i) { uint16_t v; std::memcpy(&v, p + i * 2, 2); out[i] = v; } break;
+                case Comp::SInt16: for (int i = 0; i < l.Channels; ++i) { int16_t v; std::memcpy(&v, p + i * 2, 2); out[i] = v; } break;
                 case Comp::B10G11R11: { uint32_t v; std::memcpy(&v, p, 4); glm::vec3 c = glm::unpackF2x11_1x10(v); out[0] = c.r; out[1] = c.g; out[2] = c.b; break; }
                 case Comp::D16: { uint16_t v; std::memcpy(&v, p, 2); out[0] = v / 65535.0; break; }
                 case Comp::D24S8: { uint32_t v; std::memcpy(&v, p, 4); out[0] = (v & 0xFFFFFF) / 16777215.0; break; }
@@ -235,8 +276,12 @@ namespace Conqueror::VkGL
                 case Comp::Float: case Comp::D32F: for (int i = 0; i < l.Channels; ++i) { float v = (float)in[i]; std::memcpy(p + i * 4, &v, 4); } break;
                 case Comp::SInt32: for (int i = 0; i < l.Channels; ++i) { int32_t v = (int32_t)std::llround(in[i]); std::memcpy(p + i * 4, &v, 4); } break;
                 case Comp::UInt32: for (int i = 0; i < l.Channels; ++i) { uint32_t v = (uint32_t)std::max(0LL, std::llround(in[i])); std::memcpy(p + i * 4, &v, 4); } break;
-                case Comp::SInt8: p[0] = (uint8_t)(int8_t)std::llround(in[0]); break;
-                case Comp::UInt8: p[0] = (uint8_t)std::llround(in[0]); break;
+                case Comp::SInt8: for (int i = 0; i < l.Channels; ++i) p[i] = (uint8_t)(int8_t)std::clamp(std::llround(in[i]), -128LL, 127LL); break;
+                case Comp::UInt8: for (int i = 0; i < l.Channels; ++i) p[i] = (uint8_t)std::clamp(std::llround(in[i]), 0LL, 255LL); break;
+                case Comp::SNorm8: for (int i = 0; i < l.Channels; ++i) p[i] = (uint8_t)(int8_t)std::clamp(std::lround(in[i] * 127.0), -127L, 127L); break;
+                case Comp::SNorm16: for (int i = 0; i < l.Channels; ++i) { int16_t v = (int16_t)std::clamp(std::lround(in[i] * 32767.0), -32767L, 32767L); std::memcpy(p + i * 2, &v, 2); } break;
+                case Comp::UInt16: for (int i = 0; i < l.Channels; ++i) { uint16_t v = (uint16_t)std::clamp(std::llround(in[i]), 0LL, 65535LL); std::memcpy(p + i * 2, &v, 2); } break;
+                case Comp::SInt16: for (int i = 0; i < l.Channels; ++i) { int16_t v = (int16_t)std::clamp(std::llround(in[i]), -32768LL, 32767LL); std::memcpy(p + i * 2, &v, 2); } break;
                 case Comp::B10G11R11: { uint32_t v = glm::packF2x11_1x10(glm::vec3((float)in[0], (float)in[1], (float)in[2])); std::memcpy(p, &v, 4); break; }
                 case Comp::D16: { uint16_t v = (uint16_t)std::clamp(std::lround(in[0] * 65535.0), 0L, 65535L); std::memcpy(p, &v, 2); break; }
                 default: break;
@@ -283,6 +328,60 @@ namespace Conqueror::VkGL
         t.Image = VK_NULL_HANDLE;
         t.Memory = VK_NULL_HANDLE;
         t.DefinedLevels = 0;
+        t.StorageCapable = false;
+    }
+
+    // glBindImageTexture (307): görüntü depolama kullanımıyla (VK_IMAGE_USAGE_STORAGE_BIT) yeniden oluşturulur, içeriği kopyalanır. Her render
+    // hedefine baştan konmaz: AMD'de (GFX8 / 9) depolama kullanımı çerçeve sıkıştırmasını (DCC) kapatır, bütün hedefler yavaşlardı
+    bool EnsureStorageImage(Texture& t)
+    {
+        if (!t.Image)
+            return false;
+        if (t.StorageCapable)
+            return true;
+        if ((t.Aspect & VK_IMAGE_ASPECT_DEPTH_BIT) || t.Samples > 1 || !FormatSupports(t.Format, VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT))
+            return false;
+        auto& core = Core::Get();
+        VkImageCreateInfo ii{ VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
+        ii.imageType = VK_IMAGE_TYPE_2D;
+        ii.format = t.Format;
+        ii.extent = { t.Width, t.Height, 1 };
+        ii.mipLevels = t.Levels;
+        ii.arrayLayers = t.Layers;
+        ii.samples = VK_SAMPLE_COUNT_1_BIT;
+        ii.tiling = VK_IMAGE_TILING_OPTIMAL;
+        ii.flags = t.Target == GL_TEXTURE_CUBE_MAP ? VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT : 0;
+        ii.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_STORAGE_BIT;
+        if (FormatSupports(t.Format, VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT))
+            ii.usage |= VK_IMAGE_USAGE_SAMPLED_BIT;
+        if (FormatSupports(t.Format, VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT))
+            ii.usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+        ii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        VkImage image = VK_NULL_HANDLE;
+        VkDeviceMemory memory = VK_NULL_HANDLE;
+        if (!core.CreateImage(ii, image, memory))
+            return false;
+        VkCommandBuffer cmd = TransferCmd();
+        core.TransitionToGeneral(cmd, image, t.Aspect, t.Levels, t.Layers, VK_IMAGE_LAYOUT_UNDEFINED);
+        std::vector<VkImageCopy> regions;
+        for (uint32_t l = 0; l < t.Levels; ++l)
+        {
+            VkImageCopy r{};
+            r.srcSubresource = { t.Aspect, l, 0, t.Layers };
+            r.dstSubresource = r.srcSubresource;
+            r.extent = { std::max(1u, t.Width >> l), std::max(1u, t.Height >> l), 1 };
+            regions.push_back(r);
+        }
+        vkCmdCopyImage(cmd, t.Image, VK_IMAGE_LAYOUT_GENERAL, image, VK_IMAGE_LAYOUT_GENERAL, (uint32_t)regions.size(), regions.data());
+        core.FullBarrier(cmd);
+        // Eski görüntü ve görünümleri (tanımlı düzeyler ve örnekleyici parametreleri korunur)
+        const uint32_t defined = t.DefinedLevels;
+        DestroyTextureImage(t);
+        t.Image = image;
+        t.Memory = memory;
+        t.DefinedLevels = defined;
+        t.StorageCapable = true;
+        return true;
     }
 
     bool AllocateTexture(Texture& t, GLenum target, GLenum internalFormat, uint32_t w, uint32_t h, uint32_t levels, uint32_t samples)
@@ -482,7 +581,10 @@ namespace Conqueror::VkGL
                             ((dst.Type == Comp::UNorm8 && type == GL_UNSIGNED_BYTE) || (dst.Type == Comp::Float && type == GL_FLOAT) ||
                              (dst.Type == Comp::Half && type == GL_HALF_FLOAT) || (dst.Type == Comp::SInt32 && type == GL_INT) ||
                              (dst.Type == Comp::UInt32 && type == GL_UNSIGNED_INT) || (dst.Type == Comp::UNorm16 && type == GL_UNSIGNED_SHORT) ||
-                             (dst.Type == Comp::D32F && type == GL_FLOAT));
+                             (dst.Type == Comp::D32F && type == GL_FLOAT) || (dst.Type == Comp::SNorm16 && type == GL_SHORT) ||
+                             (dst.Type == Comp::UInt16 && type == GL_UNSIGNED_SHORT) || (dst.Type == Comp::SInt16 && type == GL_SHORT) ||
+                             (dst.Type == Comp::UInt8 && type == GL_UNSIGNED_BYTE) || (dst.Type == Comp::SInt8 && type == GL_BYTE) ||
+                             (dst.Type == Comp::SNorm8 && type == GL_BYTE));
         for (int row = 0; row < h; ++row)
         {
             const uint8_t* s = src + srcPitch * row;
@@ -686,6 +788,72 @@ namespace Conqueror::VkGL
         // Hiç yazılmamış kuyruk kopyalanmaz (büyük toplu arabellekler kısmen dolu kullanılır)
         const size_t copyBytes = std::min(b.Shadow.size(), b.HighWater);
         const bool ringStale = b.CurrentIsRing && b.RingFrame != core.FrameNumber();
+        // Hesaplama gölgelendiricisinin yazdığı arabellek (307): içerik GPU'daki adanmış sürümdedir, yeniden adlandırılmaz. GPU'ya ait olunca
+        // (ya da büyüyünce) kullanılmayan yeni bir adanmış arabellek gölgenin tamamıyla doldurulur; sonra yalnız CPU'nun yazdığı aralık
+        // halkadan komut sırasıyla kopyalanır (GPU'nun yazdığı kısım korunur; önceki gönderimler eski, sonrakiler yeni içeriği görür)
+        if (b.GpuOwned)
+        {
+            if (!b.GpuResident || !b.Dedicated || b.DedicatedSize < size)
+            {
+                if (b.Dedicated)
+                {
+                    VkDevice dev = core.Device();
+                    VkBuffer old = b.Dedicated;
+                    VkDeviceMemory mem = b.Memory;
+                    core.DeferDelete([dev, old, mem]() { vkDestroyBuffer(dev, old, nullptr); vkFreeMemory(dev, mem, nullptr); });
+                    b.Dedicated = VK_NULL_HANDLE;
+                }
+                void* mapped = nullptr;
+                core.CreateBuffer(size,
+                                  VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT |
+                                      VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                      VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
+                                  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, b.Dedicated, b.Memory, &mapped);
+                b.Mapped = (uint8_t*)mapped;
+                b.DedicatedSize = size;
+                if (b.Mapped)
+                {
+                    std::memset(b.Mapped, 0, (size_t)size);
+                    if (copyBytes)
+                        std::memcpy(b.Mapped, b.Shadow.data(), copyBytes);
+                }
+                b.GpuResident = true;
+            }
+            else if (b.Dirty && b.DirtyBegin < b.DirtyEnd && b.DirtyBegin < b.Shadow.size())
+            {
+                const size_t from = b.DirtyBegin, to = std::min(b.DirtyEnd, b.Shadow.size());
+                if (Ctx().Rendering && b.Mapped)
+                {
+                    // Render geçişinde kopya kaydedilemez (Draw bunu geçişten önce yapar; buraya yalnız beklenmedik yoldan gelinir)
+                    static bool s_Warned = false;
+                    if (!s_Warned)
+                    {
+                        s_Warned = true;
+                        CQ_CORE_WARN("[VkGL] GPU-owned buffer updated inside a render pass");
+                    }
+                    std::memcpy(b.Mapped + from, b.Shadow.data() + from, to - from);
+                }
+                else
+                {
+                    VK::RingAlloc a = core.AllocRing(to - from, 256);
+                    std::memcpy(a.Ptr, b.Shadow.data() + from, to - from);
+                    VkCommandBuffer cmd = TransferCmd();
+                    VkBufferCopy region{ a.Offset, (VkDeviceSize)from, (VkDeviceSize)(to - from) };
+                    vkCmdCopyBuffer(cmd, a.Buffer, b.Dedicated, 1, &region);
+                    core.FullBarrier(cmd);
+                }
+            }
+            b.Dirty = false;
+            b.DirtyBegin = SIZE_MAX;
+            b.DirtyEnd = 0;
+            b.Current = b.Dedicated;
+            b.CurrentOffset = 0;
+            b.CurrentIsRing = false;
+            b.DedicatedLastUse = core.FrameSerial();
+            outBuffer = b.Current;
+            outOffset = 0;
+            return;
+        }
         if (b.Dirty || ringStale || !b.Current)
         {
             // Adanmış sürüm GPU'da kullanılmıyorsa yerinde güncelle; değilse bu karenin halkasına yeniden adlandır
@@ -703,7 +871,8 @@ namespace Conqueror::VkGL
                 void* mapped = nullptr;
                 core.CreateBuffer(size,
                                   VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT |
-                                      VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                      VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                      VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
                                   VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, b.Dedicated, b.Memory, &mapped);
                 b.Mapped = (uint8_t*)mapped;
                 b.DedicatedSize = size;
@@ -737,6 +906,8 @@ namespace Conqueror::VkGL
                 b.RingFrame = core.FrameNumber();
             }
             b.Dirty = false;
+            b.DirtyBegin = SIZE_MAX;
+            b.DirtyEnd = 0;
         }
         if (!b.CurrentIsRing)
             b.DedicatedLastUse = core.FrameSerial();

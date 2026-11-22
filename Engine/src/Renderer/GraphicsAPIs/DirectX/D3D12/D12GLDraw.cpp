@@ -504,18 +504,77 @@ float4 PSPresent(VSOut i) : SV_Target { return float4(g_Src.SampleLevel(g_Smp, i
             list->ClearDepthStencilView(c.BoundDSV, flags, std::clamp(c.S.ClearDepth, 0.0f, 1.0f), (UINT8)c.S.ClearStencil, scissor ? 1 : 0, scissor ? &rect : nullptr);
     }
 
-    void Draw(GLenum mode, GLint first, GLsizei count, GLsizei instances, bool indexed, GLenum indexType, const void* indices, GLint baseVertex)
+    namespace
+    {
+        // glDraw*Indirect (307): komutlar GL_DRAW_INDIRECT_BUFFER'da; Count sürümünde sayı CountBuffer'da (ExecuteIndirect)
+        struct IndirectArgs
+        {
+            uint32_t Buffer = 0;
+            int64_t Offset = 0;
+            GLsizei DrawCount = 1;
+            GLsizei Stride = 0;
+            uint32_t CountBuffer = 0;
+            int64_t CountOffset = 0;
+        };
+
+        // ExecuteIndirect komut imzası (tür + adım başına bir kez)
+        ID3D12CommandSignature* CommandSignature(D3D12_INDIRECT_ARGUMENT_TYPE type, uint32_t stride)
+        {
+            auto& c = Ctx();
+            ID3D12CommandSignature*& sig = c.CommandSignatures[(uint64_t)type | ((uint64_t)stride << 8)];
+            if (!sig)
+            {
+                D3D12_INDIRECT_ARGUMENT_DESC arg{};
+                arg.Type = type;
+                D3D12_COMMAND_SIGNATURE_DESC d{};
+                d.ByteStride = stride;
+                d.NumArgumentDescs = 1;
+                d.pArgumentDescs = &arg;
+                if (FAILED(Core::Get().Device()->CreateCommandSignature(&d, nullptr, __uuidof(ID3D12CommandSignature), (void**)&sig)))
+                    sig = nullptr;
+            }
+            return sig;
+        }
+
+        void GlobalUAVBarrier()
+        {
+            D3D12_RESOURCE_BARRIER bar{};
+            bar.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+            bar.UAV.pResource = nullptr;
+            Core::Get().List()->ResourceBarrier(1, &bar);
+        }
+    }
+
+    static void DrawImpl(GLenum mode, GLint first, GLsizei count, GLsizei instances, bool indexed, GLenum indexType, const void* indices, GLint baseVertex,
+                         const IndirectArgs* ind)
     {
         auto& c = Ctx();
         auto& core = Core::Get();
-        if (count <= 0 || instances <= 0)
+        if (!ind && (count <= 0 || instances <= 0))
             return;
         Program* p = GetProgram(c.S.Program);
-        if (!p || !p->Linked)
+        if (!p || !p->Linked || p->IsCompute)
             return;
         // GL_FRONT_AND_BACK ayıklama: hiçbir üçgen çizilmez
         if (c.S.CullFace && c.S.CullMode == GL_FRONT_AND_BACK && ToTopologyType(mode) == D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE)
             return;
+        // Depolama kaynakları (307): yazılabilir görüntüler UAV'li dokuya yükseltilir, depolama ve dolaylı arabellekler GPU'daki arabellekte
+        const int imageUnits = (int)c.S.Compute.Images.size();
+        for (const auto& ib : p->Images)
+            if (!ib.SRV)
+                if (Texture* t = GetTexture(c.S.Compute.Images[(size_t)std::clamp(ib.Unit, 0, imageUnits - 1)].Texture))
+                    EnsureStorageImage(*t);
+        for (const auto& sb : p->StorageBlocks)
+            if (sb.GLBinding < c.S.Compute.Storage.size())
+                if (Buffer* b = GetBuffer(c.S.Compute.Storage[sb.GLBinding]))
+                    b->GpuOwned = true;
+        if (ind)
+        {
+            if (Buffer* b = GetBuffer(ind->Buffer))
+                b->GpuOwned = true;
+            if (Buffer* b = ind->CountBuffer ? GetBuffer(ind->CountBuffer) : nullptr)
+                b->GpuOwned = true;
+        }
         if (!EnsureRendering())
             return;
         VertexArray* vao = CurrentVAO();
@@ -570,8 +629,8 @@ float4 PSPresent(VSOut i) : SV_Target { return float4(g_Src.SampleLevel(g_Smp, i
         if (indexed)
         {
             Buffer* eb = GetBuffer(vao->ElementBuffer);
-            if (!eb)
-                return;
+            if (!eb || (ind && indexType == GL_UNSIGNED_BYTE))
+                return;   // 8 bit indeks dolaylı çizimde genişletilemez (komutlar GPU'da)
             if (indexType == GL_UNSIGNED_BYTE)
             {
                 // 8 bit indeks D3D12'de yok: 16 bit'e genişletilmiş halka kopyası
@@ -682,6 +741,64 @@ float4 PSPresent(VSOut i) : SV_Target { return float4(g_Src.SampleLevel(g_Smp, i
                 smpCount = std::max(smpCount, s.SamplerRegister + 1);
             }
         }
+        // Depolama kaynakları: salt okunur görüntü / blok SRV (t#), yazılabilir UAV (u#)
+        D3D12_CPU_DESCRIPTOR_HANDLE srvOverride[DX12::kMaxSRVs] = {};
+        D3D12_CPU_DESCRIPTOR_HANDLE uavs[DX12::kMaxUAVs];
+        for (auto& u : uavs)
+            u = c.NullUAV.Handle;
+        bool anyUAV = false;
+        for (const auto& ib : p->Images)
+        {
+            const GLEmu::ImageUnit& u = c.S.Compute.Images[(size_t)std::clamp(ib.Unit, 0, imageUnits - 1)];
+            Texture* tex = GetTexture(u.Texture);
+            if (!tex || !tex->Image)
+                return;
+            const int level = std::clamp(u.Level, 0, (int)tex->Levels - 1);
+            const int layer = u.Layered ? 0 : u.Layer;
+            if (ib.SRV)
+            {
+                if (ib.Binding < DX12::kMaxSRVs)
+                {
+                    Transition(*tex, kShaderRead);
+                    srvOverride[ib.Binding] = GetLevelSRV(*tex, level, layer);
+                    srvCount = std::max(srvCount, ib.Binding + 1);
+                }
+            }
+            else if (ib.Binding < DX12::kMaxUAVs && tex->StorageCapable)
+            {
+                Transition(*tex, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+                uavs[ib.Binding] = GetUAV(*tex, level, layer);
+                tex->DefinedLevels |= 1u << level;
+                anyUAV = true;
+            }
+            else
+                return;
+        }
+        for (const auto& sb : p->StorageBlocks)
+        {
+            const uint32_t glb = sb.GLBinding < c.S.Compute.Storage.size() ? sb.GLBinding : 0;
+            Buffer* b = GetBuffer(c.S.Compute.Storage[glb]);
+            if (!b || b->Shadow.empty())
+                return;
+            const size_t off = (size_t)std::max<int64_t>(c.S.Compute.StorageOffsets[glb], 0);
+            const size_t avail = b->Shadow.size() > off ? b->Shadow.size() - off : 0;
+            const size_t range = c.S.Compute.StorageSizes[glb] > 0 ? std::min<size_t>((size_t)c.S.Compute.StorageSizes[glb], avail) : avail;
+            if (sb.SRV)
+            {
+                if (sb.Binding < DX12::kMaxSRVs)
+                {
+                    srvOverride[sb.Binding] = StorageSRV(*b, off, range);
+                    TransitionStorage(*b, D3D12_RESOURCE_STATE_GENERIC_READ);
+                    srvCount = std::max(srvCount, sb.Binding + 1);
+                }
+            }
+            else if (sb.Binding < DX12::kMaxUAVs)
+            {
+                uavs[sb.Binding] = StorageUAV(*b, off, range);
+                TransitionStorage(*b, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+                anyUAV = true;
+            }
+        }
         // Örnekleyici tablosu önce (dolarsa GPU beklenir ve tanımlayıcı bölümü baştan başlar)
         D3D12_GPU_DESCRIPTOR_HANDLE smpTable{};
         if (smpCount)
@@ -697,7 +814,9 @@ float4 PSPresent(VSOut i) : SV_Target { return float4(g_Src.SampleLevel(g_Smp, i
             D3D12_CPU_DESCRIPTOR_HANDLE srvs[DX12::kMaxSRVs];
             for (uint32_t i = 0; i < srvCount; ++i)
             {
-                if (srvTex[i])
+                if (srvOverride[i].ptr)
+                    srvs[i] = srvOverride[i];   // depolama SRV'si (görüntü düzeyi / ham arabellek)
+                else if (srvTex[i])
                 {
                     Transition(*srvTex[i], kShaderRead);
                     srvs[i] = GetSRV(*srvTex[i]);
@@ -717,6 +836,9 @@ float4 PSPresent(VSOut i) : SV_Target { return float4(g_Src.SampleLevel(g_Smp, i
                 s_Bound.LastSRVTable = srvTable;
             }
         }
+        D3D12_GPU_DESCRIPTOR_HANDLE uavTable{};
+        if (anyUAV)
+            uavTable = core.CopyResourceTable(uavs, DX12::kMaxUAVs);
         // Tablo ayırma GPU'yu bekletmiş olabilir (yeni komut listesi): hedefler yeniden bağlanır
         if (c.RenderingEpoch != core.ListEpoch() && !EnsureRendering())
             return;
@@ -872,6 +994,8 @@ float4 PSPresent(VSOut i) : SV_Target { return float4(g_Src.SampleLevel(g_Smp, i
             list->SetGraphicsRootDescriptorTable(DX12::kRootSamplerTable, smpTable);
             s_Bound.SamplerTable = smpTable.ptr;
         }
+        if (anyUAV)
+            list->SetGraphicsRootDescriptorTable(DX12::kRootUAVTable, uavTable);
         if (n)
             list->IASetVertexBuffers(0, n, views);
         const UINT ref = (UINT)(c.S.StencilRef & 0xFF);
@@ -893,6 +1017,26 @@ float4 PSPresent(VSOut i) : SV_Target { return float4(g_Src.SampleLevel(g_Smp, i
         }
         list->RSSetScissorRects(1, &r);
 
+        if (ind)
+        {
+            Buffer* cmdBuf = GetBuffer(ind->Buffer);
+            if (!cmdBuf || !StorageBuffer(*cmdBuf))
+                return;
+            TransitionStorage(*cmdBuf, D3D12_RESOURCE_STATE_GENERIC_READ);
+            Buffer* countBuf = ind->CountBuffer ? GetBuffer(ind->CountBuffer) : nullptr;
+            if (ind->CountBuffer && (!countBuf || !StorageBuffer(*countBuf)))
+                return;
+            if (countBuf)
+                TransitionStorage(*countBuf, D3D12_RESOURCE_STATE_GENERIC_READ);
+            if (indexed)
+                list->IASetIndexBuffer(&ibv);
+            ID3D12CommandSignature* sig =
+                CommandSignature(indexed ? D3D12_INDIRECT_ARGUMENT_TYPE_DRAW_INDEXED : D3D12_INDIRECT_ARGUMENT_TYPE_DRAW, (uint32_t)ind->Stride);
+            if (sig)
+                list->ExecuteIndirect(sig, (UINT)ind->DrawCount, cmdBuf->Storage, (UINT64)std::max<int64_t>(ind->Offset, 0), countBuf ? countBuf->Storage : nullptr,
+                                      (UINT64)std::max<int64_t>(ind->CountOffset, 0));
+            return;
+        }
         if (indexed)
         {
             list->IASetIndexBuffer(&ibv);
@@ -900,6 +1044,11 @@ float4 PSPresent(VSOut i) : SV_Target { return float4(g_Src.SampleLevel(g_Smp, i
         }
         else
             list->DrawInstanced((UINT)count, (UINT)instances, (UINT)first, 0);
+    }
+
+    void Draw(GLenum mode, GLint first, GLsizei count, GLsizei instances, bool indexed, GLenum indexType, const void* indices, GLint baseVertex)
+    {
+        DrawImpl(mode, first, count, instances, indexed, indexType, indices, baseVertex, nullptr);
     }
 
     void GenerateMipmaps(Texture& t)
@@ -1057,6 +1206,311 @@ float4 PSPresent(VSOut i) : SV_Target { return float4(g_Src.SampleLevel(g_Smp, i
             }
         }
         EndRendering();
+    }
+
+    // ── Hesaplama gölgelendiricisi (307): NIS, CMAA2, FSR 2, ışın izleme, GPU parçacıkları ──
+    // Aynı kök imzası hesaplamaya da bağlıdır: kök CBV'ler, SRV / örnekleyici / UAV tabloları. Dispatch'ten sonra genel UAV bariyeri (sonraki
+    // dispatch / çizim yazılanı görsün); grafik PSO'su ve hedef bağlaması yeniden kurulur
+    void DispatchComputeGL(uint32_t x, uint32_t y, uint32_t z, uint32_t indirectBuffer, int64_t indirectOffset)
+    {
+        auto& c = Ctx();
+        auto& core = Core::Get();
+        Program* p = GetProgram(c.S.Program);
+        if (!p || !p->Linked || !p->IsCompute || !p->ComputePSO)
+            return;
+        const uint64_t frame = core.FrameSerial();
+        // Hedefler çözülür: hedef dokusu UAV / SRV durumuna geçebilir, sonraki çizim yeniden RENDER_TARGET'a geçirir
+        EndRendering();
+
+        D3D12_GPU_VIRTUAL_ADDRESS cbvs[DX12::kRootCBVs];
+        const D3D12_GPU_VIRTUAL_ADDRESS zero = c.ZeroConstants->GetGPUVirtualAddress();
+        for (auto& a : cbvs)
+            a = zero;
+        for (const auto& blk : p->Blocks)
+        {
+            if (blk.Register >= DX12::kRootCBVs)
+                continue;
+            const uint32_t glb = blk.GLBinding < 64 ? blk.GLBinding : 0;
+            Buffer* ub = GetBuffer(c.S.UBOBindings[glb]);
+            const D3D12_GPU_VIRTUAL_ADDRESS addr = ub ? BufferAddress(*ub, blk.Size) : 0;
+            cbvs[blk.Register] = addr ? addr : zero;
+        }
+        if (p->GlobalsRegister >= 0 && p->GlobalsRegister < (int)DX12::kRootCBVs)
+        {
+            if (p->GlobalsDirty || p->GlobalsFrame != frame || !p->GlobalsAddress)
+            {
+                DX12::UploadAlloc a = core.AllocUpload(std::max<uint64_t>(p->Globals.size(), 256), 256);
+                if (a.Cpu)
+                {
+                    std::memcpy(a.Cpu, p->Globals.data(), p->Globals.size());
+                    p->GlobalsAddress = a.Gpu;
+                    p->GlobalsFrame = frame;
+                    p->GlobalsDirty = false;
+                }
+            }
+            if (p->GlobalsAddress)
+                cbvs[p->GlobalsRegister] = p->GlobalsAddress;
+        }
+
+        D3D12_CPU_DESCRIPTOR_HANDLE srvs[DX12::kMaxSRVs];
+        for (auto& h : srvs)
+            h = c.NullSRV.Handle;
+        D3D12_CPU_DESCRIPTOR_HANDLE samplers[DX12::kMaxSamplers];
+        for (auto& h : samplers)
+            h = c.NullSampler.Handle;
+        D3D12_CPU_DESCRIPTOR_HANDLE uavs[DX12::kMaxUAVs];
+        for (auto& h : uavs)
+            h = c.NullUAV.Handle;
+        uint32_t srvCount = 0, smpCount = 0;
+        for (const auto& s : p->Samplers)
+        {
+            const Texture* shared = nullptr;
+            for (uint32_t e = 0; e < s.Count; ++e)
+            {
+                const int unit = std::clamp(e < s.Units.size() ? s.Units[e] : 0, 0, 63);
+                const uint32_t texName = s.Target == GL_TEXTURE_CUBE_MAP ? c.S.TexCube[(size_t)unit] :
+                                         s.Target == GL_TEXTURE_2D_MULTISAMPLE ? c.S.Tex2DMS[(size_t)unit] : c.S.Tex2D[(size_t)unit];
+                Texture* tex = GetTexture(texName);
+                if (!tex || !tex->Image || (s.Target == GL_TEXTURE_CUBE_MAP) != (tex->Layers == 6) || tex->Integer != s.Integer)
+                    tex = s.Target == GL_TEXTURE_CUBE_MAP ? c.NullTextureCube : s.Integer ? c.NullTextureInt : c.NullTexture2D;
+                const Texture* params = tex;
+                if (auto so = c.SamplerObjects.find(c.S.Samplers[(size_t)unit]); so != c.SamplerObjects.end() && c.S.Samplers[(size_t)unit])
+                    params = so->second.get();
+                const uint32_t slot = s.Register + e;
+                if (slot < DX12::kMaxSRVs)
+                {
+                    Transition(*tex, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                    srvs[slot] = GetSRV(*tex);
+                    srvCount = std::max(srvCount, slot + 1);
+                }
+                if (s.SharedSampler)
+                {
+                    if (!shared && tex != c.NullTexture2D)
+                        shared = params;
+                }
+                else if (slot < DX12::kMaxSamplers)
+                {
+                    samplers[slot] = GetSampler(*params, tex->Integer, s.Shadow);
+                    smpCount = std::max(smpCount, slot + 1);
+                }
+            }
+            if (s.SharedSampler && s.SamplerRegister < DX12::kMaxSamplers)
+            {
+                samplers[s.SamplerRegister] = GetSampler(shared ? *shared : *c.NullTexture2D, s.Integer, s.Shadow);
+                smpCount = std::max(smpCount, s.SamplerRegister + 1);
+            }
+        }
+        const int imageUnits = (int)c.S.Compute.Images.size();
+        std::vector<std::pair<Texture*, int>> written;
+        bool anyUAV = false;
+        for (const auto& ib : p->Images)
+        {
+            const GLEmu::ImageUnit& u = c.S.Compute.Images[(size_t)std::clamp(ib.Unit, 0, imageUnits - 1)];
+            Texture* tex = GetTexture(u.Texture);
+            if (!tex || !tex->Image)
+            {
+                CQ_CORE_WARN("[D12GL] Compute dispatch skipped: image '{0}' has no texture bound", ib.Name);
+                return;
+            }
+            const int level = std::clamp(u.Level, 0, (int)tex->Levels - 1);
+            const int layer = u.Layered ? 0 : u.Layer;
+            if (ib.SRV)
+            {
+                if (ib.Binding < DX12::kMaxSRVs)
+                {
+                    Transition(*tex, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                    srvs[ib.Binding] = GetLevelSRV(*tex, level, layer);
+                    srvCount = std::max(srvCount, ib.Binding + 1);
+                }
+                continue;
+            }
+            if (!EnsureStorageImage(*tex) || ib.Binding >= DX12::kMaxUAVs)
+            {
+                CQ_CORE_WARN("[D12GL] Compute dispatch skipped: texture of format {0} cannot be bound as storage image '{1}'", (int)tex->RTVFormat, ib.Name);
+                return;
+            }
+            Transition(*tex, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            uavs[ib.Binding] = GetUAV(*tex, level, layer);
+            written.push_back({ tex, level });
+            anyUAV = true;
+        }
+        for (const auto& sb : p->StorageBlocks)
+        {
+            const uint32_t glb = sb.GLBinding < c.S.Compute.Storage.size() ? sb.GLBinding : 0;
+            Buffer* b = GetBuffer(c.S.Compute.Storage[glb]);
+            if (!b || b->Shadow.empty())
+            {
+                CQ_CORE_WARN("[D12GL] Compute dispatch skipped: storage block '{0}' (binding {1}) has no buffer", sb.Name, sb.GLBinding);
+                return;
+            }
+            b->GpuOwned = true;
+            const size_t off = (size_t)std::max<int64_t>(c.S.Compute.StorageOffsets[glb], 0);
+            const size_t avail = b->Shadow.size() > off ? b->Shadow.size() - off : 0;
+            const size_t range = c.S.Compute.StorageSizes[glb] > 0 ? std::min<size_t>((size_t)c.S.Compute.StorageSizes[glb], avail) : avail;
+            if (sb.SRV)
+            {
+                if (sb.Binding < DX12::kMaxSRVs)
+                {
+                    srvs[sb.Binding] = StorageSRV(*b, off, range);
+                    TransitionStorage(*b, D3D12_RESOURCE_STATE_GENERIC_READ);
+                    srvCount = std::max(srvCount, sb.Binding + 1);
+                }
+            }
+            else if (sb.Binding < DX12::kMaxUAVs)
+            {
+                uavs[sb.Binding] = StorageUAV(*b, off, range);
+                TransitionStorage(*b, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+                anyUAV = true;
+            }
+        }
+        Buffer* args = indirectBuffer ? GetBuffer(indirectBuffer) : nullptr;
+        if (indirectBuffer)
+        {
+            if (!args)
+                return;
+            args->GpuOwned = true;
+            if (!StorageBuffer(*args))
+                return;
+            TransitionStorage(*args, D3D12_RESOURCE_STATE_GENERIC_READ);
+        }
+        // Tablolar (örnekleyici önce: dolarsa GPU beklenir ve tanımlayıcı bölümü baştan başlar)
+        D3D12_GPU_DESCRIPTOR_HANDLE smpTable{}, srvTable{}, uavTable{};
+        if (smpCount)
+        {
+            Hasher k;
+            for (uint32_t i = 0; i < smpCount; ++i)
+                k.Add(samplers[i].ptr);
+            smpTable = core.SamplerTable(samplers, smpCount, k.H);
+        }
+        if (srvCount)
+            srvTable = core.CopyResourceTable(srvs, srvCount);
+        if (anyUAV)
+            uavTable = core.CopyResourceTable(uavs, DX12::kMaxUAVs);
+        auto* list = core.List();
+        list->SetPipelineState(p->ComputePSO);
+        SyncBound();
+        s_Bound.Pipeline = nullptr;   // grafik PSO'su sonraki çizimde yeniden bağlanır
+        for (uint32_t i = 0; i < DX12::kRootCBVs; ++i)
+            list->SetComputeRootConstantBufferView(i, cbvs[i]);
+        if (srvCount)
+            list->SetComputeRootDescriptorTable(DX12::kRootSRVTable, srvTable);
+        if (smpCount)
+            list->SetComputeRootDescriptorTable(DX12::kRootSamplerTable, smpTable);
+        if (anyUAV)
+            list->SetComputeRootDescriptorTable(DX12::kRootUAVTable, uavTable);
+        if (args)
+        {
+            if (ID3D12CommandSignature* sig = CommandSignature(D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH, 12))
+                list->ExecuteIndirect(sig, 1, args->Storage, (UINT64)std::max<int64_t>(indirectOffset, 0), nullptr, 0);
+        }
+        else
+            list->Dispatch(x, y, z);
+        GlobalUAVBarrier();
+        for (auto& [tex, level] : written)
+            tex->DefinedLevels |= 1u << level;
+    }
+
+    void MemoryBarrierGL(GLbitfield) { GlobalUAVBarrier(); }
+
+    void DrawIndirectGL(GLenum mode, bool indexed, GLenum indexType, uint32_t indirectBuffer, int64_t offset, GLsizei drawCount, GLsizei stride,
+                        uint32_t countBuffer, int64_t countOffset)
+    {
+        IndirectArgs a;
+        a.Buffer = indirectBuffer;
+        a.Offset = offset;
+        a.DrawCount = drawCount;
+        a.Stride = stride;
+        a.CountBuffer = countBuffer;
+        a.CountOffset = countOffset;
+        DrawImpl(mode, 0, 1, 1, indexed, indexType, nullptr, 0, &a);
+    }
+
+    bool BackendSupportsGL(const char*) { return true; }   // dolaylı çizim sayısı ExecuteIndirect'in sayı arabelleğiyle
+
+    uint64_t SubmitSerialGL() { return Core::Get().SubmitSerial(); }
+
+    bool SerialCompletedGL(uint64_t serial) { return Core::Get().CompletedSerial() >= serial; }
+
+    // GPU'ya ait arabellek: geri okuma yığınına kopyalanır, komutlar gönderilip beklenir
+    bool ReadBufferGL(Buffer& b, size_t offset, size_t size, void* out)
+    {
+        if (!b.GpuOwned)
+            return false;
+        auto& core = Core::Get();
+        if (!StorageBuffer(b) || offset + size > b.StorageSize)
+            return false;
+        D3D12_HEAP_PROPERTIES hp{};
+        hp.Type = D3D12_HEAP_TYPE_READBACK;
+        hp.CreationNodeMask = hp.VisibleNodeMask = 1;
+        D3D12_RESOURCE_DESC rd{};
+        rd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        rd.Width = (size + 255) & ~(size_t)255;
+        rd.Height = 1;
+        rd.DepthOrArraySize = 1;
+        rd.MipLevels = 1;
+        rd.SampleDesc.Count = 1;
+        rd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        ID3D12Resource* rb = nullptr;
+        if (FAILED(core.Device()->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, __uuidof(ID3D12Resource),
+                                                         (void**)&rb)) || !rb)
+            return false;
+        TransitionStorage(b, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        core.List()->CopyBufferRegion(rb, 0, b.Storage, offset, size);
+        EndRendering();
+        core.Flush();
+        void* mapped = nullptr;
+        D3D12_RANGE range{ 0, size };
+        bool ok = false;
+        if (SUCCEEDED(rb->Map(0, &range, &mapped)) && mapped)
+        {
+            std::memcpy(out, mapped, size);
+            D3D12_RANGE none{ 0, 0 };
+            rb->Unmap(0, &none);
+            ok = true;
+        }
+        rb->Release();   // GPU boşta (Flush)
+        return ok;
+    }
+
+    bool CopyBufferGL(Buffer& src, Buffer& dst, size_t srcOffset, size_t dstOffset, size_t size)
+    {
+        if (!src.GpuOwned && !dst.GpuOwned)
+            return false;
+        auto& core = Core::Get();
+        src.GpuOwned = dst.GpuOwned = true;
+        if (!StorageBuffer(src) || !StorageBuffer(dst))
+            return false;
+        auto* list = core.List();
+        if (&src != &dst)
+        {
+            TransitionStorage(src, D3D12_RESOURCE_STATE_COPY_SOURCE);
+            TransitionStorage(dst, D3D12_RESOURCE_STATE_COPY_DEST);
+            list->CopyBufferRegion(dst.Storage, dstOffset, src.Storage, srcOffset, size);
+            return true;
+        }
+        // Aynı arabellek içinde: ara arabellek (bir kaynak aynı anda kopya kaynağı ve hedefi olamaz)
+        D3D12_HEAP_PROPERTIES hp{};
+        hp.Type = D3D12_HEAP_TYPE_DEFAULT;
+        hp.CreationNodeMask = hp.VisibleNodeMask = 1;
+        D3D12_RESOURCE_DESC rd{};
+        rd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        rd.Width = (size + 255) & ~(size_t)255;
+        rd.Height = 1;
+        rd.DepthOrArraySize = 1;
+        rd.MipLevels = 1;
+        rd.SampleDesc.Count = 1;
+        rd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        ID3D12Resource* tmp = nullptr;
+        if (FAILED(core.Device()->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, __uuidof(ID3D12Resource),
+                                                         (void**)&tmp)) || !tmp)
+            return false;
+        TransitionStorage(src, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        list->CopyBufferRegion(tmp, 0, src.Storage, srcOffset, size);
+        core.Barrier(tmp, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        TransitionStorage(dst, D3D12_RESOURCE_STATE_COPY_DEST);
+        list->CopyBufferRegion(dst.Storage, dstOffset, tmp, 0, size);
+        DeferRelease(tmp);
+        return true;
     }
 
     void BeginFrameResources()

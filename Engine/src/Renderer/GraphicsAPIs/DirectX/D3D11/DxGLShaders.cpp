@@ -14,6 +14,7 @@ namespace Conqueror::DxGL
     {
         SafeRelease(p.VS);
         SafeRelease(p.PS);
+        SafeRelease(p.CS);
         SafeRelease(p.GlobalsBuffer);
         for (auto& [k, l] : p.InputLayouts)
             if (l) l->Release();
@@ -37,6 +38,7 @@ namespace Conqueror::DxGL
         limits.ConstantBuffers = D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT;
         limits.Resources = D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT;
         limits.Samplers = D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT;
+        limits.UnorderedAccess = D3D11_PS_CS_UAV_REGISTER_COUNT;
         limits.ApiName = "Direct3D 11";
         DXCommon::TranslatedProgram tp;
         if (!DXCommon::TranslateProgram(shaders, c.NextProgramId, limits, tp, p.Log))
@@ -53,9 +55,19 @@ namespace Conqueror::DxGL
         p.GlobalsSize = tp.GlobalsSize;
         p.Globals = std::move(tp.Globals);
         p.GlobalsDirty = true;
+        p.IsCompute = tp.Compute;
+        for (int k = 0; k < 3; ++k)
+            p.LocalSize[k] = tp.LocalSize[k];
+        p.Images = std::move(tp.Images);
+        p.StorageBlocks = std::move(tp.StorageBlocks);
 
-        core.Device()->CreateVertexShader(tp.VS.data(), tp.VS.size(), nullptr, &p.VS);
-        core.Device()->CreatePixelShader(tp.PS.data(), tp.PS.size(), nullptr, &p.PS);
+        if (p.IsCompute)
+            core.Device()->CreateComputeShader(tp.CS.data(), tp.CS.size(), nullptr, &p.CS);
+        else
+        {
+            core.Device()->CreateVertexShader(tp.VS.data(), tp.VS.size(), nullptr, &p.VS);
+            core.Device()->CreatePixelShader(tp.PS.data(), tp.PS.size(), nullptr, &p.PS);
+        }
         p.VSBytecode = std::move(tp.VS);
         if (p.GlobalsRegister >= 0)
         {
@@ -67,7 +79,7 @@ namespace Conqueror::DxGL
             core.Device()->CreateBuffer(&bd, nullptr, &p.GlobalsBuffer);
         }
         p.Id = c.NextProgramId++;
-        p.Linked = p.VS && p.PS && (p.GlobalsRegister < 0 || p.GlobalsBuffer);
+        p.Linked = (p.IsCompute ? p.CS != nullptr : (p.VS && p.PS)) && (p.GlobalsRegister < 0 || p.GlobalsBuffer);
         if (!p.Linked)
             p.Log = "Direct3D 11 shader object creation failed";
         return p.Linked;

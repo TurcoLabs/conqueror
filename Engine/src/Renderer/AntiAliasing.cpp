@@ -197,8 +197,8 @@ namespace Conqueror::AntiAliasing
                 return { false, Intern(reason) };
             return {};
         }
-        constexpr const char* kComputeReason = "Uses compute shaders (OpenGL 4.3 / OpenGL ES 3.1 on the OpenGL backend); not available on this system "
-                                               "(macOS OpenGL 4.1, WebGL 2, the Vulkan / Direct3D / Metal / WebGPU translation layers).";
+        constexpr const char* kComputeReason = "Uses compute shaders (OpenGL 4.3 / OpenGL ES 3.1); not available on this system (macOS OpenGL 4.1, "
+                                               "WebGL 2, WebGPU).";
         constexpr const char* kPSSRReason = "Runs only on PlayStation 5 Pro (Sony's NDA SDK).";
         constexpr const char* kTSRReason = "Epic's TSR source is only available under the Unreal Engine EULA and cannot be shipped in another engine.";
 
@@ -247,9 +247,14 @@ namespace Conqueror::AntiAliasing
             const auto& prof = GLProfile::Current();
             s_Caps.Compute = prof.ES ? (prof.Major > 3 || (prof.Major == 3 && prof.Minor >= 1))
                                      : (prof.Major > 4 || (prof.Major == 4 && prof.Minor >= 3));
-            // GL çeviri katmanları (Vulkan, Direct3D 11 / 12, Metal, WebGPU) hesaplama gölgelendiricisi çevirmez
+            // GL çeviri katmanları (Vulkan, Direct3D 11 / 12, Metal, WebGPU): hesaplama gölgelendiricisini çeviren katman GL_ARB_compute_shader
+            // bildirir (307; Vulkan); bildirmeyen katmanda NIS / CMAA2 / FSR 2 kapalı
             if (RendererAPI::GetBackend() != RendererAPI::Backend::OpenGL)
-                s_Caps.Compute = false;
+                s_Caps.Compute = HasExtension("GL_ARB_compute_shader");
+            // Görüntü atomikleri GL 4.3'ün parçası; çeviri katmanı destekliyorsa GL_CQ_image_atomics bildirir (Metal: doku atomikleri Metal 3.1
+            // ve Apple7+ / Mac2 GPU ister; olmayan GPU'da SPIRV-Cross'un taklidi dokuyu bir arabelleğe bağlamayı gerektirir, sessizce yanlış olurdu)
+            s_Caps.ImageAtomics = s_Caps.Compute &&
+                                  (RendererAPI::GetBackend() == RendererAPI::Backend::OpenGL || HasExtension("GL_CQ_image_atomics"));
             s_Caps.MultisampleTextures = prof.MultisampleTextures;
             if (RendererAPI::GetBackend() == RendererAPI::Backend::WebGPU)
                 s_Caps.MultisampleTextures = false;   // WebGPU katmanı sampler2DMS çevirmiyor (henüz)
@@ -296,6 +301,7 @@ namespace Conqueror::AntiAliasing
                 c.SampleShading = p.SampleShading;
                 c.MaxSamples = p.MaxSamples;
                 c.Compute = p.Compute;
+                c.ImageAtomics = p.Compute;
                 c.MultisampleTextures = p.MultisampleTextures;
                 c.NGXRuntime = p.NGXRuntime;
                 c.XeSSRuntime = p.XeSSRuntime;
@@ -400,11 +406,15 @@ namespace Conqueror::AntiAliasing
                 return {};
             case M::CMAA:
                 if (!c.Compute)
-                    return { false, "CMAA 2 uses compute shaders (OpenGL 4.3 / OpenGL ES 3.1 on the OpenGL backend); not available on this system (macOS OpenGL 4.1, WebGL 2, the Vulkan / Direct3D / Metal / WebGPU translation layers)." };
+                    return { false, "CMAA 2 uses compute shaders (OpenGL 4.3 / OpenGL ES 3.1); not available on this system (macOS OpenGL 4.1, WebGL 2, WebGPU)." };
+                if (!c.ImageAtomics)
+                    return { false, "CMAA 2 uses image atomics; on Metal they need texture atomics (Metal 3.1, Apple A14 / M1 or newer)." };
                 return {};
             case M::FSRAA:
                 if (!c.Compute)
-                    return { false, "FSR 2 uses compute shaders (OpenGL 4.3 / OpenGL ES 3.1 on the OpenGL backend); not available on this system (macOS OpenGL 4.1, WebGL 2, the Vulkan / Direct3D / Metal / WebGPU translation layers)." };
+                    return { false, "FSR 2 uses compute shaders (OpenGL 4.3 / OpenGL ES 3.1); not available on this system (macOS OpenGL 4.1, WebGL 2, WebGPU)." };
+                if (!c.ImageAtomics)
+                    return { false, "FSR 2 uses image atomics; on Metal they need texture atomics (Metal 3.1, Apple A14 / M1 or newer)." };
                 return {};
             default:
                 if (IsLegacyUpscaler(mode))
@@ -482,6 +492,8 @@ namespace Conqueror::AntiAliasing
             case U::FSR2:
                 if (!c.Compute)
                     return { false, kComputeReason };
+                if (mode == U::FSR2 && !c.ImageAtomics)
+                    return { false, "FSR 2 uses image atomics; on Metal they need texture atomics (Metal 3.1, Apple A14 / M1 or newer)." };
                 return {};
             default:         return {};
         }

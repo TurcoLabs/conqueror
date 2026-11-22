@@ -54,6 +54,7 @@ namespace Conqueror::AntiAliasing
         bool SampleShading = false;   // GL 4.0 örnek başına gölgelendirme (SGSSAA / RGSS)
         int MaxSamples = 4;
         bool Compute = true;              // hesaplama gölgelendiricisi (GL 4.3 / ES 3.1): NIS, CMAA 2, FSR 2; macOS GL 4.1 ve WebGL 2'de yok
+        bool ImageAtomics = true;         // görüntü atomikleri (imageAtomic*, r32ui): CMAA 2, FSR 2; Metal'de yalnız Metal 3.1 doku atomikleriyle
         bool MultisampleTextures = true;  // sampler2DMS (GL 3.2 / ES 3.1): SRAA; WebGL 2'de yok
         bool NVIDIA = false;
         bool AMD = false;

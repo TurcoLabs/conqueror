@@ -285,6 +285,15 @@ namespace Conqueror::VK
         m_EnabledFeatures.largePoints = supported.largePoints;
         m_EnabledFeatures.shaderClipDistance = supported.shaderClipDistance;
         m_EnabledFeatures.imageCubeArray = supported.imageCubeArray;
+        // GL 4.3+ hesaplama / depolama / dolaylı çizim (307): CMAA2, FSR 2, küme çizici, ışın izleme
+        m_EnabledFeatures.fragmentStoresAndAtomics = supported.fragmentStoresAndAtomics;
+        m_EnabledFeatures.vertexPipelineStoresAndAtomics = supported.vertexPipelineStoresAndAtomics;
+        m_EnabledFeatures.shaderStorageImageExtendedFormats = supported.shaderStorageImageExtendedFormats;
+        m_EnabledFeatures.shaderStorageImageWriteWithoutFormat = supported.shaderStorageImageWriteWithoutFormat;
+        m_EnabledFeatures.shaderStorageImageReadWithoutFormat = supported.shaderStorageImageReadWithoutFormat;
+        m_EnabledFeatures.shaderImageGatherExtended = supported.shaderImageGatherExtended;
+        m_EnabledFeatures.multiDrawIndirect = supported.multiDrawIndirect;
+        m_EnabledFeatures.drawIndirectFirstInstance = supported.drawIndirectFirstInstance;
 
         m_ApiVersion = std::min(m_Props.apiVersion, app.apiVersion);
         const bool core13 = m_ApiVersion >= VK_API_VERSION_1_3;
@@ -303,6 +312,20 @@ namespace Conqueror::VK
         feds2.extendedDynamicState2 = VK_TRUE;
         VkPhysicalDeviceVulkan12Features f12{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES };
         f12.hostQueryReset = VK_TRUE;   // zaman damgası sorguları (profilleyici) ana bilgisayardan sıfırlanır
+        // Dolaylı çizim sayısı (glMultiDrawElementsIndirectCount) ve gl_DrawID / gl_BaseInstance (307)
+        VkPhysicalDeviceVulkan11Features f11{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES };
+        if (vkGetPhysicalDeviceFeatures2 && m_ApiVersion >= VK_API_VERSION_1_2)
+        {
+            VkPhysicalDeviceVulkan11Features q11{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES };
+            VkPhysicalDeviceVulkan12Features q12{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES };
+            q12.pNext = &q11;
+            VkPhysicalDeviceFeatures2 q{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
+            q.pNext = &q12;
+            vkGetPhysicalDeviceFeatures2(m_Physical, &q);
+            f12.drawIndirectCount = q12.drawIndirectCount;
+            f11.shaderDrawParameters = q11.shaderDrawParameters;
+            m_DrawIndirectCount = q12.drawIndirectCount == VK_TRUE;
+        }
         bool dynamicDepthBias = core13;
         if (core13)
             f12.pNext = &f13;
@@ -322,6 +345,11 @@ namespace Conqueror::VK
         VkPhysicalDeviceFeatures2 f2{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
         f2.features = m_EnabledFeatures;
         f2.pNext = &f12;
+        if (m_ApiVersion >= VK_API_VERSION_1_2)
+        {
+            f11.pNext = f2.pNext;
+            f2.pNext = &f11;
+        }
 
         const float priority = 1.0f;
         VkDeviceQueueCreateInfo qci{ VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO };
@@ -360,6 +388,12 @@ namespace Conqueror::VK
         g_Fn.CmdSetStencilOp = (PFN_vkCmdSetStencilOp)load("vkCmdSetStencilOp", "vkCmdSetStencilOpEXT");
         g_Fn.CmdSetDepthBiasEnable = dynamicDepthBias ? (PFN_vkCmdSetDepthBiasEnable)load("vkCmdSetDepthBiasEnable", "vkCmdSetDepthBiasEnableEXT") : nullptr;
         g_Fn.ResetQueryPool = (PFN_vkResetQueryPool)vkGetDeviceProcAddr(m_Device, "vkResetQueryPool");
+        g_Fn.CmdDrawIndirectCount = (PFN_vkCmdDrawIndirectCount)vkGetDeviceProcAddr(m_Device, "vkCmdDrawIndirectCount");
+        if (!g_Fn.CmdDrawIndirectCount)
+            g_Fn.CmdDrawIndirectCount = (PFN_vkCmdDrawIndirectCount)vkGetDeviceProcAddr(m_Device, "vkCmdDrawIndirectCountKHR");
+        g_Fn.CmdDrawIndexedIndirectCount = (PFN_vkCmdDrawIndexedIndirectCount)vkGetDeviceProcAddr(m_Device, "vkCmdDrawIndexedIndirectCount");
+        if (!g_Fn.CmdDrawIndexedIndirectCount)
+            g_Fn.CmdDrawIndexedIndirectCount = (PFN_vkCmdDrawIndexedIndirectCount)vkGetDeviceProcAddr(m_Device, "vkCmdDrawIndexedIndirectCountKHR");
         if (!g_Fn.ResetQueryPool)
             g_Fn.ResetQueryPool = (PFN_vkResetQueryPool)vkGetDeviceProcAddr(m_Device, "vkResetQueryPoolEXT");
         if (!g_Fn.CmdBeginRendering || !g_Fn.CmdEndRendering || !g_Fn.CmdSetCullMode || !g_Fn.CmdSetStencilOp)

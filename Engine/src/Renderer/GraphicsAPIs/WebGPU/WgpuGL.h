@@ -62,6 +62,7 @@ namespace Conqueror::WgpuGL
     struct Buffer
     {
         std::vector<uint8_t> Shadow;
+        size_t DirtyBegin = SIZE_MAX, DirtyEnd = 0;  // CPU'nun yazdığı aralık (GPU'ya ait arabellekte yalnız bu yüklenir, 307)
         GLenum Usage = GL_STATIC_DRAW;
         bool Dirty = true;
         size_t HighWater = 0;
@@ -150,6 +151,11 @@ namespace Conqueror::WgpuGL
     {
         uint64_t Id = 0;
         std::vector<uint32_t> Shaders;
+        // Hesaplama gölgelendiricisi (307): görüntü uniform'ları ve depolama blokları; IsCompute ise köşe / parça aşaması yok
+        bool IsCompute = false;
+        uint32_t LocalSize[3] = { 1, 1, 1 };
+        std::vector<GLEmu::ImageBinding> Images;
+        std::vector<GLEmu::StorageBlockBinding> StorageBlocks;
         bool Linked = false;
         std::string Log;
         WGPUShaderModule VS = nullptr, FS = nullptr;
@@ -184,6 +190,7 @@ namespace Conqueror::WgpuGL
 
     struct State
     {
+        GLEmu::ComputeBindings Compute;     // glBindImageTexture / depolama arabelleği / dolaylı dispatch (307)
         bool Blend = false, DepthTest = false, CullFace = false, ScissorTest = false, StencilTest = false;
         bool PolygonOffsetFill = false, PrimitiveRestart = false;
         GLenum BlendSrcRGB = GL_ONE, BlendDstRGB = GL_ZERO, BlendSrcA = GL_ONE, BlendDstA = GL_ZERO;
@@ -235,6 +242,7 @@ namespace Conqueror::WgpuGL
         std::unordered_map<uint32_t, std::unique_ptr<ShaderObject>> ShaderObjects;
         std::unordered_map<uint32_t, std::unique_ptr<Program>> Programs;
         std::unordered_map<uint32_t, std::unique_ptr<Texture>> SamplerObjects;
+        uint32_t NextSamplerName = 1;           // glGenSamplers / glCreateSamplers
         std::unordered_map<uint32_t, QueryObject> QueryObjects;
         uint32_t NextName = 1;
         uint64_t NextProgramId = 1;
@@ -346,6 +354,19 @@ namespace Conqueror::WgpuGL
     void ClearCurrent(GLbitfield mask);
 
     bool LinkProgram(Program& p);
+    // Hesaplama gölgelendiricisi (307): geçerli program IsCompute ise dispatch (indirectBuffer 0: doğrudan x / y / z; değilse o arabellekte
+    // indirectOffset'teki üç uint), glMemoryBarrier
+    void DispatchComputeGL(uint32_t x, uint32_t y, uint32_t z, uint32_t indirectBuffer, int64_t indirectOffset);
+    void MemoryBarrierGL(GLbitfield barriers);
+    // 307: GPU'ya ait arabellek (hesaplama gölgelendiricisinin yazdığı) kopyası / geri okuması (false: ön yüz gölge kopyayı kullanır),
+    // glFenceSync gönderim sayacı, dolaylı çizim ve katmanın sağlamadığı GL işlevleri (GetProcAddress boş döner)
+    bool CopyBufferGL(Buffer& src, Buffer& dst, size_t srcOffset, size_t dstOffset, size_t size);
+    bool ReadBufferGL(Buffer& b, size_t offset, size_t size, void* out);
+    uint64_t SubmitSerialGL();
+    bool SerialCompletedGL(uint64_t serial);
+    void DrawIndirectGL(GLenum mode, bool indexed, GLenum indexType, uint32_t indirectBuffer, int64_t offset, GLsizei drawCount, GLsizei stride,
+                        uint32_t countBuffer, int64_t countOffset);
+    bool BackendSupportsGL(const char* name);
     void DestroyProgram(Program& p);
     UniformSlot* FindUniform(Program& p, GLint location);
     void ReleaseDrawHelpers();

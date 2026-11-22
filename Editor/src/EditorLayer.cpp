@@ -7063,11 +7063,16 @@ namespace Conqueror::Editor
                 // Çizim gölgelendiricilerinin hepsi bu arka uçta bağlandı mı (arka ucun bilinen eksikleri hariç: hesaplama gölgelendiricisi,
                 // çok örnekli doku). Metal'de PBR / Terrain 16 örnekleyici sınırını aşıp yalnız gökyüzü çiziliyordu
                 std::string bad;
+                // Hesaplama gölgelendiricisi artık çeviri katmanlarında da bağlanır (307): hata yalnız katman hesaplama bildirmiyorsa ya da
+                // görüntü atomiği gerekip yoksa (Metal, doku atomiksiz GPU) beklenir
+                const auto& caps = AntiAliasing::GetCaps();
                 for (const auto& [name, reason] : GetShaderFailures())
                 {
+                    const bool computeMissing = !caps.Compute && (reason.find("compute") != std::string::npos || reason.find("Compute") != std::string::npos);
+                    const bool atomicsMissing = !caps.ImageAtomics && reason.find("image atomics") != std::string::npos;
                     const bool known = reason.find("Only vertex and fragment shaders") != std::string::npos ||
                                        reason.find("sampler2DMS") != std::string::npos || reason.find("Multisample textures") != std::string::npos ||
-                                       reason.find("compute") != std::string::npos || reason.find("Compute") != std::string::npos;
+                                       computeMissing || atomicsMissing;
                     Automation::Report(std::string("SHADER ") + (known ? "unsupported here: " : "FAILED: ") + name + " (" + reason.substr(0, 160) + ")");
                     if (!known)
                         bad += (bad.empty() ? "" : ", ") + name;

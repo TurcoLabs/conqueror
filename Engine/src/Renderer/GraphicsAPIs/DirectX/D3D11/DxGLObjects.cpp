@@ -92,9 +92,101 @@ namespace Conqueror::DxGL
             if (v) v->Release();
         t.RTVs.clear();
         t.DSVs.clear();
+        for (auto& [k, v] : t.UAVs)
+            if (v) v->Release();
+        for (auto& [k, v] : t.LevelSRVs)
+            if (v) v->Release();
+        t.UAVs.clear();
+        t.LevelSRVs.clear();
+        t.StorageCapable = false;
         SafeRelease(t.Image);
         t.SRVLevels = 0;
         t.DefinedLevels = 0;
+    }
+
+    // glBindImageTexture (307): doku UNORDERED_ACCESS bayrağıyla yeniden oluşturulup içeriği kopyalanır (her hedefe baştan konmaz:
+    // UAV bayrağı bazı GPU'larda renk sıkıştırmasını kapatır)
+    bool EnsureStorageImage(Texture& t)
+    {
+        if (!t.Image)
+            return false;
+        if (t.StorageCapable)
+            return true;
+        if (t.Depth || t.Samples > 1 || !(FormatSupport(t.RTVFormat) & D3D11_FORMAT_SUPPORT_TYPED_UNORDERED_ACCESS_VIEW))
+            return false;
+        auto& core = Core::Get();
+        D3D11_TEXTURE2D_DESC desc{};
+        t.Image->GetDesc(&desc);
+        desc.BindFlags |= D3D11_BIND_UNORDERED_ACCESS;
+        ID3D11Texture2D* img = nullptr;
+        if (FAILED(core.Device()->CreateTexture2D(&desc, nullptr, &img)) || !img)
+            return false;
+        core.Context()->CopyResource(img, t.Image);
+        const uint32_t defined = t.DefinedLevels;
+        DestroyTextureImage(t);
+        t.Image = img;
+        t.DefinedLevels = defined;
+        t.StorageCapable = true;
+        return true;
+    }
+
+    ID3D11UnorderedAccessView* GetUAV(Texture& t, int level, int layer)
+    {
+        if (!t.Image || !t.StorageCapable)
+            return nullptr;
+        const uint32_t key = (uint32_t)level | ((uint32_t)layer << 8);
+        if (auto it = t.UAVs.find(key); it != t.UAVs.end())
+            return it->second;
+        D3D11_UNORDERED_ACCESS_VIEW_DESC d{};
+        d.Format = t.RTVFormat;
+        if (t.Layers > 1)
+        {
+            d.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2DARRAY;
+            d.Texture2DArray.MipSlice = (UINT)level;
+            d.Texture2DArray.FirstArraySlice = (UINT)layer;
+            d.Texture2DArray.ArraySize = 1;
+        }
+        else
+        {
+            d.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+            d.Texture2D.MipSlice = (UINT)level;
+        }
+        ID3D11UnorderedAccessView* v = nullptr;
+        if (FAILED(Core::Get().Device()->CreateUnorderedAccessView(t.Image, &d, &v)))
+            v = nullptr;
+        t.UAVs[key] = v;
+        return v;
+    }
+
+    // Salt okunur depolama görüntüsü (imageLoad -> Texture2D.Load): tek düzeyli kaynak görünümü
+    ID3D11ShaderResourceView* GetLevelSRV(Texture& t, int level, int layer)
+    {
+        if (!t.Image)
+            return nullptr;
+        const uint32_t key = (uint32_t)level | ((uint32_t)layer << 8);
+        if (auto it = t.LevelSRVs.find(key); it != t.LevelSRVs.end())
+            return it->second;
+        D3D11_SHADER_RESOURCE_VIEW_DESC d{};
+        d.Format = t.SRVFormat;
+        if (t.Layers > 1)
+        {
+            d.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
+            d.Texture2DArray.MostDetailedMip = (UINT)level;
+            d.Texture2DArray.MipLevels = 1;
+            d.Texture2DArray.FirstArraySlice = (UINT)layer;
+            d.Texture2DArray.ArraySize = 1;
+        }
+        else
+        {
+            d.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+            d.Texture2D.MostDetailedMip = (UINT)level;
+            d.Texture2D.MipLevels = 1;
+        }
+        ID3D11ShaderResourceView* v = nullptr;
+        if (FAILED(Core::Get().Device()->CreateShaderResourceView(t.Image, &d, &v)))
+            v = nullptr;
+        t.LevelSRVs[key] = v;
+        return v;
     }
 
     bool AllocateTexture(Texture& t, GLenum target, GLenum internalFormat, uint32_t w, uint32_t h, uint32_t levels, uint32_t samples)
@@ -456,8 +548,101 @@ namespace Conqueror::DxGL
         }
     }
 
+    // GPU'ya ait arabellek (307): DEFAULT, UAV + SRV + köşe + indeks bağlamalı, ham görünümler ve dolaylı argümanlar. Oluşturulurken gölgenin
+    // tamamı, sonra yalnız CPU'nun yazdığı aralık (komut sırasıyla UpdateSubresource; GPU'nun yazdığı kısım korunur)
+    ID3D11Buffer* StorageBuffer(Buffer& b)
+    {
+        auto& core = Core::Get();
+        const size_t size = (std::max<size_t>(b.Shadow.size(), 16) + 15) & ~(size_t)15;
+        if (!b.Storage || b.StorageSize < size)
+        {
+            for (auto& [k, v] : b.StorageUAVs)
+                if (v) v->Release();
+            for (auto& [k, v] : b.StorageSRVs)
+                if (v) v->Release();
+            b.StorageUAVs.clear();
+            b.StorageSRVs.clear();
+            SafeRelease(b.Storage);
+            D3D11_BUFFER_DESC bd{};
+            bd.ByteWidth = (UINT)size;
+            bd.Usage = D3D11_USAGE_DEFAULT;
+            bd.BindFlags = D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_VERTEX_BUFFER | D3D11_BIND_INDEX_BUFFER;
+            bd.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS | D3D11_RESOURCE_MISC_DRAWINDIRECT_ARGS;
+            std::vector<uint8_t> init(size, 0);
+            std::copy(b.Shadow.begin(), b.Shadow.end(), init.begin());
+            D3D11_SUBRESOURCE_DATA sd{ init.data(), 0, 0 };
+            if (FAILED(core.Device()->CreateBuffer(&bd, &sd, &b.Storage)))
+            {
+                CQ_CORE_ERROR("[DxGL] Cannot create a {0} byte storage buffer", size);
+                b.Storage = nullptr;
+                return nullptr;
+            }
+            b.StorageSize = size;
+        }
+        else if (b.Dirty && b.DirtyBegin < b.DirtyEnd && b.DirtyBegin < b.Shadow.size())
+        {
+            const size_t from = b.DirtyBegin, to = std::min(b.DirtyEnd, b.Shadow.size());
+            D3D11_BOX box{ (UINT)from, 0, 0, (UINT)to, 1, 1 };
+            core.Context()->UpdateSubresource(b.Storage, 0, &box, b.Shadow.data() + from, 0, 0);
+        }
+        b.Dirty = false;
+        b.DirtyBegin = SIZE_MAX;
+        b.DirtyEnd = 0;
+        return b.Storage;
+    }
+
+    ID3D11UnorderedAccessView* StorageUAV(Buffer& b, size_t offset, size_t size)
+    {
+        if (!StorageBuffer(b))
+            return nullptr;
+        offset &= ~(size_t)3;
+        size = std::min(size, b.StorageSize - std::min(offset, b.StorageSize)) & ~(size_t)3;
+        if (size == 0)
+            return nullptr;
+        const uint64_t key = ((uint64_t)offset << 32) | (uint64_t)size;
+        if (auto it = b.StorageUAVs.find(key); it != b.StorageUAVs.end())
+            return it->second;
+        D3D11_UNORDERED_ACCESS_VIEW_DESC d{};
+        d.Format = DXGI_FORMAT_R32_TYPELESS;
+        d.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+        d.Buffer.FirstElement = (UINT)(offset / 4);
+        d.Buffer.NumElements = (UINT)(size / 4);
+        d.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
+        ID3D11UnorderedAccessView* v = nullptr;
+        if (FAILED(Core::Get().Device()->CreateUnorderedAccessView(b.Storage, &d, &v)))
+            v = nullptr;
+        b.StorageUAVs[key] = v;
+        return v;
+    }
+
+    ID3D11ShaderResourceView* StorageSRV(Buffer& b, size_t offset, size_t size)
+    {
+        if (!StorageBuffer(b))
+            return nullptr;
+        offset &= ~(size_t)3;
+        size = std::min(size, b.StorageSize - std::min(offset, b.StorageSize)) & ~(size_t)3;
+        if (size == 0)
+            return nullptr;
+        const uint64_t key = ((uint64_t)offset << 32) | (uint64_t)size;
+        if (auto it = b.StorageSRVs.find(key); it != b.StorageSRVs.end())
+            return it->second;
+        D3D11_SHADER_RESOURCE_VIEW_DESC d{};
+        d.Format = DXGI_FORMAT_R32_TYPELESS;
+        d.ViewDimension = D3D11_SRV_DIMENSION_BUFFEREX;
+        d.BufferEx.FirstElement = (UINT)(offset / 4);
+        d.BufferEx.NumElements = (UINT)(size / 4);
+        d.BufferEx.Flags = D3D11_BUFFEREX_SRV_FLAG_RAW;
+        ID3D11ShaderResourceView* v = nullptr;
+        if (FAILED(Core::Get().Device()->CreateShaderResourceView(b.Storage, &d, &v)))
+            v = nullptr;
+        b.StorageSRVs[key] = v;
+        return v;
+    }
+
     ID3D11Buffer* GeometryBuffer(Buffer& b)
     {
+        if (b.GpuOwned)
+            return StorageBuffer(b);
         if (b.Dirty)
         {
             ++b.Version;
@@ -477,6 +662,28 @@ namespace Conqueror::DxGL
 
     ID3D11Buffer* ConstantBuffer(Buffer& b)
     {
+        if (b.GpuOwned)
+        {
+            // Sabit arabellek bayrağı UAV ile birleşemez: GPU'daki içerik ayrı bir DEFAULT sabit arabelleğe kopyalanır
+            ID3D11Buffer* src = StorageBuffer(b);
+            const size_t size = std::min<size_t>(b.StorageSize, 65536);
+            if (!src)
+                return nullptr;
+            if (!b.StorageConstant || b.StorageConstantSize < size)
+            {
+                SafeRelease(b.StorageConstant);
+                D3D11_BUFFER_DESC bd{};
+                bd.ByteWidth = (UINT)size;
+                bd.Usage = D3D11_USAGE_DEFAULT;
+                bd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+                if (FAILED(Core::Get().Device()->CreateBuffer(&bd, nullptr, &b.StorageConstant)))
+                    return nullptr;
+                b.StorageConstantSize = size;
+            }
+            D3D11_BOX box{ 0, 0, 0, (UINT)size, 1, 1 };
+            Core::Get().Context()->CopySubresourceRegion(b.StorageConstant, 0, 0, 0, 0, src, 0, &box);
+            return b.StorageConstant;
+        }
         if (b.Dirty)
         {
             ++b.Version;

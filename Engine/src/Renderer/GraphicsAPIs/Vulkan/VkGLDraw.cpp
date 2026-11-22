@@ -194,10 +194,11 @@ namespace Conqueror::VkGL
                 if (c.PoolIndex[slot] >= c.Pools[slot].size())
                 {
                     VkDescriptorPoolSize sizes[] = { { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 8192 }, { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 32768 },
-                                                     { VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 16384 }, { VK_DESCRIPTOR_TYPE_SAMPLER, 4096 } };
+                                                     { VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 16384 }, { VK_DESCRIPTOR_TYPE_SAMPLER, 4096 },
+                                                     { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2048 }, { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2048 } };
                     VkDescriptorPoolCreateInfo pi{ VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
                     pi.maxSets = 4096;
-                    pi.poolSizeCount = 4;
+                    pi.poolSizeCount = 6;
                     pi.pPoolSizes = sizes;
                     VkDescriptorPool pool = VK_NULL_HANDLE;
                     if (vkCreateDescriptorPool(dev, &pi, nullptr, &pool) != VK_SUCCESS)
@@ -448,15 +449,90 @@ namespace Conqueror::VkGL
         vkCmdClearAttachments(Core::Get().Cmd(), (uint32_t)clears.size(), clears.data(), 1, &rect);
     }
 
-    void Draw(GLenum mode, GLint first, GLsizei count, GLsizei instances, bool indexed, GLenum indexType, const void* indices, GLint baseVertex)
+    namespace
+    {
+        // glDraw*Indirect (307): komutlar GL_DRAW_INDIRECT_BUFFER'da; Count sürümünde sayı CountBuffer'da
+        struct IndirectArgs
+        {
+            uint32_t Buffer = 0;
+            int64_t Offset = 0;
+            GLsizei DrawCount = 1;
+            GLsizei Stride = 0;
+            uint32_t CountBuffer = 0;
+            int64_t CountOffset = 0;
+        };
+
+        // Çizimin kullanacağı GPU'ya ait arabelleklerin bekleyen CPU yazımları (komut sırasıyla kopya) ve depolama görüntüsü yükseltmesi
+        // render geçişi başlamadan: geçişin içinde kopya / görüntü yeniden oluşturma kaydedilemez
+        void PrepareStorageResources(Program& p, VertexArray* vao, bool indexed, const IndirectArgs* ind)
+        {
+            auto& c = Ctx();
+            std::vector<Buffer*> buffers;
+            bool need = false;
+            auto use = [&](uint32_t name, bool gpuOwned) {
+                Buffer* b = name ? GetBuffer(name) : nullptr;
+                if (!b)
+                    return;
+                if (gpuOwned)
+                    b->GpuOwned = true;
+                if (b->GpuOwned)
+                {
+                    buffers.push_back(b);
+                    if (b->Dirty || !b->GpuResident)
+                        need = true;
+                }
+            };
+            for (const auto& in : p.Inputs)
+                if (in.Location >= 0 && in.Location < 16 && vao->Attribs[in.Location].Enabled)
+                    use(vao->Attribs[in.Location].Buffer, false);
+            if (indexed)
+                use(vao->ElementBuffer, false);
+            for (const auto& blk : p.Blocks)
+                use(c.S.UBOBindings[blk.GLBinding < 64 ? blk.GLBinding : 0], false);
+            for (const auto& sb : p.StorageBlocks)
+                if (sb.GLBinding < c.S.Compute.Storage.size())
+                    use(c.S.Compute.Storage[sb.GLBinding], sb.Writable);
+            if (ind)
+            {
+                use(ind->Buffer, true);   // dolaylı komut arabellekleri INDIRECT kullanımlı adanmış sürümde
+                use(ind->CountBuffer, true);
+            }
+            const int imageUnits = (int)c.S.Compute.Images.size();
+            std::vector<Texture*> images;
+            for (const auto& ib : p.Images)
+                if (Texture* t = GetTexture(c.S.Compute.Images[(size_t)std::clamp(ib.Unit, 0, imageUnits - 1)].Texture))
+                    if (!t->StorageCapable)
+                    {
+                        images.push_back(t);
+                        need = true;
+                    }
+            if (!need)
+                return;
+            TransferCmd();   // render geçişini bitirir
+            for (Texture* t : images)
+                if (!EnsureStorageImage(*t))
+                    CQ_CORE_WARN("[VkGL] Texture of format {0} cannot be bound as a storage image", (int)t->Format);
+            for (Buffer* b : buffers)
+            {
+                VkBuffer vb;
+                VkDeviceSize off;
+                BufferRef(*b, vb, off);
+            }
+        }
+    }
+
+    static void DrawImpl(GLenum mode, GLint first, GLsizei count, GLsizei instances, bool indexed, GLenum indexType, const void* indices, GLint baseVertex,
+                         const IndirectArgs* ind)
     {
         auto& c = Ctx();
         auto& core = Core::Get();
-        if (count <= 0 || instances <= 0)
+        if (!ind && (count <= 0 || instances <= 0))
             return;
         Program* p = GetProgram(c.S.Program);
-        if (!p || !p->Linked)
+        if (!p || !p->Linked || p->IsCompute)
             return;
+        if (!p->StorageBlocks.empty() || !p->Images.empty() || ind)
+            PrepareStorageResources(*p, CurrentVAO(), indexed, ind);
         if (!EnsureRendering())
             return;
         VkCommandBuffer cmd = core.Cmd();
@@ -716,6 +792,42 @@ namespace Conqueror::VkGL
                 imageInfos.push_back(si);
             }
         }
+        // Köşe / parça gölgelendiricisindeki depolama görüntüleri ve blokları (GL 4.3; ör. ışın izleme, küme çizici)
+        {
+            const int imageUnits = (int)c.S.Compute.Images.size();
+            for (const auto& ib : p->Images)
+            {
+                const GLEmu::ImageUnit& u = c.S.Compute.Images[(size_t)std::clamp(ib.Unit, 0, imageUnits - 1)];
+                Texture* tex = GetTexture(u.Texture);
+                if (!tex || !tex->Image || !tex->StorageCapable)
+                    return;
+                VkDescriptorImageInfo ii{};
+                ii.imageView = GetAttachmentView(*tex, std::clamp(u.Level, 0, (int)tex->Levels - 1), u.Layered ? 0 : u.Layer);
+                ii.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                setKey.Add((uint64_t)ii.imageView);
+                refs.push_back({ ib.Binding, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, imageInfos.size() });
+                imageInfos.push_back(ii);
+            }
+            const VkDeviceSize ssboAlign = std::max<VkDeviceSize>(core.Properties().limits.minStorageBufferOffsetAlignment, 4);
+            for (const auto& sb : p->StorageBlocks)
+            {
+                const uint32_t glb = sb.GLBinding < c.S.Compute.Storage.size() ? sb.GLBinding : 0;
+                Buffer* b = GetBuffer(c.S.Compute.Storage[glb]);
+                if (!b || b->Shadow.empty())
+                    return;
+                VkDescriptorBufferInfo bi{};
+                BufferRef(*b, bi.buffer, bi.offset);
+                const VkDeviceSize off = (VkDeviceSize)std::max<int64_t>(c.S.Compute.StorageOffsets[glb], 0);
+                bi.offset += off - off % ssboAlign;
+                const VkDeviceSize avail = b->Shadow.size() > off ? b->Shadow.size() - off : 0;
+                bi.range = c.S.Compute.StorageSizes[glb] > 0 ? std::min<VkDeviceSize>((VkDeviceSize)c.S.Compute.StorageSizes[glb], avail) : avail;
+                if (bi.range == 0)
+                    return;
+                setKey.Add((uint64_t)bi.buffer); setKey.Add(bi.offset); setKey.Add(bi.range);
+                refs.push_back({ sb.Binding, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, bufferInfos.size() });
+                bufferInfos.push_back(bi);
+            }
+        }
 
         VkDescriptorSet set = VK_NULL_HANDLE;
         if (c.LastSetKey == setKey.H && c.LastSetFrame == core.FrameNumber() && c.LastSet)
@@ -735,7 +847,7 @@ namespace Conqueror::VkGL
                 w.dstBinding = r.Binding;
                 w.descriptorCount = r.Count;
                 w.descriptorType = r.Type;
-                if (r.Type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER)
+                if (r.Type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER || r.Type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
                     w.pBufferInfo = &bufferInfos[r.First];
                 else
                     w.pImageInfo = &imageInfos[r.First];
@@ -795,6 +907,62 @@ namespace Conqueror::VkGL
         vkCmdSetStencilWriteMask(cmd, VK_STENCIL_FACE_FRONT_AND_BACK, c.S.StencilWriteMask);
         vkCmdSetStencilReference(cmd, VK_STENCIL_FACE_FRONT_AND_BACK, (uint32_t)c.S.StencilRef);
 
+        if (ind)
+        {
+            Buffer* cmdBuf = GetBuffer(ind->Buffer);
+            if (!cmdBuf)
+                return;
+            VkBuffer cb;
+            VkDeviceSize coff;
+            BufferRef(*cmdBuf, cb, coff);
+            coff += (VkDeviceSize)std::max<int64_t>(ind->Offset, 0);
+            if (indexed)
+            {
+                Buffer* eb = GetBuffer(vao->ElementBuffer);
+                if (!eb || indexType == GL_UNSIGNED_BYTE)
+                {
+                    // 8 bit indeks dolaylı çizimde genişletilemez (komutlar GPU'da)
+                    if (eb)
+                        CQ_CORE_WARN("[VkGL] Indirect draw with 8-bit indices is not supported");
+                    return;
+                }
+                VkBuffer ib;
+                VkDeviceSize ioff;
+                BufferRef(*eb, ib, ioff);
+                vkCmdBindIndexBuffer(cmd, ib, ioff, indexType == GL_UNSIGNED_SHORT ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT32);
+            }
+            const uint32_t stride = (uint32_t)ind->Stride;
+            if (ind->CountBuffer)
+            {
+                Buffer* countBuf = GetBuffer(ind->CountBuffer);
+                if (!countBuf || !core.HasDrawIndirectCount())
+                    return;
+                VkBuffer nb;
+                VkDeviceSize noff;
+                BufferRef(*countBuf, nb, noff);
+                noff += (VkDeviceSize)std::max<int64_t>(ind->CountOffset, 0);
+                if (indexed)
+                    VK::g_Fn.CmdDrawIndexedIndirectCount(cmd, cb, coff, nb, noff, (uint32_t)ind->DrawCount, stride);
+                else
+                    VK::g_Fn.CmdDrawIndirectCount(cmd, cb, coff, nb, noff, (uint32_t)ind->DrawCount, stride);
+            }
+            else if (ind->DrawCount > 1 && !core.Features().multiDrawIndirect)
+            {
+                // multiDrawIndirect yok: komutlar tek tek
+                for (GLsizei i = 0; i < ind->DrawCount; ++i)
+                {
+                    if (indexed)
+                        vkCmdDrawIndexedIndirect(cmd, cb, coff + (VkDeviceSize)i * stride, 1, stride);
+                    else
+                        vkCmdDrawIndirect(cmd, cb, coff + (VkDeviceSize)i * stride, 1, stride);
+                }
+            }
+            else if (indexed)
+                vkCmdDrawIndexedIndirect(cmd, cb, coff, (uint32_t)ind->DrawCount, stride);
+            else
+                vkCmdDrawIndirect(cmd, cb, coff, (uint32_t)ind->DrawCount, stride);
+            return;
+        }
         if (indexed)
         {
             Buffer* eb = GetBuffer(vao->ElementBuffer);
@@ -826,6 +994,266 @@ namespace Conqueror::VkGL
         {
             vkCmdDraw(cmd, (uint32_t)count, (uint32_t)instances, (uint32_t)first, 0);
         }
+    }
+
+    void Draw(GLenum mode, GLint first, GLsizei count, GLsizei instances, bool indexed, GLenum indexType, const void* indices, GLint baseVertex)
+    {
+        DrawImpl(mode, first, count, instances, indexed, indexType, indices, baseVertex, nullptr);
+    }
+
+    void DrawIndirectGL(GLenum mode, bool indexed, GLenum indexType, uint32_t indirectBuffer, int64_t offset, GLsizei drawCount, GLsizei stride,
+                        uint32_t countBuffer, int64_t countOffset)
+    {
+        IndirectArgs a;
+        a.Buffer = indirectBuffer;
+        a.Offset = offset;
+        a.DrawCount = drawCount;
+        a.Stride = stride;
+        a.CountBuffer = countBuffer;
+        a.CountOffset = countOffset;
+        DrawImpl(mode, 0, 1, 1, indexed, indexType, nullptr, 0, &a);
+    }
+
+    bool BackendSupportsGL(const char* name)
+    {
+        if (std::strcmp(name, "glMultiDrawElementsIndirectCount") == 0 || std::strcmp(name, "glMultiDrawArraysIndirectCount") == 0)
+            return Core::Get().HasDrawIndirectCount();
+        return true;
+    }
+
+    uint64_t SubmitSerialGL()
+    {
+        auto& core = Core::Get();
+        core.BeginFrameIfNeeded();
+        return core.FrameSerial();
+    }
+
+    bool SerialCompletedGL(uint64_t serial) { return Core::Get().CompletedSerial() >= serial; }
+
+    bool ReadBufferGL(Buffer& b, size_t offset, size_t size, void* out)
+    {
+        if (!b.GpuOwned)
+            return false;
+        auto& core = Core::Get();
+        if (b.Dirty || !b.GpuResident || !b.Dedicated)
+        {
+            VkBuffer vb;
+            VkDeviceSize off;
+            BufferRef(b, vb, off);
+        }
+        if (!b.Mapped || offset + size > (size_t)b.DedicatedSize)
+            return false;
+        // Son kullanan gönderim bitmediyse bekle (çitle beklenmiş geri okumada beklemez)
+        if (b.DedicatedLastUse > core.CompletedSerial())
+            FlushAndWaitGL();
+        std::memcpy(out, b.Mapped + offset, size);
+        return true;
+    }
+
+    bool CopyBufferGL(Buffer& src, Buffer& dst, size_t srcOffset, size_t dstOffset, size_t size)
+    {
+        if (!src.GpuOwned && !dst.GpuOwned)
+            return false;
+        dst.GpuOwned = true;
+        TransferCmd();   // render geçişi biter: bekleyen yazımların kopyaları geçiş dışında kaydedilir
+        VkBuffer sb, db;
+        VkDeviceSize soff, doff;
+        BufferRef(src, sb, soff);
+        BufferRef(dst, db, doff);
+        VkCommandBuffer cmd = TransferCmd();
+        VkBufferCopy region{ soff + srcOffset, doff + dstOffset, (VkDeviceSize)size };
+        vkCmdCopyBuffer(cmd, sb, db, 1, &region);
+        Core::Get().FullBarrier(cmd);
+        return true;
+    }
+
+    // ── Hesaplama gölgelendiricisi (307): NIS, CMAA2, FSR 2 ──
+    // Render geçişi biter; tanımlayıcılar geçerli GL bağlamalarından (UBO, global blok, doku birimleri, görüntü birimleri, depolama
+    // arabellekleri) kurulur; dispatch'ten önce ve sonra tam bariyer (katmanın kaba sıralaması, Draw'daki gibi)
+    void DispatchComputeGL(uint32_t x, uint32_t y, uint32_t z, uint32_t indirectBuffer, int64_t indirectOffset)
+    {
+        auto& c = Ctx();
+        auto& core = Core::Get();
+        Program* p = GetProgram(c.S.Program);
+        if (!p || !p->Linked || !p->IsCompute || !p->ComputePipeline)
+            return;
+        // Görüntü birimlerindeki dokular depolama kullanımına (yeniden oluşturma tanımlayıcılardan önce)
+        const int imageUnits = (int)c.S.Compute.Images.size();
+        for (const auto& ib : p->Images)
+            if (Texture* t = GetTexture(c.S.Compute.Images[(size_t)std::clamp(ib.Unit, 0, imageUnits - 1)].Texture))
+                if (!EnsureStorageImage(*t))
+                    CQ_CORE_WARN("[VkGL] Texture of format {0} cannot be bound as a storage image", (int)t->Format);
+        // Depolama ve dolaylı arabellekler GPU'ya aittir: içerikleri gölge kopyadan yeniden yüklenmez
+        for (const auto& sb : p->StorageBlocks)
+            if (sb.GLBinding < c.S.Compute.Storage.size())
+                if (Buffer* b = GetBuffer(c.S.Compute.Storage[sb.GLBinding]))
+                    b->GpuOwned = true;
+        Buffer* indirect = indirectBuffer ? GetBuffer(indirectBuffer) : nullptr;
+        if (indirectBuffer && !indirect)
+            return;
+        if (indirect)
+            indirect->GpuOwned = true;
+        VkCommandBuffer cmd = TransferCmd();
+
+        std::vector<VkDescriptorBufferInfo> bufferInfos;
+        std::vector<VkDescriptorImageInfo> imageInfos;
+        struct WriteRef { uint32_t Binding; VkDescriptorType Type; uint32_t Count; size_t First; };
+        std::vector<WriteRef> refs;
+        size_t imageCount = p->Images.size();
+        for (const auto& s : p->Samplers)
+            imageCount += s.Count + 1;
+        imageInfos.reserve(imageCount);
+        bufferInfos.reserve(p->Blocks.size() + p->StorageBlocks.size() + 1);
+        const VkDeviceSize uboAlign = core.Properties().limits.minUniformBufferOffsetAlignment;
+        for (const auto& blk : p->Blocks)
+        {
+            VkDescriptorBufferInfo bi{};
+            const uint32_t glb = blk.GLBinding < 64 ? blk.GLBinding : 0;
+            if (Buffer* ub = GetBuffer(c.S.UBOBindings[glb]))
+            {
+                BufferRef(*ub, bi.buffer, bi.offset);
+                bi.offset += (VkDeviceSize)c.S.UBOOffsets[glb];
+                const VkDeviceSize avail = ub->Shadow.size() > (size_t)c.S.UBOOffsets[glb] ? ub->Shadow.size() - (size_t)c.S.UBOOffsets[glb] : 0;
+                bi.range = c.S.UBOSizes[glb] > 0 ? (VkDeviceSize)c.S.UBOSizes[glb] : std::min<VkDeviceSize>(avail, blk.Size);
+                bi.range = std::max<VkDeviceSize>(std::min<VkDeviceSize>(bi.range, avail), 16);
+            }
+            else
+            {
+                VK::RingAlloc a = core.AllocRing(std::max(blk.Size, 16u), uboAlign);
+                std::memset(a.Ptr, 0, std::max(blk.Size, 16u));
+                bi = { a.Buffer, a.Offset, std::max(blk.Size, 16u) };
+            }
+            refs.push_back({ blk.Binding, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, bufferInfos.size() });
+            bufferInfos.push_back(bi);
+        }
+        if (p->GlobalsBinding >= 0)
+        {
+            VK::RingAlloc a = core.AllocRing(p->Globals.size(), uboAlign);
+            std::memcpy(a.Ptr, p->Globals.data(), p->Globals.size());
+            refs.push_back({ (uint32_t)p->GlobalsBinding, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, bufferInfos.size() });
+            bufferInfos.push_back({ a.Buffer, a.Offset, (VkDeviceSize)p->Globals.size() });
+        }
+        for (const auto& s : p->Samplers)
+        {
+            const size_t first = imageInfos.size();
+            const Texture* shared = nullptr;
+            for (uint32_t e = 0; e < s.Count; ++e)
+            {
+                const int unit = std::clamp(e < s.Units.size() ? s.Units[e] : 0, 0, 63);
+                const uint32_t texName = s.Target == GL_TEXTURE_CUBE_MAP ? c.S.TexCube[(size_t)unit] :
+                                         s.Target == GL_TEXTURE_2D_MULTISAMPLE ? c.S.Tex2DMS[(size_t)unit] : c.S.Tex2D[(size_t)unit];
+                Texture* tex = GetTexture(texName);
+                if (!tex || !tex->Image || (s.Target == GL_TEXTURE_CUBE_MAP) != (tex->Target == GL_TEXTURE_CUBE_MAP) || tex->Integer != s.Integer)
+                    tex = s.Target == GL_TEXTURE_CUBE_MAP ? c.NullTextureCube : s.Integer ? c.NullTextureInt : c.NullTexture2D;
+                const Texture* params = tex;
+                if (auto so = c.SamplerObjects.find(c.S.Samplers[(size_t)unit]); so != c.SamplerObjects.end() && c.S.Samplers[(size_t)unit])
+                    params = so->second.get();
+                VkDescriptorImageInfo ii{};
+                ii.imageView = GetSampledView(*tex);
+                ii.sampler = s.SharedSampler ? VK_NULL_HANDLE : GetSampler(*params, tex->Integer);
+                ii.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+                imageInfos.push_back(ii);
+                if (s.SharedSampler && !shared && tex != c.NullTexture2D && tex != c.NullTextureCube && tex != c.NullTextureInt)
+                    shared = params;
+            }
+            refs.push_back({ s.Binding, s.SharedSampler ? VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, s.Count, first });
+            if (s.SharedSampler)
+            {
+                VkDescriptorImageInfo si{};
+                si.sampler = GetSampler(shared ? *shared : *c.NullTexture2D, s.Integer);
+                refs.push_back({ s.SamplerSlot, VK_DESCRIPTOR_TYPE_SAMPLER, 1, imageInfos.size() });
+                imageInfos.push_back(si);
+            }
+        }
+        std::vector<std::pair<Texture*, int>> written;
+        for (const auto& ib : p->Images)
+        {
+            const GLEmu::ImageUnit& u = c.S.Compute.Images[(size_t)std::clamp(ib.Unit, 0, imageUnits - 1)];
+            Texture* tex = GetTexture(u.Texture);
+            if (!tex || !tex->Image || !tex->StorageCapable)
+            {
+                CQ_CORE_WARN("[VkGL] Compute dispatch skipped: image '{0}' has no storage texture bound", ib.Name);
+                return;
+            }
+            const int level = std::clamp(u.Level, 0, (int)tex->Levels - 1);
+            VkDescriptorImageInfo ii{};
+            ii.imageView = GetAttachmentView(*tex, level, u.Layered ? 0 : u.Layer);
+            ii.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+            refs.push_back({ ib.Binding, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, imageInfos.size() });
+            imageInfos.push_back(ii);
+            if (ib.Writable)
+                written.push_back({ tex, level });
+        }
+        const VkDeviceSize ssboAlign = std::max<VkDeviceSize>(core.Properties().limits.minStorageBufferOffsetAlignment, 4);
+        for (const auto& sb : p->StorageBlocks)
+        {
+            VkDescriptorBufferInfo bi{};
+            const uint32_t glb = sb.GLBinding < c.S.Compute.Storage.size() ? sb.GLBinding : 0;
+            Buffer* b = GetBuffer(c.S.Compute.Storage[glb]);
+            if (!b || b->Shadow.empty())
+            {
+                CQ_CORE_WARN("[VkGL] Compute dispatch skipped: storage block '{0}' (binding {1}) has no buffer", sb.Name, sb.GLBinding);
+                return;
+            }
+            BufferRef(*b, bi.buffer, bi.offset);
+            const VkDeviceSize off = (VkDeviceSize)std::max<int64_t>(c.S.Compute.StorageOffsets[glb], 0);
+            bi.offset += off - off % ssboAlign;
+            const VkDeviceSize avail = b->Shadow.size() > off ? b->Shadow.size() - off : 0;
+            bi.range = c.S.Compute.StorageSizes[glb] > 0 ? std::min<VkDeviceSize>((VkDeviceSize)c.S.Compute.StorageSizes[glb], avail) : avail;
+            refs.push_back({ sb.Binding, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, bufferInfos.size() });
+            bufferInfos.push_back(bi);
+        }
+        VkBuffer indirectVk = VK_NULL_HANDLE;
+        VkDeviceSize indirectOff = 0;
+        if (indirect)
+        {
+            BufferRef(*indirect, indirectVk, indirectOff);
+            indirectOff += (VkDeviceSize)std::max<int64_t>(indirectOffset, 0);
+        }
+        // BufferRef halka kopyasını komut sırasıyla kaydetmiş olabilir: bariyer
+        core.FullBarrier(cmd);
+
+        VkDescriptorSet set = VK_NULL_HANDLE;
+        if (!refs.empty())
+        {
+            set = AllocateSet(p->SetLayout);
+            if (!set)
+                return;
+            std::vector<VkWriteDescriptorSet> writes;
+            writes.reserve(refs.size());
+            for (const auto& r : refs)
+            {
+                VkWriteDescriptorSet w{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+                w.dstSet = set;
+                w.dstBinding = r.Binding;
+                w.descriptorCount = r.Count;
+                w.descriptorType = r.Type;
+                if (r.Type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER || r.Type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
+                    w.pBufferInfo = &bufferInfos[r.First];
+                else
+                    w.pImageInfo = &imageInfos[r.First];
+                writes.push_back(w);
+            }
+            vkUpdateDescriptorSets(core.Device(), (uint32_t)writes.size(), writes.data(), 0, nullptr);
+        }
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, p->ComputePipeline);
+        if (set)
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, p->Layout, 0, 1, &set, 0, nullptr);
+        if (indirect)
+            vkCmdDispatchIndirect(cmd, indirectVk, indirectOff);
+        else
+            vkCmdDispatch(cmd, x, y, z);
+        core.FullBarrier(cmd);
+        for (auto& [tex, level] : written)
+            tex->DefinedLevels |= 1u << level;
+        // Çizimin önbelleklenmiş tanımlayıcı kümesi grafik bağlama noktasındadır; hesaplama ona dokunmaz
+    }
+
+    void MemoryBarrierGL(GLbitfield)
+    {
+        // Render geçişi biter ve tam bariyer konur: parça gölgelendiricisinin depolama yazımları sonraki çizim / dispatch'te görünür
+        // (dinamik render geçişinin içinde genel bariyer konamaz)
+        TransferCmd();
     }
 
     VertexArray* CurrentVAO()

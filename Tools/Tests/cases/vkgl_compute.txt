@@ -1,0 +1,45 @@
+# template: fps
+# matrix: CQ_RENDERER=opengl vulkan
+# 307: hesaplama gölgelendiricisi GL çeviri katmanlarında da (Vulkan; Direct3D 11 / 12 ve Metal aynı ön yüzle): CMAA 2, FSR AA (FSR 2),
+# FSR AA + NIS, TAA + NIS ve TAA + FSR 2 seçilebilir ve OpenGL'deki gibi çizer. Eskiden Vulkan'da hepsi "kullanılamaz"dı; açılınca FSR 2'nin
+# örnekleyici nesneleri, program arayüzü sorguları ve R16_SNORM / RG16UI dokuları eksik olduğu için Game görünümü kararıyordu. Ölçü: her
+# kipte görüntü kenar yumuşatmasız kareden ancak kenarlarda ayrılır (ortalama fark 1-4.3; kararmış / bozuk kare 30-40: sınır 8)
+wait 40
+gpu expect_aa CMAA available
+gpu expect_aa FSR_AA available
+gpu expect_upscaler NIS available
+gpu expect_upscaler FSR_2 available
+entity move Player -2 0.9 5.5
+focus Game
+play
+wait 30
+script set Player@FirstPersonShooter yaw float 0
+script set Player@FirstPersonShooter pitch float -8
+cvar r.AntiAliasing 0
+wait 40
+game_region 0.0 0.3 0.55 0.95 lum mean >40
+game_region_change mark 0.0 0.3 0.55 0.95
+cvar r.AntiAliasing 11
+wait 60
+game_region_change expect 0.0 0.3 0.55 0.95 <8
+screenshot {work}/vkgl_compute_{matrix}_cmaa.png
+cvar r.AntiAliasing 26
+wait 90
+game_region_change expect 0.0 0.3 0.55 0.95 <8
+screenshot {work}/vkgl_compute_{matrix}_fsraa.png
+cvar r.Upscaler 3
+wait 90
+game_region_change expect 0.0 0.3 0.55 0.95 <8
+screenshot {work}/vkgl_compute_{matrix}_fsraa_nis.png
+cvar r.AntiAliasing 3
+wait 90
+game_region_change expect 0.0 0.3 0.55 0.95 <8
+screenshot {work}/vkgl_compute_{matrix}_taa_nis.png
+cvar r.Upscaler 10
+wait 120
+game_region_change expect 0.0 0.3 0.55 0.95 <8
+screenshot {work}/vkgl_compute_{matrix}_taa_fsr2.png
+cvar r.Upscaler 0
+cvar r.AntiAliasing 0
+script_errors expect 0
+quit

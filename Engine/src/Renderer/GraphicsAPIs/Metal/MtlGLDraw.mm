@@ -636,17 +636,50 @@ fragment ClearOut cq_clear(VSOut i [[stage_in]], constant Params& p [[buffer(0)]
         HelperTriangle(enc, pso, params, nil, false);
     }
 
-    void Draw(GLenum mode, GLint first, GLsizei count, GLsizei instances, bool indexed, GLenum indexType, const void* indices, GLint baseVertex)
+    namespace
+    {
+        // glDraw*Indirect (307): komutlar GL_DRAW_INDIRECT_BUFFER'da (Metal'de sayı arabelleği yok: Count sürümleri bulunmaz)
+        struct IndirectArgs
+        {
+            uint32_t Buffer = 0;
+            int64_t Offset = 0;
+            GLsizei DrawCount = 1;
+            GLsizei Stride = 0;
+        };
+    }
+
+    static void DrawImpl(GLenum mode, GLint first, GLsizei count, GLsizei instances, bool indexed, GLenum indexType, const void* indices, GLint baseVertex,
+                         const IndirectArgs* ind)
     {
         auto& c = Ctx();
         auto& core = Core::Get();
-        if (count <= 0 || instances <= 0)
+        if (!ind && (count <= 0 || instances <= 0))
             return;
         Program* p = GetProgram(c.S.Program);
-        if (!p || !p->Linked)
+        if (!p || !p->Linked || p->IsCompute)
             return;
         if (c.S.CullFace && c.S.CullMode == GL_FRONT_AND_BACK && ToTopologyClass(mode) == MTLPrimitiveTopologyClassTriangle)
             return;
+        // Depolama kaynakları (307): yazılabilir görüntüler yazma kullanımlı dokuya, depolama / dolaylı arabelleklerin bekleyen CPU yazımları
+        // blit ile; ikisi de render kodlayıcısı açılmadan (blit onu kapatırdı)
+        const int imageUnits = (int)c.S.Compute.Images.size();
+        for (const auto& ib : p->Images)
+            if (Texture* t = GetTexture(c.S.Compute.Images[(size_t)std::clamp(ib.Unit, 0, imageUnits - 1)].Texture))
+                if (ib.Writable)
+                    EnsureStorageImage(*t);
+        for (const auto& sb : p->StorageBlocks)
+            if (sb.GLBinding < c.S.Compute.Storage.size())
+                if (Buffer* b = GetBuffer(c.S.Compute.Storage[sb.GLBinding]))
+                {
+                    b->GpuOwned = true;
+                    StorageBuffer(*b);
+                }
+        if (ind)
+            if (Buffer* b = GetBuffer(ind->Buffer))
+            {
+                b->GpuOwned = true;
+                StorageBuffer(*b);
+            }
         if (!EnsureRendering())
             return;
         SyncBound();
@@ -779,6 +812,40 @@ fragment ClearOut cq_clear(VSOut i [[stage_in]], constant Params& p [[buffer(0)]
                 [enc setFragmentSamplerState:smp atIndex:s.SamplerRegister];
                 [enc setVertexSamplerState:smp atIndex:s.SamplerRegister];
             }
+        }
+
+        // Depolama görüntüleri ve blokları (köşe / parça gölgelendiricisi)
+        for (const auto& ib : p->Images)
+        {
+            const GLEmu::ImageUnit& u = c.S.Compute.Images[(size_t)std::clamp(ib.Unit, 0, imageUnits - 1)];
+            Texture* tex = GetTexture(u.Texture);
+            if (!tex || !tex->Image || (ib.Writable && !tex->StorageCapable))
+                return;
+            const int level = std::clamp(u.Level, 0, (int)tex->Levels - 1);
+            id<MTLTexture> view = ImageView(*tex, level, u.Layered ? 0 : u.Layer);
+            [enc setFragmentTexture:view atIndex:ib.Binding];
+            [enc setVertexTexture:view atIndex:ib.Binding];
+            if (ib.Writable)
+                tex->DefinedLevels |= 1u << level;
+        }
+        uint32_t storageSizes[MTL::kConstantBufferBase] = {};
+        for (const auto& sb : p->StorageBlocks)
+        {
+            const uint32_t glb = sb.GLBinding < c.S.Compute.Storage.size() ? sb.GLBinding : 0;
+            Buffer* b = GetBuffer(c.S.Compute.Storage[glb]);
+            if (!b || !b->Storage)
+                return;
+            const uint64_t off = (uint64_t)std::max<int64_t>(c.S.Compute.StorageOffsets[glb], 0);
+            [enc setVertexBuffer:b->Storage offset:off atIndex:sb.Binding];
+            [enc setFragmentBuffer:b->Storage offset:off atIndex:sb.Binding];
+            const uint64_t avail = b->Shadow.size() > off ? b->Shadow.size() - off : 0;
+            if (sb.Binding < MTL::kConstantBufferBase)
+                storageSizes[sb.Binding] = (uint32_t)(c.S.Compute.StorageSizes[glb] > 0 ? std::min<uint64_t>((uint64_t)c.S.Compute.StorageSizes[glb], avail) : avail);
+        }
+        if (p->NeedsBufferSizes)
+        {
+            [enc setVertexBytes:storageSizes length:sizeof(storageSizes) atIndex:MTL::kBufferSizeIndex];
+            [enc setFragmentBytes:storageSizes length:sizeof(storageSizes) atIndex:MTL::kBufferSizeIndex];
         }
 
         // ── Boru hattı durumu ──
@@ -939,6 +1006,38 @@ fragment ClearOut cq_clear(VSOut i [[stage_in]], constant Params& p [[buffer(0)]
 
         OcclusionBeforeDraw(enc);
         const MTLPrimitiveType prim = ToPrimitive(mode);
+        if (ind)
+        {
+            Buffer* cmdBuf = GetBuffer(ind->Buffer);
+            if (!cmdBuf || !cmdBuf->Storage)
+                return;
+            id<MTLBuffer> ib = nil;
+            uint64_t ioff = 0;
+            if (indexed)
+            {
+                Buffer* eb = GetBuffer(vao->ElementBuffer);
+                if (!eb || indexType == GL_UNSIGNED_BYTE)
+                    return;   // 8 bit indeks dolaylı çizimde genişletilemez
+                ib = BufferBinding(*eb, 0, ioff);
+                if (!ib)
+                    return;
+            }
+            // Metal'de çoklu dolaylı çizim yok: komutlar tek tek (bağımsız değişken düzeni GL'inkiyle aynı)
+            for (GLsizei i = 0; i < ind->DrawCount; ++i)
+            {
+                const uint64_t off = (uint64_t)std::max<int64_t>(ind->Offset, 0) + (uint64_t)i * (uint64_t)ind->Stride;
+                if (indexed)
+                    [enc drawIndexedPrimitives:prim
+                                     indexType:indexType == GL_UNSIGNED_SHORT ? MTLIndexTypeUInt16 : MTLIndexTypeUInt32
+                                   indexBuffer:ib
+                             indexBufferOffset:ioff
+                                indirectBuffer:cmdBuf->Storage
+                          indirectBufferOffset:off];
+                else
+                    [enc drawPrimitives:prim indirectBuffer:cmdBuf->Storage indirectBufferOffset:off];
+            }
+            return;
+        }
         if (indexed)
         {
             Buffer* eb = GetBuffer(vao->ElementBuffer);
@@ -975,6 +1074,11 @@ fragment ClearOut cq_clear(VSOut i [[stage_in]], constant Params& p [[buffer(0)]
         }
         else
             [enc drawPrimitives:prim vertexStart:(NSUInteger)first vertexCount:(NSUInteger)count instanceCount:(NSUInteger)instances];
+    }
+
+    void Draw(GLenum mode, GLint first, GLsizei count, GLsizei instances, bool indexed, GLenum indexType, const void* indices, GLint baseVertex)
+    {
+        DrawImpl(mode, first, count, instances, indexed, indexType, indices, baseVertex, nullptr);
     }
 
     void GenerateMipmaps(Texture& t)
@@ -1111,6 +1215,211 @@ fragment ClearOut cq_clear(VSOut i [[stage_in]], constant Params& p [[buffer(0)]
             }
         }
         EndRendering();
+    }
+
+    // ── Hesaplama gölgelendiricisi (307): NIS, CMAA2, FSR 2, ışın izleme, GPU parçacıkları ──
+    // Hesaplama kodlayıcısında: sabit arabellekler [[buffer(16 + yazmaç)]], dokular / örnekleyiciler, depolama görüntüleri (örneklenen dokulardan
+    // sonra) ve blokları [[buffer(0..)]]. Kaynak izleme (varsayılan) kodlayıcılar arası bağımlılıkları sıralar; aynı kodlayıcıdaki ardışık
+    // dispatch'ler seridir
+    void DispatchComputeGL(uint32_t x, uint32_t y, uint32_t z, uint32_t indirectBuffer, int64_t indirectOffset)
+    {
+        auto& c = Ctx();
+        auto& core = Core::Get();
+        Program* p = GetProgram(c.S.Program);
+        if (!p || !p->Linked || !p->IsCompute || !p->ComputePipeline)
+            return;
+        const uint64_t frame = core.FrameSerial();
+        EndRendering();
+        // Blit gerektiren hazırlıklar (doku yükseltmesi, arabellek yüklemesi) hesaplama kodlayıcısı açılmadan
+        const int imageUnits = (int)c.S.Compute.Images.size();
+        for (const auto& ib : p->Images)
+        {
+            Texture* tex = GetTexture(c.S.Compute.Images[(size_t)std::clamp(ib.Unit, 0, imageUnits - 1)].Texture);
+            if (!tex || !tex->Image)
+            {
+                CQ_CORE_WARN("[MtlGL] Compute dispatch skipped: image '{0}' has no texture bound", ib.Name);
+                return;
+            }
+            if (ib.Writable && !EnsureStorageImage(*tex))
+            {
+                CQ_CORE_WARN("[MtlGL] Compute dispatch skipped: texture of format {0} cannot be bound as storage image '{1}'", (int)tex->Format, ib.Name);
+                return;
+            }
+        }
+        for (const auto& sb : p->StorageBlocks)
+        {
+            const uint32_t glb = sb.GLBinding < c.S.Compute.Storage.size() ? sb.GLBinding : 0;
+            Buffer* b = GetBuffer(c.S.Compute.Storage[glb]);
+            if (!b || b->Shadow.empty())
+            {
+                CQ_CORE_WARN("[MtlGL] Compute dispatch skipped: storage block '{0}' (binding {1}) has no buffer", sb.Name, sb.GLBinding);
+                return;
+            }
+            b->GpuOwned = true;
+            if (!StorageBuffer(*b))
+                return;
+        }
+        Buffer* args = indirectBuffer ? GetBuffer(indirectBuffer) : nullptr;
+        if (indirectBuffer)
+        {
+            if (!args)
+                return;
+            args->GpuOwned = true;
+            if (!StorageBuffer(*args))
+                return;
+        }
+        // Sabit arabellekler ve global blok (halka; BufferBinding blit açabilir: kodlayıcıdan önce)
+        struct CB { id<MTLBuffer> Buf; uint64_t Off; uint32_t Index; };
+        std::vector<CB> cbs;
+        for (const auto& blk : p->Blocks)
+        {
+            if (blk.Register >= MTL::kMaxConstantBuffers)
+                continue;
+            const uint32_t glb = blk.GLBinding < 64 ? blk.GLBinding : 0;
+            Buffer* ub = GetBuffer(c.S.UBOBindings[glb]);
+            uint64_t offset = 0;
+            id<MTLBuffer> mb = ub ? BufferBinding(*ub, blk.Size, offset) : nil;
+            if (!mb)
+            {
+                mb = c.ZeroConstants;
+                offset = 0;
+            }
+            cbs.push_back({ mb, offset, MTL::kConstantBufferBase + blk.Register });
+        }
+        if (p->GlobalsRegister >= 0 && p->GlobalsRegister < (int)MTL::kMaxConstantBuffers)
+        {
+            if (p->GlobalsDirty || p->GlobalsFrame != frame || !p->GlobalsBuffer)
+            {
+                MTL::UploadAlloc a = core.AllocUpload(std::max<uint64_t>(p->Globals.size(), 256), 256);
+                if (a.Cpu)
+                {
+                    std::memcpy(a.Cpu, p->Globals.data(), p->Globals.size());
+                    p->GlobalsBuffer = a.Buffer;
+                    p->GlobalsOffset = a.Offset;
+                    p->GlobalsFrame = frame;
+                    p->GlobalsDirty = false;
+                }
+            }
+            if (p->GlobalsBuffer)
+                cbs.push_back({ p->GlobalsBuffer, p->GlobalsOffset, MTL::kConstantBufferBase + (uint32_t)p->GlobalsRegister });
+        }
+
+        id<MTLComputeCommandEncoder> enc = core.Compute();
+        [enc setComputePipelineState:p->ComputePipeline];
+        for (const auto& cb : cbs)
+            [enc setBuffer:cb.Buf offset:cb.Off atIndex:cb.Index];
+        for (const auto& s : p->Samplers)
+        {
+            const Texture* shared = nullptr;
+            for (uint32_t e = 0; e < s.Count; ++e)
+            {
+                const int unit = std::clamp(e < s.Units.size() ? s.Units[e] : 0, 0, 63);
+                const uint32_t texName = s.Target == GL_TEXTURE_CUBE_MAP ? c.S.TexCube[(size_t)unit] :
+                                         s.Target == GL_TEXTURE_2D_MULTISAMPLE ? c.S.Tex2DMS[(size_t)unit] : c.S.Tex2D[(size_t)unit];
+                Texture* tex = GetTexture(texName);
+                if (!tex || !tex->Image || (s.Target == GL_TEXTURE_CUBE_MAP) != (tex->Layers == 6) || tex->Integer != s.Integer)
+                    tex = s.Target == GL_TEXTURE_CUBE_MAP ? c.NullTextureCube : s.Integer ? c.NullTextureInt : c.NullTexture2D;
+                const Texture* params = tex;
+                if (auto so = c.SamplerObjects.find(c.S.Samplers[(size_t)unit]); so != c.SamplerObjects.end() && c.S.Samplers[(size_t)unit])
+                    params = so->second.get();
+                const uint32_t slot = s.Register + e;
+                if (slot < MTL::kMaxTextures)
+                    [enc setTexture:SampleView(*tex) atIndex:slot];
+                if (s.SharedSampler)
+                {
+                    if (!shared && tex != c.NullTexture2D)
+                        shared = params;
+                }
+                else if (slot < MTL::kMaxSamplers)
+                    [enc setSamplerState:GetSampler(*params, tex->Integer, s.Shadow) atIndex:slot];
+            }
+            if (s.SharedSampler && s.SamplerRegister < MTL::kMaxSamplers)
+                [enc setSamplerState:GetSampler(shared ? *shared : *c.NullTexture2D, s.Integer, s.Shadow) atIndex:s.SamplerRegister];
+        }
+        std::vector<std::pair<Texture*, int>> written;
+        for (const auto& ib : p->Images)
+        {
+            const GLEmu::ImageUnit& u = c.S.Compute.Images[(size_t)std::clamp(ib.Unit, 0, imageUnits - 1)];
+            Texture* tex = GetTexture(u.Texture);
+            const int level = std::clamp(u.Level, 0, (int)tex->Levels - 1);
+            [enc setTexture:ImageView(*tex, level, u.Layered ? 0 : u.Layer) atIndex:ib.Binding];
+            if (ib.Writable)
+                written.push_back({ tex, level });
+        }
+        // Depolama blokları ve (.length() kullanan çekirdekte) boyut tablosu: dizin başına bağlanan aralığın bayt boyu
+        uint32_t sizes[MTL::kConstantBufferBase] = {};
+        for (const auto& sb : p->StorageBlocks)
+        {
+            const uint32_t glb = sb.GLBinding < c.S.Compute.Storage.size() ? sb.GLBinding : 0;
+            Buffer* b = GetBuffer(c.S.Compute.Storage[glb]);
+            const uint64_t off = (uint64_t)std::max<int64_t>(c.S.Compute.StorageOffsets[glb], 0);
+            [enc setBuffer:b->Storage offset:off atIndex:sb.Binding];
+            const uint64_t avail = [b->Storage length] > off ? [b->Storage length] - off : 0;
+            const uint64_t range = c.S.Compute.StorageSizes[glb] > 0 ? std::min<uint64_t>((uint64_t)c.S.Compute.StorageSizes[glb], avail)
+                                                                       : std::min<uint64_t>(avail, b->Shadow.size() > off ? b->Shadow.size() - off : 0);
+            if (sb.Binding < MTL::kConstantBufferBase)
+                sizes[sb.Binding] = (uint32_t)range;
+        }
+        if (p->NeedsBufferSizes)
+            [enc setBytes:sizes length:sizeof(sizes) atIndex:MTL::kBufferSizeIndex];
+        const MTLSize group = MTLSizeMake(p->LocalSize[0], p->LocalSize[1], p->LocalSize[2]);
+        if (args)
+            [enc dispatchThreadgroupsWithIndirectBuffer:args->Storage indirectBufferOffset:(NSUInteger)std::max<int64_t>(indirectOffset, 0) threadsPerThreadgroup:group];
+        else
+            [enc dispatchThreadgroups:MTLSizeMake(x, y, z) threadsPerThreadgroup:group];
+        for (auto& [tex, level] : written)
+            tex->DefinedLevels |= 1u << level;
+    }
+
+    void MemoryBarrierGL(GLbitfield) {}   // kaynak izleme sıralar; aynı hesaplama kodlayıcısındaki dispatch'ler seri
+
+    void DrawIndirectGL(GLenum mode, bool indexed, GLenum indexType, uint32_t indirectBuffer, int64_t offset, GLsizei drawCount, GLsizei stride,
+                        uint32_t, int64_t)
+    {
+        IndirectArgs a;
+        a.Buffer = indirectBuffer;
+        a.Offset = offset;
+        a.DrawCount = drawCount;
+        a.Stride = stride;
+        DrawImpl(mode, 0, 1, 1, indexed, indexType, nullptr, 0, &a);
+    }
+
+    // Metal'de dolaylı çizim sayısı (Count) yok: glMulti*IndirectCount bulunmaz, motor CPU yoluna düşer
+    bool BackendSupportsGL(const char* name)
+    {
+        return std::strcmp(name, "glMultiDrawElementsIndirectCount") != 0 && std::strcmp(name, "glMultiDrawArraysIndirectCount") != 0;
+    }
+
+    uint64_t SubmitSerialGL() { return Core::Get().FrameSerial(); }
+
+    bool SerialCompletedGL(uint64_t serial) { return Core::Get().CompletedFrame() >= serial; }
+
+    // GPU'ya ait arabellek paylaşımlı bellekte: komutlar gönderilip beklenir, içerik doğrudan okunur
+    bool ReadBufferGL(Buffer& b, size_t offset, size_t size, void* out)
+    {
+        if (!b.GpuOwned)
+            return false;
+        id<MTLBuffer> s = StorageBuffer(b);
+        if (!s || offset + size > [s length])
+            return false;
+        EndRendering();
+        Core::Get().Flush();
+        std::memcpy(out, (const uint8_t*)[s contents] + offset, size);
+        return true;
+    }
+
+    bool CopyBufferGL(Buffer& src, Buffer& dst, size_t srcOffset, size_t dstOffset, size_t size)
+    {
+        if (!src.GpuOwned && !dst.GpuOwned)
+            return false;
+        src.GpuOwned = dst.GpuOwned = true;
+        id<MTLBuffer> s = StorageBuffer(src);
+        id<MTLBuffer> d = StorageBuffer(dst);
+        if (!s || !d)
+            return false;
+        EndRendering();
+        [Core::Get().Blit() copyFromBuffer:s sourceOffset:srcOffset toBuffer:d destinationOffset:dstOffset size:size];
+        return true;
     }
 
     void BeginFrameResources()

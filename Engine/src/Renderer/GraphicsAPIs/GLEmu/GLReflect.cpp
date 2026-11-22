@@ -36,7 +36,7 @@ namespace Conqueror::GLEmu
             return GLEmu::SplitLargeSamplerArrays(s, kMaxCombinedArray);
         }
 
-        ShaderStage StageOf(GLenum t) { return t == GL_FRAGMENT_SHADER ? ShaderStage::Fragment : ShaderStage::Vertex; }
+        ShaderStage StageOf(GLenum t) { return t == GL_FRAGMENT_SHADER ? ShaderStage::Fragment : t == GL_COMPUTE_SHADER ? ShaderStage::Compute : ShaderStage::Vertex; }
 
         GLenum GLTypeOf(const spirv_cross::SPIRType& t)
         {
@@ -227,15 +227,16 @@ namespace Conqueror::GLEmu
         std::map<ShaderStage, std::string> sources;
         std::map<std::string, int> explicitBindings;
         std::vector<UniformInit> inits;
-        static const std::regex s_LayoutUniform(R"(layout\s*\(([^)]*)\)\s*uniform\s+(?:(?:lowp|mediump|highp)\s+)?\w+\s+(\w+))");
+        static const std::regex s_LayoutUniform(
+            R"(layout\s*\(([^)]*)\)\s*(?:(?:readonly|writeonly|coherent|volatile|restrict)\s+)*uniform\s+(?:(?:readonly|writeonly|coherent|volatile|restrict|lowp|mediump|highp)\s+)*\w+\s+(\w+))");
         static const std::regex s_Binding(R"(binding\s*=\s*(\d+))");
         for (const ShaderSource& sh : shaders)
         {
             if (!sh.Source)
                 continue;
-            if (sh.Type != GL_VERTEX_SHADER && sh.Type != GL_FRAGMENT_SHADER)
+            if (sh.Type != GL_VERTEX_SHADER && sh.Type != GL_FRAGMENT_SHADER && sh.Type != GL_COMPUTE_SHADER)
             {
-                log = std::string("Only vertex and fragment shaders are supported by the ") + limits.ApiName + " backend";
+                log = std::string("Only vertex, fragment and compute shaders are supported by the ") + limits.ApiName + " backend";
                 return false;
             }
             const std::string& src = *sh.Source;
@@ -250,11 +251,18 @@ namespace Conqueror::GLEmu
                     explicitBindings[(*m)[2].str()] = std::stoi(b[1].str());
             }
         }
-        if (!sources.count(ShaderStage::Vertex) || !sources.count(ShaderStage::Fragment))
+        const bool compute = sources.count(ShaderStage::Compute) != 0;
+        if (compute && sources.size() != 1)
+        {
+            log = "A compute program cannot have other shader stages";
+            return false;
+        }
+        if (!compute && (!sources.count(ShaderStage::Vertex) || !sources.count(ShaderStage::Fragment)))
         {
             log = "Program needs a vertex and a fragment shader";
             return false;
         }
+        p.Compute = compute;
         std::map<ShaderStage, std::vector<uint32_t>> spirv;
         std::string errors;
         if (!ShaderCompiler::CompileToSPIRV(sources, "dxgl", spirv, errors, true))
@@ -267,10 +275,11 @@ namespace Conqueror::GLEmu
         struct Pending
         {
             std::string Name;
-            enum Kind { Block, Globals, Combined, Image, Sampler } K = Block;
+            enum Kind { Block, Globals, Combined, Image, Sampler, StorageImage, StorageBuffer } K = Block;
             uint32_t OrigBinding = 0, Size = 0, Count = 1;
             GLenum Target = GL_TEXTURE_2D;
             bool Shadow = false, Integer = false;
+            bool Writable = true;                        // depolama görüntüsü / bloğu readonly değil
         };
         std::vector<Pending> resources;
         auto findRes = [&](const std::string& name) -> int {
@@ -292,6 +301,9 @@ namespace Conqueror::GLEmu
         {
             spirv_cross::Compiler comp(words);
             spirv_cross::ShaderResources res = comp.get_shader_resources();
+            // Depolama görüntüleri / blokları yalnız etkin olanlar (GL'de kullanılmayan blok etkin değildir, bağlanması gerekmez: ortak ışın
+            // izleme başlığını içeren ama Tris'i okumayan ortalama gölgelendiricisi gibi)
+            const spirv_cross::ShaderResources activeRes = comp.get_shader_resources(comp.get_active_interface_variables());
             for (const auto& ub : res.uniform_buffers)
             {
                 const auto& type = comp.get_type(ub.base_type_id);
@@ -343,6 +355,44 @@ namespace Conqueror::GLEmu
                 addImage(si, Pending::Image);
             for (const auto& si : res.separate_samplers)
                 addImage(si, Pending::Sampler);
+            // Depolama görüntüleri ve blokları (yalnız hesaplama programında)
+            for (const auto& si : activeRes.storage_images)
+            {
+                int idx = findRes(si.name);
+                if (idx < 0)
+                {
+                    Pending pr;
+                    pr.Name = si.name;
+                    pr.K = Pending::StorageImage;
+                    pr.OrigBinding = comp.get_decoration(si.id, spv::DecorationBinding);
+                    imageInfo(comp, comp.get_type(si.type_id), pr);
+                    pr.Writable = !comp.has_decoration(si.id, spv::DecorationNonWritable);
+                    resources.push_back(pr);
+                    idx = (int)resources.size() - 1;
+                }
+                stageIdToRes[stage][si.id] = idx;
+            }
+            for (const auto& sb : activeRes.storage_buffers)
+            {
+                std::string blockName = comp.get_name(sb.base_type_id);
+                if (blockName.empty())
+                    blockName = sb.name;
+                int idx = findRes(blockName);
+                if (idx < 0)
+                {
+                    Pending pr;
+                    pr.Name = blockName;
+                    pr.K = Pending::StorageBuffer;
+                    pr.OrigBinding = comp.get_decoration(sb.id, spv::DecorationBinding);
+                    pr.Writable = !comp.get_buffer_block_flags(sb.id).get(spv::DecorationNonWritable);
+                    resources.push_back(pr);
+                    idx = (int)resources.size() - 1;
+                }
+                stageIdToRes[stage][sb.id] = idx;
+            }
+            if (stage == ShaderStage::Compute)
+                for (uint32_t k = 0; k < 3; ++k)
+                    p.LocalSize[k] = std::max(1u, comp.get_execution_mode_argument(spv::ExecutionModeLocalSize, k));
             if (stage == ShaderStage::Vertex)
             {
                 for (const auto& in : res.stage_inputs)
@@ -413,6 +463,53 @@ namespace Conqueror::GLEmu
             else if (resources[i].K == Pending::Sampler)
                 finalBinding[i] = nextS++;
         }
+        p.TextureRegisters = nextT;
+        // Depolama görüntüleri / blokları: salt okunur olanlar kaynak görünümü (t#: Texture2D / ByteAddressBuffer; D3D11'de RGBA16F gibi
+        // biçimlerden UAV okuması isteğe bağlıdır), yazılabilirler UAV (u#). Hesaplamada u0'dan; çizimde D3D11 UAV yuvaları renk hedefleriyle
+        // ortak olduğundan en üstteki yuvalardan (limits.UnorderedAccess - sayı)
+        uint32_t uavCount = 0;
+        for (const auto& r : resources)
+            if ((r.K == Pending::StorageImage || r.K == Pending::StorageBuffer) && r.Writable)
+                ++uavCount;
+        uint32_t nextU = compute ? 0u : (uavCount <= limits.UnorderedAccess ? limits.UnorderedAccess - uavCount : 0u);
+        for (int pass = 0; pass < 2; ++pass)
+            for (size_t i = 0; i < resources.size(); ++i)
+            {
+                const auto& r = resources[i];
+                if (pass == 0 && r.K == Pending::StorageImage)
+                {
+                    ImageBinding ib;
+                    ib.Name = r.Name;
+                    ib.SRV = !r.Writable;
+                    ib.Binding = ib.SRV ? nextT++ : nextU++;
+                    finalBinding[i] = ib.Binding;
+                    ib.Integer = r.Integer;
+                    ib.Writable = r.Writable;
+                    if (auto eb = explicitBindings.find(r.Name); eb != explicitBindings.end())
+                        ib.Unit = eb->second;
+                    p.Images.push_back(ib);
+                    UniformSlot slot;
+                    slot.Image = (int)p.Images.size() - 1;
+                    slot.Type = r.Integer ? GL_UNSIGNED_INT_IMAGE_2D : GL_IMAGE_2D;
+                    AddSlot(p, r.Name, slot);
+                }
+                else if (pass == 1 && r.K == Pending::StorageBuffer)
+                {
+                    StorageBlockBinding sb;
+                    sb.Name = r.Name;
+                    sb.SRV = !r.Writable;
+                    sb.Binding = sb.SRV ? nextT++ : nextU++;
+                    finalBinding[i] = sb.Binding;
+                    sb.GLBinding = r.OrigBinding;
+                    sb.Writable = r.Writable;
+                    p.StorageBlocks.push_back(sb);
+                }
+            }
+        if (uavCount > limits.UnorderedAccess)
+        {
+            log = std::string("Shader exceeds ") + limits.ApiName + " resource limits (" + std::to_string(uavCount) + " writable storage images / buffers)";
+            return false;
+        }
         if (nextB > limits.ConstantBuffers || nextS > limits.Samplers || nextT > limits.Resources)
         {
             log = std::string("Shader exceeds ") + limits.ApiName + " resource limits (" + std::to_string(nextB) + " cbuffers, " + std::to_string(nextT) +
@@ -472,8 +569,13 @@ namespace Conqueror::GLEmu
                 remap[rid] = finalBinding[(size_t)resIdx];
             PatchBindings(words, remap);
         }
-        p.VertexSpirv = std::move(spirv[ShaderStage::Vertex]);
-        p.FragmentSpirv = std::move(spirv[ShaderStage::Fragment]);
+        if (compute)
+            p.ComputeSpirv = std::move(spirv[ShaderStage::Compute]);
+        else
+        {
+            p.VertexSpirv = std::move(spirv[ShaderStage::Vertex]);
+            p.FragmentSpirv = std::move(spirv[ShaderStage::Fragment]);
+        }
         p.Globals.assign((std::max<uint32_t>(p.GlobalsSize, 16) + 15) & ~15u, 0);
         ApplyUniformInitializers(p, inits);
         return true;

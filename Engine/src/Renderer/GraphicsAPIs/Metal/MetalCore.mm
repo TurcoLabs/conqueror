@@ -163,6 +163,15 @@ namespace Conqueror::MTL
         }
     }
 
+    bool Core::SupportsTextureAtomics() const
+    {
+        if (!m_Device)
+            return false;
+        if (@available(macOS 14.0, iOS 17.0, tvOS 17.0, *))
+            return [m_Device supportsFamily:MTLGPUFamilyMetal3];
+        return false;
+    }
+
     id<MTLCommandBuffer> Core::CommandBuffer()
     {
         if (!m_Command)
@@ -183,6 +192,11 @@ namespace Conqueror::MTL
             [m_Blit endEncoding];
             m_Blit = nil;
         }
+        if (m_Compute)
+        {
+            [m_Compute endEncoding];
+            m_Compute = nil;
+        }
     }
 
     id<MTLRenderCommandEncoder> Core::BeginRender(MTLRenderPassDescriptor* pass)
@@ -199,6 +213,16 @@ namespace Conqueror::MTL
         EndEncoding();
         m_Blit = [CommandBuffer() blitCommandEncoder];
         return m_Blit;
+    }
+
+    // Hesaplama kodlayıcısı (307): ardışık dispatch'ler aynı kodlayıcıda (seri dağıtım: biri yazdığını sonraki görür)
+    id<MTLComputeCommandEncoder> Core::Compute()
+    {
+        if (m_Compute)
+            return m_Compute;
+        EndEncoding();
+        m_Compute = [CommandBuffer() computeCommandEncoder];
+        return m_Compute;
     }
 
     void Core::Flush()

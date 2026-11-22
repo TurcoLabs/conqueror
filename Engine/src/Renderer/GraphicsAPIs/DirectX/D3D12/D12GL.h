@@ -51,6 +51,10 @@ namespace Conqueror::D12GL
         int SRVLevels = 0;
         std::unordered_map<uint32_t, CpuDescriptor> RTVs;   // düzey | katman << 8
         std::unordered_map<uint32_t, CpuDescriptor> DSVs;
+        // Hesaplama (307): depolama görüntüsü olarak bağlanınca ALLOW_UNORDERED_ACCESS ile yeniden oluşturulur
+        bool StorageCapable = false;
+        std::unordered_map<uint32_t, CpuDescriptor> UAVs;        // düzey | katman << 8
+        std::unordered_map<uint32_t, CpuDescriptor> LevelSRVs;
         // Örnekleyici parametreleri (ön yüz yazar)
         GLenum MinFilter = GL_NEAREST_MIPMAP_LINEAR, MagFilter = GL_LINEAR;
         GLenum WrapS = GL_REPEAT, WrapT = GL_REPEAT, WrapR = GL_REPEAT;
@@ -63,6 +67,7 @@ namespace Conqueror::D12GL
     struct Buffer
     {
         std::vector<uint8_t> Shadow;
+        size_t DirtyBegin = SIZE_MAX, DirtyEnd = 0;  // CPU'nun yazdığı aralık (GPU'ya ait arabellekte yalnız bu yüklenir, 307)
         GLenum Usage = GL_STATIC_DRAW;
         bool Dirty = true;
         size_t HighWater = 0;
@@ -81,6 +86,12 @@ namespace Conqueror::D12GL
         uint64_t WriteFrame = 0;
         uint32_t WritesThisFrame = 0;
         uint32_t RingFrames = 0;                         // ardışık halka kullanılan kare sayısı
+        // Hesaplama (307): depolama / dolaylı arabellek olarak bağlanınca içerik GPU'daki UAV'li varsayılan yığın arabelleğindedir
+        bool GpuOwned = false;
+        ID3D12Resource* Storage = nullptr;
+        uint64_t StorageSize = 0;
+        D3D12_RESOURCE_STATES StorageState = D3D12_RESOURCE_STATE_COMMON;
+        std::unordered_map<uint64_t, CpuDescriptor> StorageUAVs, StorageSRVs;
     };
 
     struct Attachment
@@ -140,9 +151,16 @@ namespace Conqueror::D12GL
     {
         uint64_t Id = 0;
         std::vector<uint32_t> Shaders;
+        // Hesaplama gölgelendiricisi (307): görüntü uniform'ları ve depolama blokları; IsCompute ise köşe / parça aşaması yok
+        bool IsCompute = false;
+        uint32_t LocalSize[3] = { 1, 1, 1 };
+        std::vector<GLEmu::ImageBinding> Images;
+        std::vector<GLEmu::StorageBlockBinding> StorageBlocks;
         bool Linked = false;
         std::string Log;
         std::vector<uint8_t> VS, PS;                     // DXBC
+        std::vector<uint8_t> CS;
+        ID3D12PipelineState* ComputePSO = nullptr;      // hesaplama programı (307)
         int GlobalsRegister = -1;
         uint32_t GlobalsSize = 0;
         std::vector<uint8_t> Globals;
@@ -171,6 +189,7 @@ namespace Conqueror::D12GL
 
     struct State
     {
+        GLEmu::ComputeBindings Compute;     // glBindImageTexture / depolama arabelleği / dolaylı dispatch (307)
         bool Blend = false, DepthTest = false, CullFace = false, ScissorTest = false, StencilTest = false;
         bool PolygonOffsetFill = false, PrimitiveRestart = false;
         GLenum BlendSrcRGB = GL_ONE, BlendDstRGB = GL_ZERO, BlendSrcA = GL_ONE, BlendDstA = GL_ZERO;
@@ -221,6 +240,7 @@ namespace Conqueror::D12GL
         std::unordered_map<uint32_t, std::unique_ptr<ShaderObject>> ShaderObjects;
         std::unordered_map<uint32_t, std::unique_ptr<Program>> Programs;
         std::unordered_map<uint32_t, std::unique_ptr<Texture>> SamplerObjects;
+        uint32_t NextSamplerName = 1;           // glGenSamplers / glCreateSamplers
         std::unordered_map<uint32_t, QueryObject> QueryObjects;
         uint32_t NextName = 1;
         uint64_t NextProgramId = 1;
@@ -251,6 +271,8 @@ namespace Conqueror::D12GL
         std::unordered_map<uint64_t, ID3D12PipelineState*> Pipelines;
         std::unordered_map<uint64_t, CpuDescriptor> SamplerCache;
         CpuDescriptor NullSRV;                           // kullanılmayan tablo yuvaları
+        CpuDescriptor NullUAV;                           // kullanılmayan UAV yuvaları (307)
+        std::unordered_map<uint64_t, ID3D12CommandSignature*> CommandSignatures;   // ExecuteIndirect: tür | adım << 8
         CpuDescriptor NullRTV;                           // boş renk yuvası (biçim R8G8B8A8)
         CpuDescriptor NullSampler;
         ID3D12Resource* NullVertexBuffer = nullptr;      // kapalı öznitelik: (0,0,0,1)
@@ -317,7 +339,28 @@ namespace Conqueror::D12GL
     void Draw(GLenum mode, GLint first, GLsizei count, GLsizei instances, bool indexed, GLenum indexType, const void* indices, GLint baseVertex);
     void ClearCurrent(GLbitfield mask);
 
+    // Hesaplama (307)
+    bool EnsureStorageImage(Texture& t);
+    D3D12_CPU_DESCRIPTOR_HANDLE GetUAV(Texture& t, int level, int layer);
+    D3D12_CPU_DESCRIPTOR_HANDLE GetLevelSRV(Texture& t, int level, int layer);
+    ID3D12Resource* StorageBuffer(Buffer& b);
+    void TransitionStorage(Buffer& b, D3D12_RESOURCE_STATES state);
+    D3D12_CPU_DESCRIPTOR_HANDLE StorageUAV(Buffer& b, size_t offset, size_t size);
+    D3D12_CPU_DESCRIPTOR_HANDLE StorageSRV(Buffer& b, size_t offset, size_t size);
     bool LinkProgram(Program& p);
+    // Hesaplama gölgelendiricisi (307): geçerli program IsCompute ise dispatch (indirectBuffer 0: doğrudan x / y / z; değilse o arabellekte
+    // indirectOffset'teki üç uint), glMemoryBarrier
+    void DispatchComputeGL(uint32_t x, uint32_t y, uint32_t z, uint32_t indirectBuffer, int64_t indirectOffset);
+    void MemoryBarrierGL(GLbitfield barriers);
+    // 307: GPU'ya ait arabellek (hesaplama gölgelendiricisinin yazdığı) kopyası / geri okuması (false: ön yüz gölge kopyayı kullanır),
+    // glFenceSync gönderim sayacı, dolaylı çizim ve katmanın sağlamadığı GL işlevleri (GetProcAddress boş döner)
+    bool CopyBufferGL(Buffer& src, Buffer& dst, size_t srcOffset, size_t dstOffset, size_t size);
+    bool ReadBufferGL(Buffer& b, size_t offset, size_t size, void* out);
+    uint64_t SubmitSerialGL();
+    bool SerialCompletedGL(uint64_t serial);
+    void DrawIndirectGL(GLenum mode, bool indexed, GLenum indexType, uint32_t indirectBuffer, int64_t offset, GLsizei drawCount, GLsizei stride,
+                        uint32_t countBuffer, int64_t countOffset);
+    bool BackendSupportsGL(const char* name);
     void DestroyProgram(Program& p);
     UniformSlot* FindUniform(Program& p, GLint location);
 

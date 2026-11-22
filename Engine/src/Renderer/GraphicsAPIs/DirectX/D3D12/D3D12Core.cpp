@@ -233,7 +233,7 @@ namespace Conqueror::DX12
         m_Queue->GetTimestampFrequency(&m_TimestampFrequency);
 
         // Kök imzası: b0..b11 kök CBV, SRV tablosu t0..t63, örnekleyici tablosu s0..s15
-        D3D12_ROOT_PARAMETER params[kRootCBVs + 2] = {};
+        D3D12_ROOT_PARAMETER params[kRootCBVs + 3] = {};
         for (uint32_t i = 0; i < kRootCBVs; ++i)
         {
             params[i].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
@@ -248,8 +248,14 @@ namespace Conqueror::DX12
         params[kRootSamplerTable].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
         params[kRootSamplerTable].DescriptorTable = { 1, &smpRange };
         params[kRootSamplerTable].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+        // UAV tablosu u0..u7 (307): hesaplama gölgelendiricisi ve parça gölgelendiricisinin depolama yazımları; aynı kök imzası hesaplama
+        // listesine de bağlanır (SetComputeRootSignature)
+        D3D12_DESCRIPTOR_RANGE uavRange{ D3D12_DESCRIPTOR_RANGE_TYPE_UAV, kMaxUAVs, 0, 0, 0 };
+        params[kRootUAVTable].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        params[kRootUAVTable].DescriptorTable = { 1, &uavRange };
+        params[kRootUAVTable].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
         D3D12_ROOT_SIGNATURE_DESC rsd{};
-        rsd.NumParameters = kRootCBVs + 2;
+        rsd.NumParameters = kRootCBVs + 3;
         rsd.pParameters = params;
         rsd.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
         ID3DBlob* blob = nullptr;
@@ -414,6 +420,7 @@ namespace Conqueror::DX12
         ID3D12DescriptorHeap* heaps[] = { m_ShaderHeap, m_SamplerHeap };
         m_List->SetDescriptorHeaps(2, heaps);
         m_List->SetGraphicsRootSignature(m_RootSignature);
+        m_List->SetComputeRootSignature(m_RootSignature);
     }
 
     void Core::Submit()

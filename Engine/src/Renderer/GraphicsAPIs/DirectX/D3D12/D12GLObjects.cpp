@@ -128,6 +128,13 @@ namespace Conqueror::D12GL
             core.Pool(D3D12_DESCRIPTOR_HEAP_TYPE_DSV).Free(v);
         t.RTVs.clear();
         t.DSVs.clear();
+        for (auto& [k, v] : t.UAVs)
+            core.Pool(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV).Free(v);
+        for (auto& [k, v] : t.LevelSRVs)
+            core.Pool(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV).Free(v);
+        t.UAVs.clear();
+        t.LevelSRVs.clear();
+        t.StorageCapable = false;
         DeferRelease(t.Image);
         t.State = D3D12_RESOURCE_STATE_COMMON;
         t.SRVLevels = 0;
@@ -550,6 +557,16 @@ namespace Conqueror::D12GL
     D3D12_GPU_VIRTUAL_ADDRESS BufferAddress(Buffer& b, uint64_t minSize, uint64_t* size)
     {
         auto& core = Core::Get();
+        if (b.GpuOwned)
+        {
+            // GPU'ya ait arabellek köşe / indeks / sabit arabellek olarak: GPU'daki içerik (okuma durumunda)
+            if (!StorageBuffer(b))
+                return 0;
+            TransitionStorage(b, D3D12_RESOURCE_STATE_GENERIC_READ);
+            if (size)
+                *size = b.StorageSize;
+            return b.Storage->GetGPUVirtualAddress();
+        }
         const uint64_t frame = core.FrameSerial();
         if (b.Dirty)
         {
@@ -628,6 +645,16 @@ namespace Conqueror::D12GL
 
     void ReleaseBuffer(Buffer& b)
     {
+        auto& pool = Core::Get().Pool(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        for (auto& [k, v] : b.StorageUAVs)
+            pool.Free(v);
+        for (auto& [k, v] : b.StorageSRVs)
+            pool.Free(v);
+        b.StorageUAVs.clear();
+        b.StorageSRVs.clear();
+        DeferRelease(b.Storage);
+        b.StorageSize = 0;
+        b.StorageState = D3D12_RESOURCE_STATE_COMMON;
         DeferRelease(b.Dedicated);
         b.DedicatedSize = 0;
         b.DedicatedState = D3D12_RESOURCE_STATE_COMMON;
@@ -635,6 +662,206 @@ namespace Conqueror::D12GL
         b.GpuAddress = 0;
         b.GpuSize = 0;
         b.GpuIsRing = false;
+    }
+
+    // ── Hesaplama (307): depolama görüntüleri ve GPU'ya ait arabellekler ──
+    // glBindImageTexture: doku ALLOW_UNORDERED_ACCESS bayrağıyla yeniden oluşturulup içeriği kopyalanır (her hedefe baştan konmaz)
+    bool EnsureStorageImage(Texture& t)
+    {
+        if (!t.Image)
+            return false;
+        if (t.StorageCapable)
+            return true;
+        if (t.Depth || t.Samples > 1 || !(FormatSupport(t.RTVFormat) & D3D12_FORMAT_SUPPORT1_TYPED_UNORDERED_ACCESS_VIEW))
+            return false;
+        auto& core = Core::Get();
+        D3D12_RESOURCE_DESC desc = t.Image->GetDesc();
+        desc.Flags |= D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+        const D3D12_HEAP_PROPERTIES hp = HeapProps(D3D12_HEAP_TYPE_DEFAULT);
+        ID3D12Resource* img = nullptr;
+        if (FAILED(core.Device()->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, __uuidof(ID3D12Resource),
+                                                         (void**)&img)) || !img)
+            return false;
+        Transition(t, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        core.List()->CopyResource(img, t.Image);
+        const uint32_t defined = t.DefinedLevels;
+        DestroyTextureImage(t);
+        t.Image = img;
+        t.State = D3D12_RESOURCE_STATE_COPY_DEST;
+        t.DefinedLevels = defined;
+        t.Renderable = (desc.Flags & D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET) != 0;
+        t.StorageCapable = true;
+        return true;
+    }
+
+    D3D12_CPU_DESCRIPTOR_HANDLE GetUAV(Texture& t, int level, int layer)
+    {
+        auto& c = Ctx();
+        if (!t.Image || !t.StorageCapable)
+            return c.NullUAV.Handle;
+        const uint32_t key = (uint32_t)level | ((uint32_t)layer << 8);
+        if (auto it = t.UAVs.find(key); it != t.UAVs.end())
+            return it->second.Handle;
+        CpuDescriptor d = Core::Get().Pool(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV).Allocate();
+        if (!d.Valid())
+            return c.NullUAV.Handle;
+        D3D12_UNORDERED_ACCESS_VIEW_DESC vd{};
+        vd.Format = t.RTVFormat;
+        if (t.Layers > 1)
+        {
+            vd.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2DARRAY;
+            vd.Texture2DArray.MipSlice = (UINT)level;
+            vd.Texture2DArray.FirstArraySlice = (UINT)layer;
+            vd.Texture2DArray.ArraySize = 1;
+        }
+        else
+        {
+            vd.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+            vd.Texture2D.MipSlice = (UINT)level;
+        }
+        Core::Get().Device()->CreateUnorderedAccessView(t.Image, nullptr, &vd, d.Handle);
+        t.UAVs[key] = d;
+        return d.Handle;
+    }
+
+    // Salt okunur depolama görüntüsü (imageLoad -> Texture2D.Load): tek düzeyli kaynak görünümü
+    D3D12_CPU_DESCRIPTOR_HANDLE GetLevelSRV(Texture& t, int level, int layer)
+    {
+        if (!t.Image)
+            return Ctx().NullSRV.Handle;
+        const uint32_t key = (uint32_t)level | ((uint32_t)layer << 8);
+        if (auto it = t.LevelSRVs.find(key); it != t.LevelSRVs.end())
+            return it->second.Handle;
+        CpuDescriptor d = CreateSRV(t, level, 1, t.Layers > 1 ? layer : -1);
+        if (!d.Valid())
+            return Ctx().NullSRV.Handle;
+        t.LevelSRVs[key] = d;
+        return d.Handle;
+    }
+
+    // GPU'ya ait arabellek: varsayılan yığında, ALLOW_UNORDERED_ACCESS; oluşturulurken gölgenin tamamı, sonra yalnız CPU'nun yazdığı aralık
+    // komut listesinde kopyalanır (GPU'nun yazdığı kısım korunur)
+    ID3D12Resource* StorageBuffer(Buffer& b)
+    {
+        auto& core = Core::Get();
+        const uint64_t size = AlignUp(std::max<uint64_t>(b.Shadow.size(), 16), 256);
+        auto upload = [&](uint64_t from, uint64_t to) {
+            if (to <= from)
+                return;
+            DX12::UploadAlloc a = core.AllocUpload(to - from, 256);
+            if (!a.Cpu)
+                return;
+            std::memset(a.Cpu, 0, (size_t)(to - from));
+            if (from < b.Shadow.size())
+                std::memcpy(a.Cpu, b.Shadow.data() + from, (size_t)(std::min<uint64_t>(to, b.Shadow.size()) - from));
+            TransitionStorage(b, D3D12_RESOURCE_STATE_COPY_DEST);
+            core.List()->CopyBufferRegion(b.Storage, from, a.Resource, a.Offset, to - from);
+        };
+        if (!b.Storage || b.StorageSize < size)
+        {
+            auto& pool = core.Pool(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+            for (auto& [k, v] : b.StorageUAVs)
+                pool.Free(v);
+            for (auto& [k, v] : b.StorageSRVs)
+                pool.Free(v);
+            b.StorageUAVs.clear();
+            b.StorageSRVs.clear();
+            DeferRelease(b.Storage);
+            const D3D12_HEAP_PROPERTIES hp = HeapProps(D3D12_HEAP_TYPE_DEFAULT);
+            D3D12_RESOURCE_DESC rd = BufferDesc(size);
+            rd.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+            if (FAILED(core.Device()->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, __uuidof(ID3D12Resource),
+                                                             (void**)&b.Storage)) || !b.Storage)
+            {
+                CQ_CORE_ERROR("[D12GL] Cannot create a {0} byte storage buffer", size);
+                b.Storage = nullptr;
+                b.StorageSize = 0;
+                return nullptr;
+            }
+            b.StorageSize = size;
+            b.StorageState = D3D12_RESOURCE_STATE_COPY_DEST;
+            upload(0, size);
+        }
+        else if (b.Dirty && b.DirtyBegin < b.DirtyEnd && b.DirtyBegin < b.Shadow.size())
+            upload(b.DirtyBegin, std::min<uint64_t>(b.DirtyEnd, b.Shadow.size()));
+        b.Dirty = false;
+        b.DirtyBegin = SIZE_MAX;
+        b.DirtyEnd = 0;
+        return b.Storage;
+    }
+
+    // Durum geçişi; UAV -> UAV ardışık erişimlerde UAV bariyeri (bir dispatch'in yazdığını sonraki görsün)
+    void TransitionStorage(Buffer& b, D3D12_RESOURCE_STATES state)
+    {
+        if (!b.Storage)
+            return;
+        auto& core = Core::Get();
+        if (b.StorageState == state)
+        {
+            if (state == D3D12_RESOURCE_STATE_UNORDERED_ACCESS)
+            {
+                D3D12_RESOURCE_BARRIER bar{};
+                bar.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+                bar.UAV.pResource = b.Storage;
+                core.List()->ResourceBarrier(1, &bar);
+            }
+            return;
+        }
+        core.Barrier(b.Storage, b.StorageState, state);
+        b.StorageState = state;
+    }
+
+    D3D12_CPU_DESCRIPTOR_HANDLE StorageUAV(Buffer& b, size_t offset, size_t size)
+    {
+        auto& c = Ctx();
+        if (!StorageBuffer(b))
+            return c.NullUAV.Handle;
+        offset &= ~(size_t)3;
+        size = (size_t)std::min<uint64_t>(size, b.StorageSize - std::min<uint64_t>(offset, b.StorageSize)) & ~(size_t)3;
+        if (size == 0)
+            return c.NullUAV.Handle;
+        const uint64_t key = ((uint64_t)offset << 32) | (uint64_t)size;
+        if (auto it = b.StorageUAVs.find(key); it != b.StorageUAVs.end())
+            return it->second.Handle;
+        CpuDescriptor d = Core::Get().Pool(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV).Allocate();
+        if (!d.Valid())
+            return c.NullUAV.Handle;
+        D3D12_UNORDERED_ACCESS_VIEW_DESC vd{};
+        vd.Format = DXGI_FORMAT_R32_TYPELESS;
+        vd.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+        vd.Buffer.FirstElement = offset / 4;
+        vd.Buffer.NumElements = (UINT)(size / 4);
+        vd.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_RAW;
+        Core::Get().Device()->CreateUnorderedAccessView(b.Storage, nullptr, &vd, d.Handle);
+        b.StorageUAVs[key] = d;
+        return d.Handle;
+    }
+
+    D3D12_CPU_DESCRIPTOR_HANDLE StorageSRV(Buffer& b, size_t offset, size_t size)
+    {
+        auto& c = Ctx();
+        if (!StorageBuffer(b))
+            return c.NullSRV.Handle;
+        offset &= ~(size_t)3;
+        size = (size_t)std::min<uint64_t>(size, b.StorageSize - std::min<uint64_t>(offset, b.StorageSize)) & ~(size_t)3;
+        if (size == 0)
+            return c.NullSRV.Handle;
+        const uint64_t key = ((uint64_t)offset << 32) | (uint64_t)size;
+        if (auto it = b.StorageSRVs.find(key); it != b.StorageSRVs.end())
+            return it->second.Handle;
+        CpuDescriptor d = Core::Get().Pool(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV).Allocate();
+        if (!d.Valid())
+            return c.NullSRV.Handle;
+        D3D12_SHADER_RESOURCE_VIEW_DESC vd{};
+        vd.Format = DXGI_FORMAT_R32_TYPELESS;
+        vd.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+        vd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        vd.Buffer.FirstElement = offset / 4;
+        vd.Buffer.NumElements = (UINT)(size / 4);
+        vd.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_RAW;
+        Core::Get().Device()->CreateShaderResourceView(b.Storage, &vd, d.Handle);
+        b.StorageSRVs[key] = d;
+        return d.Handle;
     }
 }
 

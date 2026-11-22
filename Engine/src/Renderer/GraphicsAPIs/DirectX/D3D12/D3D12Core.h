@@ -27,6 +27,8 @@ namespace Conqueror::DX12
     constexpr uint32_t kMaxSamplers = 16;
     constexpr uint32_t kRootSRVTable = kRootCBVs;
     constexpr uint32_t kRootSamplerTable = kRootCBVs + 1;
+    constexpr uint32_t kMaxUAVs = 8;                     // hesaplama / parça gölgelendiricisi depolama görüntüleri ve blokları (307)
+    constexpr uint32_t kRootUAVTable = kRootCBVs + 2;
 
     constexpr uint32_t kFrames = 3;
 

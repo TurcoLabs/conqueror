@@ -65,6 +65,8 @@ namespace Conqueror::VkGL
         core.DeferDelete([dev, buf, mem]() { vkDestroyBuffer(dev, buf, nullptr); vkFreeMemory(dev, mem, nullptr); });
         b.Dedicated = VK_NULL_HANDLE;
         b.Memory = VK_NULL_HANDLE;
+        b.Mapped = nullptr;
+        b.GpuResident = false;
     }
 
     void WriteTimestamp(QueryObject& q)
@@ -188,6 +190,11 @@ namespace Conqueror::VkGL
                      std::to_string(VK_API_VERSION_MINOR(props.apiVersion)) + "." + std::to_string(VK_API_VERSION_PATCH(props.apiVersion)) + ")";
         c.Version = "4.6.0 Conqueror VkGL";
         c.Extensions = { "GL_ARB_clip_control", "GL_ARB_direct_state_access", "GL_ARB_texture_storage" };
+        // 307: hesaplama gölgelendiricisi (NIS, CMAA2, FSR 2)
+        s_Limits.Compute = true;
+        for (const char* e : { "GL_ARB_compute_shader", "GL_ARB_shader_image_load_store", "GL_ARB_shader_storage_buffer_object",
+                               "GL_CQ_image_atomics" })
+            c.Extensions.push_back(e);
         if (core.Features().samplerAnisotropy)
         {
             c.Extensions.push_back("GL_ARB_texture_filter_anisotropic");

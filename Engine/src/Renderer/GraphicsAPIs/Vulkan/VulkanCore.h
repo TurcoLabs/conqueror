@@ -46,6 +46,8 @@ namespace Conqueror::VK
         PFN_vkCmdSetStencilOp CmdSetStencilOp = nullptr;
         PFN_vkCmdSetDepthBiasEnable CmdSetDepthBiasEnable = nullptr;   // yoksa boru hattına gömülür
         PFN_vkResetQueryPool ResetQueryPool = nullptr;
+        PFN_vkCmdDrawIndirectCount CmdDrawIndirectCount = nullptr;                 // 1.2 / VK_KHR_draw_indirect_count (307)
+        PFN_vkCmdDrawIndexedIndirectCount CmdDrawIndexedIndirectCount = nullptr;
     };
     extern Dispatch g_Fn;
 
@@ -111,6 +113,8 @@ namespace Conqueror::VK
         VkPipelineCache PipelineCache() const { return m_PipelineCache; }
         uint32_t ApiVersion() const { return m_ApiVersion; }
         bool HasDynamicDepthBiasEnable() const { return g_Fn.CmdSetDepthBiasEnable != nullptr; }
+        bool HasDrawIndirectCount() const { return m_DrawIndirectCount && g_Fn.CmdDrawIndexedIndirectCount && g_Fn.CmdDrawIndirectCount; }
+        bool IsInFrame() const { return m_InFrame; }
         bool IsPortability() const { return m_Portability; }
 
 
@@ -131,6 +135,7 @@ namespace Conqueror::VK
         VkPhysicalDeviceProperties m_Props{};
         VkPhysicalDeviceMemoryProperties m_MemProps{};
         VkPhysicalDeviceFeatures m_EnabledFeatures{};
+        bool m_DrawIndirectCount = false;
         VkFormat m_DepthStencilFormat = VK_FORMAT_D32_SFLOAT_S8_UINT;
         uint32_t m_ApiVersion = 0;
         bool m_Portability = false;

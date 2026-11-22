@@ -466,17 +466,59 @@ float4 PSColorArray(VSOut i) : SV_Target { return g_SrcArr.SampleLevel(g_Smp, fl
             ctx->ClearDepthStencilView(c.BoundDSV, flags, std::clamp(c.S.ClearDepth, 0.0f, 1.0f), (UINT8)c.S.ClearStencil);
     }
 
-    void Draw(GLenum mode, GLint first, GLsizei count, GLsizei instances, bool indexed, GLenum indexType, const void* indices, GLint baseVertex)
+    namespace
+    {
+        // glDraw*Indirect (307)
+        struct IndirectArgs
+        {
+            uint32_t Buffer = 0;
+            int64_t Offset = 0;
+            GLsizei DrawCount = 1;
+            GLsizei Stride = 0;
+        };
+
+        // Çizimin UAV'leri (parça gölgelendiricisinin yazdığı depolama görüntüsü / bloğu): renk hedeflerinden sonraki yuvalara bağlanır,
+        // çizimden sonra çözülür (sonraki geçişler aynı kaynağı SRV / hedef olarak kullanabilsin)
+        struct PixelUAVBinding
+        {
+            UINT Start = 0, Count = 0;
+            ~PixelUAVBinding()
+            {
+                if (!Count)
+                    return;
+                ID3D11UnorderedAccessView* nulls[D3D11_PS_CS_UAV_REGISTER_COUNT] = {};
+                Core::Get().Context()->OMSetRenderTargetsAndUnorderedAccessViews(D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL, nullptr, nullptr, Start, Count,
+                                                                                 nulls, nullptr);
+            }
+        };
+    }
+
+    static void DrawImpl(GLenum mode, GLint first, GLsizei count, GLsizei instances, bool indexed, GLenum indexType, const void* indices, GLint baseVertex,
+                         const IndirectArgs* ind)
     {
         auto& c = Ctx();
         auto& core = Core::Get();
         auto* dev = core.Device();
         auto* ctx = core.Context();
-        if (count <= 0 || instances <= 0)
+        if (!ind && (count <= 0 || instances <= 0))
             return;
         Program* p = GetProgram(c.S.Program);
-        if (!p || !p->Linked)
+        if (!p || !p->Linked || p->IsCompute)
             return;
+        // Depolama kaynakları (307): yazılabilir görüntüler UAV'li dokuya yükseltilir (hedef bağlanmadan önce), depolama ve dolaylı
+        // arabellekler GPU'daki DEFAULT arabellekte
+        const int imageUnits = (int)c.S.Compute.Images.size();
+        for (const auto& ib : p->Images)
+            if (!ib.SRV)
+                if (Texture* t = GetTexture(c.S.Compute.Images[(size_t)std::clamp(ib.Unit, 0, imageUnits - 1)].Texture))
+                    EnsureStorageImage(*t);
+        for (const auto& sb : p->StorageBlocks)
+            if (sb.GLBinding < c.S.Compute.Storage.size())
+                if (Buffer* b = GetBuffer(c.S.Compute.Storage[sb.GLBinding]))
+                    b->GpuOwned = true;
+        if (ind)
+            if (Buffer* b = GetBuffer(ind->Buffer))
+                b->GpuOwned = true;
         if (!EnsureRendering())
             return;
         VertexArray* vao = CurrentVAO();
@@ -634,11 +676,80 @@ float4 PSColorArray(VSOut i) : SV_Target { return g_SrcArr.SampleLevel(g_Smp, fl
                 smpCount = std::max(smpCount, s.SamplerRegister + 1);
             }
         }
+        // Depolama kaynakları: salt okunur görüntü / blok SRV (t#), yazılabilir UAV (u#, renk hedeflerinden sonraki yuvalar)
+        ID3D11UnorderedAccessView* puavs[D3D11_PS_CS_UAV_REGISTER_COUNT] = {};
+        UINT uavLo = D3D11_PS_CS_UAV_REGISTER_COUNT, uavHi = 0;
+        for (const auto& ib : p->Images)
+        {
+            const GLEmu::ImageUnit& u = c.S.Compute.Images[(size_t)std::clamp(ib.Unit, 0, imageUnits - 1)];
+            Texture* tex = GetTexture(u.Texture);
+            if (!tex || !tex->Image)
+                return;
+            const int level = std::clamp(u.Level, 0, (int)tex->Levels - 1);
+            const int layer = u.Layered ? 0 : u.Layer;
+            if (ib.SRV)
+            {
+                if (ib.Binding < D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT)
+                {
+                    srvs[ib.Binding] = GetLevelSRV(*tex, level, layer);
+                    srvCount = std::max(srvCount, ib.Binding + 1);
+                }
+            }
+            else if (ib.Binding < D3D11_PS_CS_UAV_REGISTER_COUNT)
+            {
+                puavs[ib.Binding] = GetUAV(*tex, level, layer);
+                if (!puavs[ib.Binding])
+                    return;
+                uavLo = std::min(uavLo, ib.Binding);
+                uavHi = std::max(uavHi, ib.Binding + 1);
+                tex->DefinedLevels |= 1u << level;
+            }
+        }
+        for (const auto& sb : p->StorageBlocks)
+        {
+            const uint32_t glb = sb.GLBinding < c.S.Compute.Storage.size() ? sb.GLBinding : 0;
+            Buffer* b = GetBuffer(c.S.Compute.Storage[glb]);
+            if (!b || b->Shadow.empty())
+                return;
+            const size_t off = (size_t)std::max<int64_t>(c.S.Compute.StorageOffsets[glb], 0);
+            const size_t avail = b->Shadow.size() > off ? b->Shadow.size() - off : 0;
+            const size_t range = c.S.Compute.StorageSizes[glb] > 0 ? std::min<size_t>((size_t)c.S.Compute.StorageSizes[glb], avail) : avail;
+            if (sb.SRV)
+            {
+                if (sb.Binding < D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT)
+                {
+                    srvs[sb.Binding] = StorageSRV(*b, off, range);
+                    srvCount = std::max(srvCount, sb.Binding + 1);
+                }
+            }
+            else if (sb.Binding < D3D11_PS_CS_UAV_REGISTER_COUNT)
+            {
+                puavs[sb.Binding] = StorageUAV(*b, off, range);
+                if (!puavs[sb.Binding])
+                    return;
+                uavLo = std::min(uavLo, sb.Binding);
+                uavHi = std::max(uavHi, sb.Binding + 1);
+            }
+        }
         if (srvCount)
         {
             ctx->PSSetShaderResources(0, srvCount, srvs);
             ctx->VSSetShaderResources(0, srvCount, srvs);
         }
+        PixelUAVBinding uavBinding;
+        if (uavHi > uavLo)
+        {
+            if (uavLo < c.BoundRTVCount)
+            {
+                CQ_CORE_WARN("[DxGL] Pixel shader storage writes need UAV slots {0}+ but {1} render targets are bound", uavLo, c.BoundRTVCount);
+                return;
+            }
+            uavBinding.Start = uavLo;
+            uavBinding.Count = uavHi - uavLo;
+            ctx->OMSetRenderTargetsAndUnorderedAccessViews(D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL, nullptr, nullptr, uavLo, uavHi - uavLo, puavs + uavLo,
+                                                           nullptr);
+        }
+
         if (smpCount)
         {
             ctx->PSSetSamplers(0, smpCount, samplers);
@@ -777,6 +888,30 @@ float4 PSColorArray(VSOut i) : SV_Target { return g_SrcArr.SampleLevel(g_Smp, fl
             ctx->RSSetScissorRects(1, &r);
         }
 
+        if (ind)
+        {
+            Buffer* cmdBuf = GetBuffer(ind->Buffer);
+            ID3D11Buffer* args = cmdBuf ? StorageBuffer(*cmdBuf) : nullptr;
+            if (!args)
+                return;
+            if (indexed)
+            {
+                Buffer* eb = GetBuffer(vao->ElementBuffer);
+                if (!eb || indexType == GL_UNSIGNED_BYTE)
+                    return;   // 8 bit indeks dolaylı çizimde genişletilemez
+                ctx->IASetIndexBuffer(GeometryBuffer(*eb), indexType == GL_UNSIGNED_SHORT ? DXGI_FORMAT_R16_UINT : DXGI_FORMAT_R32_UINT, 0);
+            }
+            // D3D11'de çoklu dolaylı çizim yok: komutlar tek tek (bağımsız değişken düzeni GL'in DrawElements / DrawArraysIndirectCommand'ı)
+            for (GLsizei i = 0; i < ind->DrawCount; ++i)
+            {
+                const UINT off = (UINT)(std::max<int64_t>(ind->Offset, 0) + (int64_t)i * ind->Stride);
+                if (indexed)
+                    ctx->DrawIndexedInstancedIndirect(args, off);
+                else
+                    ctx->DrawInstancedIndirect(args, off);
+            }
+            return;
+        }
         if (indexed)
         {
             Buffer* eb = GetBuffer(vao->ElementBuffer);
@@ -785,6 +920,7 @@ float4 PSColorArray(VSOut i) : SV_Target { return g_SrcArr.SampleLevel(g_Smp, fl
             if (indexType == GL_UNSIGNED_BYTE)
             {
                 // 8 bit indeks D3D11'de yok: 16 bit'e genişletilmiş geçici arabellek
+
                 const size_t start = (size_t)(uintptr_t)indices;
                 if (start + (size_t)count > eb->Shadow.size())
                     return;
@@ -818,6 +954,11 @@ float4 PSColorArray(VSOut i) : SV_Target { return g_SrcArr.SampleLevel(g_Smp, fl
             else
                 ctx->Draw((UINT)count, (UINT)first);
         }
+    }
+
+    void Draw(GLenum mode, GLint first, GLsizei count, GLsizei instances, bool indexed, GLenum indexType, const void* indices, GLint baseVertex)
+    {
+        DrawImpl(mode, first, count, instances, indexed, indexType, indices, baseVertex, nullptr);
     }
 
     void GenerateMipmaps(Texture& t)
@@ -976,6 +1117,290 @@ float4 PSColorArray(VSOut i) : SV_Target { return g_SrcArr.SampleLevel(g_Smp, fl
         }
         EndRendering();
         InvalidateBound();
+    }
+
+    // ── Hesaplama gölgelendiricisi (307): NIS, CMAA2, FSR 2, ışın izleme, GPU parçacıkları ──
+    // Sabit arabellekler, örnekleyiciler, salt okunur depolama SRV'leri (t#) ve yazılabilir UAV'ler (u#) CS aşamasına bağlanır. Renk hedefleri
+    // önce çözülür: hedef olarak bağlı doku CS'de SRV olarak okunamazdı (çalışma zamanı girişi boşaltır). D3D11, dispatch'ler ve çizimler
+    // arasındaki UAV bağımlılıklarını kendisi sıralar (glMemoryBarrier gerekmez)
+    void DispatchComputeGL(uint32_t x, uint32_t y, uint32_t z, uint32_t indirectBuffer, int64_t indirectOffset)
+    {
+        auto& c = Ctx();
+        auto& core = Core::Get();
+        auto* ctx = core.Context();
+        Program* p = GetProgram(c.S.Program);
+        if (!p || !p->Linked || !p->IsCompute || !p->CS)
+            return;
+        ctx->OMSetRenderTargets(0, nullptr, nullptr);
+        EndRendering();
+
+        ID3D11Buffer* cbs[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT] = {};
+        UINT cbCount = 0;
+        for (const auto& blk : p->Blocks)
+        {
+            const uint32_t glb = blk.GLBinding < 64 ? blk.GLBinding : 0;
+            Buffer* ub = GetBuffer(c.S.UBOBindings[glb]);
+            cbs[blk.Register] = ub ? ConstantBuffer(*ub) : nullptr;
+            cbCount = std::max(cbCount, blk.Register + 1);
+        }
+        if (p->GlobalsRegister >= 0 && p->GlobalsBuffer)
+        {
+            if (p->GlobalsDirty)
+            {
+                D3D11_MAPPED_SUBRESOURCE m{};
+                if (SUCCEEDED(ctx->Map(p->GlobalsBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &m)))
+                {
+                    std::memcpy(m.pData, p->Globals.data(), p->Globals.size());
+                    ctx->Unmap(p->GlobalsBuffer, 0);
+                }
+                p->GlobalsDirty = false;
+            }
+            cbs[p->GlobalsRegister] = p->GlobalsBuffer;
+            cbCount = std::max(cbCount, (UINT)p->GlobalsRegister + 1);
+        }
+
+        ID3D11ShaderResourceView* srvs[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT] = {};
+        ID3D11SamplerState* samplers[D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT] = {};
+        ID3D11UnorderedAccessView* uavs[D3D11_PS_CS_UAV_REGISTER_COUNT] = {};
+        UINT srvCount = 0, smpCount = 0, uavCount = 0;
+        for (const auto& s : p->Samplers)
+        {
+            const Texture* shared = nullptr;
+            for (uint32_t e = 0; e < s.Count; ++e)
+            {
+                const int unit = std::clamp(e < s.Units.size() ? s.Units[e] : 0, 0, 63);
+                const uint32_t texName = s.Target == GL_TEXTURE_CUBE_MAP ? c.S.TexCube[(size_t)unit] :
+                                         s.Target == GL_TEXTURE_2D_MULTISAMPLE ? c.S.Tex2DMS[(size_t)unit] : c.S.Tex2D[(size_t)unit];
+                Texture* tex = GetTexture(texName);
+                if (!tex || !tex->Image || (s.Target == GL_TEXTURE_CUBE_MAP) != (tex->Layers == 6) || tex->Integer != s.Integer)
+                    tex = s.Target == GL_TEXTURE_CUBE_MAP ? c.NullTextureCube : s.Integer ? c.NullTextureInt : c.NullTexture2D;
+                const Texture* params = tex;
+                if (auto so = c.SamplerObjects.find(c.S.Samplers[(size_t)unit]); so != c.SamplerObjects.end() && c.S.Samplers[(size_t)unit])
+                    params = so->second.get();
+                const UINT slot = s.Register + e;
+                if (slot < D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT)
+                {
+                    srvs[slot] = GetSRV(*tex);
+                    srvCount = std::max(srvCount, slot + 1);
+                }
+                if (s.SharedSampler)
+                {
+                    if (!shared && tex != c.NullTexture2D)
+                        shared = params;
+                }
+                else if (slot < D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT)
+                {
+                    samplers[slot] = GetSampler(*params, tex->Integer, s.Shadow);
+                    smpCount = std::max(smpCount, slot + 1);
+                }
+            }
+            if (s.SharedSampler && s.SamplerRegister < D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT)
+            {
+                samplers[s.SamplerRegister] = GetSampler(shared ? *shared : *c.NullTexture2D, s.Integer, s.Shadow);
+                smpCount = std::max(smpCount, s.SamplerRegister + 1);
+            }
+        }
+        const int imageUnits = (int)c.S.Compute.Images.size();
+        std::vector<std::pair<Texture*, int>> written;
+        for (const auto& ib : p->Images)
+        {
+            const GLEmu::ImageUnit& u = c.S.Compute.Images[(size_t)std::clamp(ib.Unit, 0, imageUnits - 1)];
+            Texture* tex = GetTexture(u.Texture);
+            if (!tex || !tex->Image)
+            {
+                CQ_CORE_WARN("[DxGL] Compute dispatch skipped: image '{0}' has no texture bound", ib.Name);
+                return;
+            }
+            const int level = std::clamp(u.Level, 0, (int)tex->Levels - 1);
+            const int layer = u.Layered ? 0 : u.Layer;
+            if (ib.SRV)
+            {
+                if (ib.Binding < D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT)
+                {
+                    srvs[ib.Binding] = GetLevelSRV(*tex, level, layer);
+                    srvCount = std::max(srvCount, ib.Binding + 1);
+                }
+                continue;
+            }
+            if (!EnsureStorageImage(*tex) || ib.Binding >= D3D11_PS_CS_UAV_REGISTER_COUNT || !(uavs[ib.Binding] = GetUAV(*tex, level, layer)))
+            {
+                CQ_CORE_WARN("[DxGL] Compute dispatch skipped: texture of format {0} cannot be bound as storage image '{1}'", (int)tex->RTVFormat, ib.Name);
+                return;
+            }
+            uavCount = std::max(uavCount, ib.Binding + 1);
+            written.push_back({ tex, level });
+        }
+        for (const auto& sb : p->StorageBlocks)
+        {
+            const uint32_t glb = sb.GLBinding < c.S.Compute.Storage.size() ? sb.GLBinding : 0;
+            Buffer* b = GetBuffer(c.S.Compute.Storage[glb]);
+            if (!b || b->Shadow.empty())
+            {
+                CQ_CORE_WARN("[DxGL] Compute dispatch skipped: storage block '{0}' (binding {1}) has no buffer", sb.Name, sb.GLBinding);
+                return;
+            }
+            b->GpuOwned = true;
+            const size_t off = (size_t)std::max<int64_t>(c.S.Compute.StorageOffsets[glb], 0);
+            const size_t avail = b->Shadow.size() > off ? b->Shadow.size() - off : 0;
+            const size_t range = c.S.Compute.StorageSizes[glb] > 0 ? std::min<size_t>((size_t)c.S.Compute.StorageSizes[glb], avail) : avail;
+            if (sb.SRV)
+            {
+                if (sb.Binding < D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT)
+                {
+                    srvs[sb.Binding] = StorageSRV(*b, off, range);
+                    srvCount = std::max(srvCount, sb.Binding + 1);
+                }
+            }
+            else if (sb.Binding < D3D11_PS_CS_UAV_REGISTER_COUNT)
+            {
+                uavs[sb.Binding] = StorageUAV(*b, off, range);
+                uavCount = std::max(uavCount, sb.Binding + 1);
+            }
+        }
+        ID3D11Buffer* args = nullptr;
+        if (indirectBuffer)
+        {
+            Buffer* ib = GetBuffer(indirectBuffer);
+            if (!ib)
+                return;
+            ib->GpuOwned = true;
+            args = StorageBuffer(*ib);
+            if (!args)
+                return;
+        }
+
+        ctx->CSSetShader(p->CS, nullptr, 0);
+        if (cbCount)
+            ctx->CSSetConstantBuffers(0, cbCount, cbs);
+        if (srvCount)
+            ctx->CSSetShaderResources(0, srvCount, srvs);
+        if (smpCount)
+            ctx->CSSetSamplers(0, smpCount, samplers);
+        if (uavCount)
+            ctx->CSSetUnorderedAccessViews(0, uavCount, uavs, nullptr);
+        if (args)
+            ctx->DispatchIndirect(args, (UINT)std::max<int64_t>(indirectOffset, 0));
+        else
+            ctx->Dispatch(x, y, z);
+        // Kaynaklar çözülür: sonraki çizim aynı dokuyu SRV / hedef olarak bağlayabilsin
+        ID3D11ShaderResourceView* nullSrvs[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT] = {};
+        ID3D11UnorderedAccessView* nullUavs[D3D11_PS_CS_UAV_REGISTER_COUNT] = {};
+        if (srvCount)
+            ctx->CSSetShaderResources(0, srvCount, nullSrvs);
+        if (uavCount)
+            ctx->CSSetUnorderedAccessViews(0, uavCount, nullUavs, nullptr);
+        for (auto& [tex, level] : written)
+            tex->DefinedLevels |= 1u << level;
+    }
+
+    void MemoryBarrierGL(GLbitfield) {}   // D3D11 UAV bağımlılıklarını kendisi sıralar
+
+    void DrawIndirectGL(GLenum mode, bool indexed, GLenum indexType, uint32_t indirectBuffer, int64_t offset, GLsizei drawCount, GLsizei stride,
+                        uint32_t, int64_t)
+    {
+        IndirectArgs a;
+        a.Buffer = indirectBuffer;
+        a.Offset = offset;
+        a.DrawCount = drawCount;
+        a.Stride = stride;
+        DrawImpl(mode, 0, 1, 1, indexed, indexType, nullptr, 0, &a);
+    }
+
+    // D3D11'de dolaylı çizim sayısı (Count) yok: glMulti*IndirectCount bulunmaz, motor CPU yoluna düşer
+    bool BackendSupportsGL(const char* name)
+    {
+        return std::strcmp(name, "glMultiDrawElementsIndirectCount") != 0 && std::strcmp(name, "glMultiDrawArraysIndirectCount") != 0;
+    }
+
+    // glFenceSync: gönderim başına olay sorgusu; işaretli mi diye sürücüyü beklemeden sorulur
+    uint64_t SubmitSerialGL()
+    {
+        auto& c = Ctx();
+        auto& core = Core::Get();
+        D3D11_QUERY_DESC qd{ D3D11_QUERY_EVENT, 0 };
+        ID3D11Query* q = nullptr;
+        if (FAILED(core.Device()->CreateQuery(&qd, &q)) || !q)
+            return c.SyncCompleted;
+        core.Context()->End(q);
+        c.SyncQueries.push_back({ ++c.SyncSerial, q });
+        return c.SyncSerial;
+    }
+
+    bool SerialCompletedGL(uint64_t serial)
+    {
+        auto& c = Ctx();
+        auto* ctx = Core::Get().Context();
+        while (!c.SyncQueries.empty() && c.SyncQueries.front().first <= serial)
+        {
+            BOOL done = FALSE;
+            if (ctx->GetData(c.SyncQueries.front().second, &done, sizeof(done), D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK || !done)
+                break;
+            c.SyncCompleted = std::max(c.SyncCompleted, c.SyncQueries.front().first);
+            c.SyncQueries.front().second->Release();
+            c.SyncQueries.erase(c.SyncQueries.begin());
+        }
+        return serial <= c.SyncCompleted;
+    }
+
+    // GPU'ya ait arabellek: hazırlık arabelleğine kopyalanıp eşlenir (Map, GPU'nun bitirmesini bekler)
+    bool ReadBufferGL(Buffer& b, size_t offset, size_t size, void* out)
+    {
+        if (!b.GpuOwned)
+            return false;
+        auto& core = Core::Get();
+        ID3D11Buffer* src = StorageBuffer(b);
+        if (!src || offset + size > b.StorageSize)
+            return false;
+        D3D11_BUFFER_DESC bd{};
+        bd.ByteWidth = (UINT)((size + 15) & ~(size_t)15);
+        bd.Usage = D3D11_USAGE_STAGING;
+        bd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        ID3D11Buffer* staging = nullptr;
+        if (FAILED(core.Device()->CreateBuffer(&bd, nullptr, &staging)) || !staging)
+            return false;
+        D3D11_BOX box{ (UINT)offset, 0, 0, (UINT)(offset + size), 1, 1 };
+        core.Context()->CopySubresourceRegion(staging, 0, 0, 0, 0, src, 0, &box);
+        D3D11_MAPPED_SUBRESOURCE m{};
+        bool ok = false;
+        if (SUCCEEDED(core.Context()->Map(staging, 0, D3D11_MAP_READ, 0, &m)))
+        {
+            std::memcpy(out, m.pData, size);
+            core.Context()->Unmap(staging, 0);
+            ok = true;
+        }
+        staging->Release();
+        return ok;
+    }
+
+    bool CopyBufferGL(Buffer& src, Buffer& dst, size_t srcOffset, size_t dstOffset, size_t size)
+    {
+        if (!src.GpuOwned && !dst.GpuOwned)
+            return false;
+        auto& core = Core::Get();
+        src.GpuOwned = dst.GpuOwned = true;
+        ID3D11Buffer* s = StorageBuffer(src);
+        ID3D11Buffer* d = StorageBuffer(dst);
+        if (!s || !d)
+            return false;
+        D3D11_BOX box{ (UINT)srcOffset, 0, 0, (UINT)(srcOffset + size), 1, 1 };
+        if (s != d)
+        {
+            core.Context()->CopySubresourceRegion(d, 0, (UINT)dstOffset, 0, 0, s, 0, &box);
+            return true;
+        }
+        // Aynı arabellek içinde: ara arabellek üzerinden (kaynak ve hedef alt kaynağı aynı olamaz)
+        D3D11_BUFFER_DESC bd{};
+        bd.ByteWidth = (UINT)((size + 15) & ~(size_t)15);
+        bd.Usage = D3D11_USAGE_DEFAULT;
+        bd.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        ID3D11Buffer* tmp = nullptr;
+        if (FAILED(core.Device()->CreateBuffer(&bd, nullptr, &tmp)) || !tmp)
+            return false;
+        core.Context()->CopySubresourceRegion(tmp, 0, 0, 0, 0, s, 0, &box);
+        D3D11_BOX all{ 0, 0, 0, (UINT)size, 1, 1 };
+        core.Context()->CopySubresourceRegion(d, 0, (UINT)dstOffset, 0, 0, tmp, 0, &all);
+        tmp->Release();
+        return true;
     }
 
     void BeginFrameResources()

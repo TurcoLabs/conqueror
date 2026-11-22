@@ -29,6 +29,7 @@
     X(vkEnumeratePhysicalDevices) \
     X(vkGetDeviceProcAddr) \
     X(vkGetPhysicalDeviceFeatures) \
+    X(vkGetPhysicalDeviceFeatures2) \
     X(vkGetPhysicalDeviceFormatProperties) \
     X(vkGetPhysicalDeviceMemoryProperties) \
     X(vkGetPhysicalDeviceProperties) \
@@ -60,6 +61,12 @@
     X(vkCmdCopyImageToBuffer) \
     X(vkCmdDraw) \
     X(vkCmdDrawIndexed) \
+    X(vkCmdDispatch) \
+    X(vkCmdDispatchIndirect) \
+    X(vkCmdDrawIndirect) \
+    X(vkCmdDrawIndexedIndirect) \
+    X(vkCmdCopyBuffer) \
+    X(vkCreateComputePipelines) \
     X(vkCmdEndRenderingKHR) \
     X(vkCmdPipelineBarrier) \
     X(vkCmdResolveImage) \
@@ -154,6 +161,7 @@ CQ_VK_DEVICE_FUNCTIONS(CQ_VK_DECLARE)
 #define vkEnumeratePhysicalDevices cq_vkEnumeratePhysicalDevices
 #define vkGetDeviceProcAddr cq_vkGetDeviceProcAddr
 #define vkGetPhysicalDeviceFeatures cq_vkGetPhysicalDeviceFeatures
+#define vkGetPhysicalDeviceFeatures2 cq_vkGetPhysicalDeviceFeatures2
 #define vkGetPhysicalDeviceFormatProperties cq_vkGetPhysicalDeviceFormatProperties
 #define vkGetPhysicalDeviceMemoryProperties cq_vkGetPhysicalDeviceMemoryProperties
 #define vkGetPhysicalDeviceProperties cq_vkGetPhysicalDeviceProperties
@@ -183,6 +191,12 @@ CQ_VK_DEVICE_FUNCTIONS(CQ_VK_DECLARE)
 #define vkCmdCopyImageToBuffer cq_vkCmdCopyImageToBuffer
 #define vkCmdDraw cq_vkCmdDraw
 #define vkCmdDrawIndexed cq_vkCmdDrawIndexed
+#define vkCmdDispatch cq_vkCmdDispatch
+#define vkCmdDispatchIndirect cq_vkCmdDispatchIndirect
+#define vkCmdDrawIndirect cq_vkCmdDrawIndirect
+#define vkCmdDrawIndexedIndirect cq_vkCmdDrawIndexedIndirect
+#define vkCmdCopyBuffer cq_vkCmdCopyBuffer
+#define vkCreateComputePipelines cq_vkCreateComputePipelines
 #define vkCmdEndRenderingKHR cq_vkCmdEndRenderingKHR
 #define vkCmdPipelineBarrier cq_vkCmdPipelineBarrier
 #define vkCmdResolveImage cq_vkCmdResolveImage

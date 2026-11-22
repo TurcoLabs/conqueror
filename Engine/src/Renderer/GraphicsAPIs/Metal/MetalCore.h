@@ -20,6 +20,8 @@ namespace Conqueror::MTL
     constexpr uint32_t kMaxConstantBuffers = 12;
     constexpr uint32_t kMaxTextures = 31;
     constexpr uint32_t kMaxSamplers = 16;
+    // Depolama bloklarının boyut tablosu (SPIRV-Cross spvBufferSizeConstants: .length() olan dizilerde), sabit arabelleklerden sonra (307)
+    constexpr uint32_t kBufferSizeIndex = kConstantBufferBase + kMaxConstantBuffers;
     constexpr uint32_t kFrames = 3;
 
     struct UploadAlloc
@@ -43,6 +45,8 @@ namespace Conqueror::MTL
         id<MTLDevice> Device() const { return m_Device; }
         const std::string& DeviceName() const { return m_DeviceName; }
         uint64_t VideoMemory() const { return m_VideoMemory; }
+        // Doku atomikleri (Metal 3.1, Apple7+ / Mac2): görüntü atomikleri (CMAA 2, FSR 2) yalnız bunlarla doğru çalışır (307)
+        bool SupportsTextureAtomics() const;
         uint32_t FramebufferWidth() const;
         uint32_t FramebufferHeight() const;
         void SetVSync(bool enabled);
@@ -52,6 +56,7 @@ namespace Conqueror::MTL
         id<MTLRenderCommandEncoder> RenderEncoder() const { return m_Render; }
         id<MTLRenderCommandEncoder> BeginRender(MTLRenderPassDescriptor* pass);
         id<MTLBlitCommandEncoder> Blit();
+        id<MTLComputeCommandEncoder> Compute();      // hesaplama kodlayıcısı (307)
         void EndEncoding();
         // Render kodlayıcısı her kapandığında artar (MtlGL bağlı durumu ve hedefleri yeniden kurar)
         uint64_t EncoderEpoch() const { return m_EncoderEpoch; }
@@ -85,6 +90,7 @@ namespace Conqueror::MTL
         id<MTLCommandBuffer> m_Command = nil;
         id<MTLRenderCommandEncoder> m_Render = nil;
         id<MTLBlitCommandEncoder> m_Blit = nil;
+        id<MTLComputeCommandEncoder> m_Compute = nil;
         id<CAMetalDrawable> m_Drawable = nil;
         dispatch_semaphore_t m_Inflight = nullptr;
         Frame m_Frames[kFrames];

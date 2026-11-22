@@ -69,6 +69,35 @@ namespace Conqueror::DXCommon
         if (!GLEmu::ReflectProgram(shaders, limits, p, log))
             return false;
         static const char* s_Dump = std::getenv("CQ_DXGL_DUMP");
+        if (p.Compute)
+        {
+            // Hesaplama (307): salt okunur depolama görüntüleri Texture2D (t#; UAV okuması D3D11'de yalnız R32 biçimlerinde garanti),
+            // yazılabilirler RWTexture2D (u#); depolama blokları ByteAddressBuffer / RWByteAddressBuffer
+            std::string hlsl;
+            try
+            {
+                spirv_cross::CompilerHLSL hc(p.ComputeSpirv);
+                spirv_cross::CompilerHLSL::Options ho;
+                ho.shader_model = 50;
+                ho.nonwritable_uav_texture_as_srv = true;
+                hc.set_hlsl_options(ho);
+                hlsl = PortableHLSL(hc.compile());
+            }
+            catch (const std::exception& e)
+            {
+                log = std::string("SPIRV-Cross HLSL: ") + e.what();
+                return false;
+            }
+            if (s_Dump && *s_Dump)
+                std::ofstream(std::string(s_Dump) + "/prog" + std::to_string(id) + ".cs.hlsl") << hlsl;
+            std::string err;
+            if (!CompileHLSL(hlsl, "dxgl_cs", "main", "cs_5_0", p.CS, err))
+            {
+                log = std::string("[compute] ") + err;
+                return false;
+            }
+            return true;
+        }
         for (int stage = 0; stage < 2; ++stage)
         {
             const bool vs = stage == 0;
@@ -79,6 +108,7 @@ namespace Conqueror::DXCommon
                 spirv_cross::CompilerHLSL::Options ho;
                 ho.shader_model = 50;
                 ho.flatten_matrix_vertex_input_semantics = true;
+                ho.nonwritable_uav_texture_as_srv = true;   // salt okunur depolama görüntüsü t# (GLReflect yazmaç düzeni)
                 hc.set_hlsl_options(ho);
                 spirv_cross::CompilerGLSL::Options go = hc.get_common_options();
                 go.vertex.flip_vert_y = true;          // GL satır düzeni korunur (görüntüler GL yönünde tutulur)

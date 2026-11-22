@@ -564,8 +564,10 @@ namespace Conqueror
         // Önbellek anahtarı: tüm aşama kaynakları + hat sürümü
         // Hedef profil anahtarın parçası: 450 ile "330" / "300 es" çıktıları karışmasın
         const auto& profile = GLProfile::Current();
+        // 16 doku bütçesi de (CQ_TEXTURE_BUDGET_16 ön eki): yoksa bütçesiz derlenmiş çıktı (ör. OpenGL'de) Direct3D / Metal'de yeniden kullanılıp
+        // 16 örnekleyici sınırında reddediliyor, her açılışta özgün GLSL'ye geri dönülüyordu
         uint64_t h = Fnv1a("cq-spirv-gl" + std::to_string(profile.GLSLVersion) + (profile.GLSLES ? "es" : "") +
-                           (profile.UniformBindingLayouts ? "b" : "") + "-v" + std::to_string(kCacheVersion));
+                           (profile.UniformBindingLayouts ? "b" : "") + (TextureBudget16() ? "t16" : "") + "-v" + std::to_string(kCacheVersion));
         for (const auto& [stage, src] : sources)
             h = Fnv1a(std::string(StageName(stage)) + "\n" + src, h);
         char hex[32];

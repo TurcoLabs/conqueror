@@ -276,16 +276,20 @@ namespace Conqueror::VkGL
         if (!core.IsInitialized())
             return;
         VkDevice dev = core.Device();
-        VkShaderModule v = p.Vert, f = p.Frag;
+        VkShaderModule v = p.Vert, f = p.Frag, cs = p.Comp;
+        VkPipeline cp = p.ComputePipeline;
         VkDescriptorSetLayout sl = p.SetLayout;
         VkPipelineLayout pl = p.Layout;
-        core.DeferDelete([dev, v, f, sl, pl]() {
+        core.DeferDelete([dev, v, f, cs, cp, sl, pl]() {
             if (v) vkDestroyShaderModule(dev, v, nullptr);
             if (f) vkDestroyShaderModule(dev, f, nullptr);
+            if (cs) vkDestroyShaderModule(dev, cs, nullptr);
+            if (cp) vkDestroyPipeline(dev, cp, nullptr);
             if (pl) vkDestroyPipelineLayout(dev, pl, nullptr);
             if (sl) vkDestroyDescriptorSetLayout(dev, sl, nullptr);
         });
-        p.Vert = p.Frag = VK_NULL_HANDLE;
+        p.Vert = p.Frag = p.Comp = VK_NULL_HANDLE;
+        p.ComputePipeline = VK_NULL_HANDLE;
         p.SetLayout = VK_NULL_HANDLE;
         p.Layout = VK_NULL_HANDLE;
     }
@@ -302,12 +306,19 @@ namespace Conqueror::VkGL
         p.Samplers.clear();
         p.Blocks.clear();
         p.Inputs.clear();
+        p.Images.clear();
+        p.StorageBlocks.clear();
+        p.IsCompute = false;
+        p.LocalSize[0] = p.LocalSize[1] = p.LocalSize[2] = 1;
         p.GlobalsBinding = -1;
         p.GlobalsSize = 0;
 
         std::map<ShaderStage, std::string> sources;
         std::map<std::string, int> explicitBindings;   // kaynakta layout(binding = N) ile verilen örnekleyiciler
-        static const std::regex s_LayoutUniform(R"(layout\s*\(([^)]*)\)\s*uniform\s+(?:(?:lowp|mediump|highp)\s+)?\w+\s+(\w+))");
+        // Bellek niteleyicileri uniform'dan önce ya da sonra olabilir ("uniform readonly image2D u_In": eskiden ad yerine "image2D"
+        // yakalanıyor, yol izleyicinin süzgecinde iki görüntü de birim 0'a düşüyordu)
+        static const std::regex s_LayoutUniform(
+            R"(layout\s*\(([^)]*)\)\s*(?:(?:readonly|writeonly|coherent|volatile|restrict)\s+)*uniform\s+(?:(?:readonly|writeonly|coherent|volatile|restrict|lowp|mediump|highp)\s+)*\w+\s+(\w+))");
         static const std::regex s_Binding(R"(binding\s*=\s*(\d+))");
         std::vector<UniformInit> inits;
         static const bool s_ForceSplit = [] { const char* e = std::getenv("CQ_VKGL_SPLIT_SAMPLERS"); return e && e[0] == '1'; }();
@@ -333,7 +344,14 @@ namespace Conqueror::VkGL
                     explicitBindings[(*m)[2].str()] = std::stoi(b[1].str());
             }
         }
-        if (!sources.count(ShaderStage::Vertex) || !sources.count(ShaderStage::Fragment))
+        // Hesaplama programı (307): tek hesaplama aşaması (NIS, CMAA2, FSR 2); köşe / parça aşamasıyla birlikte olamaz
+        const bool compute = sources.count(ShaderStage::Compute) != 0;
+        if (compute && sources.size() != 1)
+        {
+            p.Log = "A compute program cannot have other shader stages";
+            return false;
+        }
+        if (!compute && (!sources.count(ShaderStage::Vertex) || !sources.count(ShaderStage::Fragment)))
         {
             p.Log = "Program needs a vertex and a fragment shader";
             return false;
@@ -342,7 +360,7 @@ namespace Conqueror::VkGL
         static const char* s_Dump = std::getenv("CQ_VKGL_DUMP");
         if (s_Dump && *s_Dump)
             for (const auto& [stage, text] : sources)
-                std::ofstream(std::string(s_Dump) + "/prog" + std::to_string(c.NextProgramId) + (stage == ShaderStage::Vertex ? ".vert" : ".frag")) << text;
+                std::ofstream(std::string(s_Dump) + "/prog" + std::to_string(c.NextProgramId) + (stage == ShaderStage::Vertex ? ".vert" : stage == ShaderStage::Compute ? ".comp" : ".frag")) << text;
         std::map<ShaderStage, std::vector<uint32_t>> spirv;
         std::string errors;
         if (!ShaderCompiler::CompileToSPIRV(sources, "vkgl", spirv, errors, true))
@@ -355,12 +373,13 @@ namespace Conqueror::VkGL
         struct Pending
         {
             std::string Name;
-            enum Kind { Block, Globals, Sampler, Image, SamplerOnly } K = Block;
+            enum Kind { Block, Globals, Sampler, Image, SamplerOnly, StorageImage, StorageBuffer } K = Block;
             uint32_t OrigBinding = 0;
             uint32_t Size = 0;
             uint32_t Count = 1;
             GLenum Target = GL_TEXTURE_2D;
             bool Shadow = false, Integer = false;
+            bool Writable = true;               // depolama görüntüsü / arabelleği: readonly değil
         };
         std::vector<Pending> resources;
         auto findRes = [&](const std::string& name) -> int {
@@ -375,6 +394,9 @@ namespace Conqueror::VkGL
         {
             spirv_cross::Compiler comp(words);
             spirv_cross::ShaderResources res = comp.get_shader_resources();
+            // Depolama görüntüleri / blokları yalnız etkin olanlar (GL'de kullanılmayan blok etkin değildir, bağlanması gerekmez: ortak ışın
+            // izleme başlığını içeren ama Tris'i okumayan ortalama gölgelendiricisi gibi)
+            const spirv_cross::ShaderResources activeRes = comp.get_shader_resources(comp.get_active_interface_variables());
             for (const auto& ub : res.uniform_buffers)
             {
                 const auto& type = comp.get_type(ub.base_type_id);
@@ -450,6 +472,47 @@ namespace Conqueror::VkGL
                 }
                 stageIdToRes[stage][si.id] = idx;
             }
+            // Depolama görüntüleri (image2D / uimage2D) ve depolama blokları (std430 buffer): yalnız hesaplama programında
+            for (const auto& si : activeRes.storage_images)
+            {
+                int idx = findRes(si.name);
+                const auto& type = comp.get_type(si.type_id);
+                if (idx < 0)
+                {
+                    Pending r;
+                    r.Name = si.name;
+                    r.K = Pending::StorageImage;
+                    r.OrigBinding = comp.get_decoration(si.id, spv::DecorationBinding);
+                    const auto& sampled = comp.get_type(type.image.type);
+                    r.Integer = sampled.basetype == spirv_cross::SPIRType::Int || sampled.basetype == spirv_cross::SPIRType::UInt;
+                    r.Writable = !comp.has_decoration(si.id, spv::DecorationNonWritable);
+                    resources.push_back(r);
+                    idx = (int)resources.size() - 1;
+                }
+                stageIdToRes[stage][si.id] = idx;
+            }
+            for (const auto& sb : activeRes.storage_buffers)
+            {
+                std::string blockName = comp.get_name(sb.base_type_id);
+                if (blockName.empty())
+                    blockName = sb.name;
+                int idx = findRes(blockName);
+                if (idx < 0)
+                {
+                    Pending r;
+                    r.Name = blockName;
+                    r.K = Pending::StorageBuffer;
+                    r.OrigBinding = comp.get_decoration(sb.id, spv::DecorationBinding);
+                    const spirv_cross::Bitset flags = comp.get_buffer_block_flags(sb.id);
+                    r.Writable = !flags.get(spv::DecorationNonWritable);
+                    resources.push_back(r);
+                    idx = (int)resources.size() - 1;
+                }
+                stageIdToRes[stage][sb.id] = idx;
+            }
+            if (stage == ShaderStage::Compute)
+                for (uint32_t k = 0; k < 3; ++k)
+                    p.LocalSize[k] = std::max(1u, comp.get_execution_mode_argument(spv::ExecutionModeLocalSize, k));
             for (const auto& si : res.separate_samplers)
             {
                 int idx = findRes(si.name);
@@ -505,24 +568,51 @@ namespace Conqueror::VkGL
         std::vector<uint32_t> finalBinding(resources.size(), 0);
         // Ortak örnekleyiciler önce numaralanır: doku dizisi kaydı kendi örnekleyicisinin bağlamasını bilmeli
         std::map<std::string, uint32_t> sharedSamplerBinding;
-        for (int pass = 0; pass < 4; ++pass)
+        for (int pass = 0; pass < 6; ++pass)
         {
             for (size_t i = 0; i < resources.size(); ++i)
             {
                 const auto& r = resources[i];
                 const bool match = (pass == 0 && r.K == Pending::Block) || (pass == 1 && r.K == Pending::Globals) || (pass == 2 && r.K == Pending::SamplerOnly) ||
-                                   (pass == 3 && (r.K == Pending::Sampler || r.K == Pending::Image));
+                                   (pass == 3 && (r.K == Pending::Sampler || r.K == Pending::Image)) || (pass == 4 && r.K == Pending::StorageImage) ||
+                                   (pass == 5 && r.K == Pending::StorageBuffer);
                 if (!match)
                     continue;
                 finalBinding[i] = next;
                 VkDescriptorSetLayoutBinding lb{};
                 lb.binding = next;
                 lb.descriptorType = r.K == Pending::Sampler ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : r.K == Pending::Image ? VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE :
-                                    r.K == Pending::SamplerOnly ? VK_DESCRIPTOR_TYPE_SAMPLER : VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+                                    r.K == Pending::SamplerOnly ? VK_DESCRIPTOR_TYPE_SAMPLER : r.K == Pending::StorageImage ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE :
+                                    r.K == Pending::StorageBuffer ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER : VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
                 lb.descriptorCount = r.Count;
-                lb.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+                lb.stageFlags = compute ? VK_SHADER_STAGE_COMPUTE_BIT : (VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
                 layoutBindings.push_back(lb);
-                if (r.K == Pending::Block)
+                if (r.K == Pending::StorageImage)
+                {
+                    // GL: birim kaynaktaki layout(binding) (motor görüntülerinkini siler, glUniform1i ile verir); uniform konumu alır
+                    GLEmu::ImageBinding ib;
+                    ib.Name = r.Name;
+                    ib.Binding = next;
+                    ib.Integer = r.Integer;
+                    ib.Writable = r.Writable;
+                    if (auto eb = explicitBindings.find(r.Name); eb != explicitBindings.end())
+                        ib.Unit = eb->second;
+                    p.Images.push_back(ib);
+                    UniformSlot slot;
+                    slot.Image = (int)p.Images.size() - 1;
+                    slot.Type = r.Integer ? GL_UNSIGNED_INT_IMAGE_2D : GL_IMAGE_2D;
+                    AddSlot(p, r.Name, slot);
+                }
+                else if (r.K == Pending::StorageBuffer)
+                {
+                    GLEmu::StorageBlockBinding sb;
+                    sb.Name = r.Name;
+                    sb.Binding = next;
+                    sb.GLBinding = r.OrigBinding;
+                    sb.Writable = r.Writable;
+                    p.StorageBlocks.push_back(sb);
+                }
+                else if (r.K == Pending::Block)
                     p.Blocks.push_back({ r.Name, next, r.OrigBinding, r.Size });
                 else if (r.K == Pending::Globals)
                     p.GlobalsBinding = (int)next;
@@ -586,8 +676,13 @@ namespace Conqueror::VkGL
             vkCreateShaderModule(dev, &mi, nullptr, &m);
             return m;
         };
-        p.Vert = makeModule(spirv[ShaderStage::Vertex]);
-        p.Frag = makeModule(spirv[ShaderStage::Fragment]);
+        if (compute)
+            p.Comp = makeModule(spirv[ShaderStage::Compute]);
+        else
+        {
+            p.Vert = makeModule(spirv[ShaderStage::Vertex]);
+            p.Frag = makeModule(spirv[ShaderStage::Fragment]);
+        }
         VkDescriptorSetLayoutCreateInfo dl{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
         dl.bindingCount = (uint32_t)layoutBindings.size();
         dl.pBindings = layoutBindings.data();
@@ -602,9 +697,21 @@ namespace Conqueror::VkGL
         p.GlobalsDirty = true;
         p.GlobalsFrame = 0;
         p.Id = c.NextProgramId++;
-        p.Linked = p.Vert && p.Frag && p.Layout;
+        p.IsCompute = compute;
+        if (compute && p.Comp && p.Layout)
+        {
+            VkComputePipelineCreateInfo ci{ VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO };
+            ci.stage = { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO };
+            ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+            ci.stage.module = p.Comp;
+            ci.stage.pName = "main";
+            ci.layout = p.Layout;
+            if (vkCreateComputePipelines(dev, core.PipelineCache(), 1, &ci, nullptr, &p.ComputePipeline) != VK_SUCCESS)
+                p.ComputePipeline = VK_NULL_HANDLE;
+        }
+        p.Linked = compute ? (p.Comp && p.Layout && p.ComputePipeline) : (p.Vert && p.Frag && p.Layout);
         if (!p.Linked)
-            p.Log = "Vulkan shader module creation failed";
+            p.Log = compute ? "Vulkan compute pipeline creation failed" : "Vulkan shader module creation failed";
         return p.Linked;
     }
 

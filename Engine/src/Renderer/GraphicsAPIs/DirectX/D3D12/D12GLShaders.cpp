@@ -12,6 +12,8 @@ namespace Conqueror::D12GL
     {
         p.VS.clear();
         p.PS.clear();
+        p.CS.clear();
+        DeferRelease(p.ComputePSO);
         p.GlobalsAddress = 0;
         p.GlobalsFrame = 0;
         // Bu programın PSO'ları anahtarda program kimliği taşır; yeni bağlamada yeni kimlik alınır
@@ -32,6 +34,7 @@ namespace Conqueror::D12GL
         limits.ConstantBuffers = DX12::kRootCBVs;
         limits.Resources = DX12::kMaxSRVs;
         limits.Samplers = DX12::kMaxSamplers;
+        limits.UnorderedAccess = DX12::kMaxUAVs;
         limits.ApiName = "Direct3D 12";
         DXCommon::TranslatedProgram tp;
         if (!DXCommon::TranslateProgram(shaders, c.NextProgramId, limits, tp, p.Log))
@@ -50,7 +53,26 @@ namespace Conqueror::D12GL
         p.GlobalsDirty = true;
         p.VS = std::move(tp.VS);
         p.PS = std::move(tp.PS);
+        p.CS = std::move(tp.CS);
+        p.IsCompute = tp.Compute;
+        for (int k = 0; k < 3; ++k)
+            p.LocalSize[k] = tp.LocalSize[k];
+        p.Images = std::move(tp.Images);
+        p.StorageBlocks = std::move(tp.StorageBlocks);
         p.Id = c.NextProgramId++;
+        if (p.IsCompute)
+        {
+            // Hesaplama PSO'su programla birlikte (durum anahtarı yok)
+            D3D12_COMPUTE_PIPELINE_STATE_DESC d{};
+            d.pRootSignature = DX12::Core::Get().RootSignature();
+            d.CS = { p.CS.data(), p.CS.size() };
+            if (FAILED(DX12::Core::Get().Device()->CreateComputePipelineState(&d, __uuidof(ID3D12PipelineState), (void**)&p.ComputePSO)))
+                p.ComputePSO = nullptr;
+            p.Linked = p.ComputePSO != nullptr;
+            if (!p.Linked)
+                p.Log = "Direct3D 12 compute pipeline creation failed";
+            return p.Linked;
+        }
         p.Linked = !p.VS.empty() && !p.PS.empty();
         if (!p.Linked)
             p.Log = "Direct3D 12 shader compilation produced no bytecode";

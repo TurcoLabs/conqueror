@@ -145,6 +145,71 @@ namespace Conqueror::MtlGL
         t.View = nil;
         t.ViewLevels = 0;
         t.DefinedLevels = 0;
+        t.LevelViews.clear();
+        t.StorageCapable = false;
+    }
+
+    // glBindImageTexture (307): doku MTLTextureUsageShaderWrite ile yeniden oluşturulup içeriği blit ile kopyalanır (her hedefe baştan
+    // konmaz: yazma kullanımı Apple GPU'larında sıkıştırmasız düzen ister)
+    bool EnsureStorageImage(Texture& t)
+    {
+        if (!t.Image)
+            return false;
+        if (t.StorageCapable)
+            return true;
+        if (t.Depth || t.Samples > 1)
+            return false;
+        MTLTextureDescriptor* d = [MTLTextureDescriptor new];
+        d.textureType = t.Image.textureType;
+        d.pixelFormat = t.Format;
+        d.width = t.Width;
+        d.height = t.Height;
+        d.mipmapLevelCount = t.Levels;
+        d.sampleCount = 1;
+        d.storageMode = MTLStorageModePrivate;
+        d.usage = t.Image.usage | MTLTextureUsageShaderWrite | MTLTextureUsageShaderRead;
+        // Doku atomikleri (imageAtomic*: CMAA 2 / FSR 2 sayaçları) 32 bit tamsayı biçiminde atomik kullanım ister
+        if (Core::Get().SupportsTextureAtomics() && (t.Format == MTLPixelFormatR32Uint || t.Format == MTLPixelFormatR32Sint))
+            if (@available(macOS 14.0, iOS 17.0, tvOS 17.0, *))
+                d.usage |= MTLTextureUsageShaderAtomic;
+        id<MTLTexture> img = [Core::Get().Device() newTextureWithDescriptor:d];
+        if (!img)
+            return false;
+        EndRendering();
+        id<MTLBlitCommandEncoder> blit = Core::Get().Blit();
+        for (uint32_t layer = 0; layer < t.Layers; ++layer)
+            for (uint32_t level = 0; level < t.Levels; ++level)
+                [blit copyFromTexture:t.Image
+                          sourceSlice:layer
+                          sourceLevel:level
+                         sourceOrigin:MTLOriginMake(0, 0, 0)
+                           sourceSize:MTLSizeMake(std::max(1u, t.Width >> level), std::max(1u, t.Height >> level), 1)
+                            toTexture:img
+                     destinationSlice:layer
+                     destinationLevel:level
+                    destinationOrigin:MTLOriginMake(0, 0, 0)];
+        const uint32_t defined = t.DefinedLevels;
+        DestroyTextureImage(t);
+        t.Image = img;
+        t.DefinedLevels = defined;
+        t.StorageCapable = true;
+        return true;
+    }
+
+    // Depolama görüntüsünün bağlanan düzeyi / katmanı (tek düzeyli 2B görünüm)
+    id<MTLTexture> ImageView(Texture& t, int level, int layer)
+    {
+        if (!t.Image)
+            return nil;
+        if (t.Levels == 1 && t.Layers == 1)
+            return t.Image;
+        const uint32_t key = (uint32_t)level | ((uint32_t)layer << 8);
+        if (auto it = t.LevelViews.find(key); it != t.LevelViews.end())
+            return it->second;
+        id<MTLTexture> v = [t.Image newTextureViewWithPixelFormat:t.Format textureType:MTLTextureType2D levels:NSMakeRange((NSUInteger)level, 1)
+                                                           slices:NSMakeRange((NSUInteger)layer, 1)];
+        t.LevelViews[key] = v;
+        return v;
     }
 
     bool AllocateTexture(Texture& t, GLenum target, GLenum internalFormat, uint32_t w, uint32_t h, uint32_t levels, uint32_t samples)
@@ -406,9 +471,50 @@ namespace Conqueror::MtlGL
     }
 
     // ── Arabellekler ──
+    // GPU'ya ait arabellek (307): kalıcı paylaşımlı arabellek. Oluşturulurken (henüz kullanılmıyor) gölgenin tamamı doğrudan; sonra yalnız
+    // CPU'nun yazdığı aralık yükleme halkasından blit ile (komut sırasıyla: önceki komutlar eski, sonrakiler yeni içeriği görür)
+    id<MTLBuffer> StorageBuffer(Buffer& b)
+    {
+        auto& core = Core::Get();
+        const uint64_t size = AlignUp(std::max<uint64_t>(b.Shadow.size(), 16), 256);
+        if (!b.Storage || [b.Storage length] < size)
+        {
+            b.Storage = [core.Device() newBufferWithLength:size options:MTLResourceStorageModeShared];
+            if (!b.Storage)
+                return nil;
+            auto* dst = (uint8_t*)[b.Storage contents];
+            std::memset(dst, 0, (size_t)size);
+            if (!b.Shadow.empty())
+                std::memcpy(dst, b.Shadow.data(), b.Shadow.size());
+        }
+        else if (b.Dirty && b.DirtyBegin < b.DirtyEnd && b.DirtyBegin < b.Shadow.size())
+        {
+            const size_t from = b.DirtyBegin, to = std::min(b.DirtyEnd, b.Shadow.size());
+            MTL::UploadAlloc a = core.AllocUpload(to - from, 16);
+            if (a.Cpu)
+            {
+                std::memcpy(a.Cpu, b.Shadow.data() + from, to - from);
+                EndRendering();
+                [core.Blit() copyFromBuffer:a.Buffer sourceOffset:a.Offset toBuffer:b.Storage destinationOffset:from size:to - from];
+            }
+        }
+        b.Dirty = false;
+        b.DirtyBegin = SIZE_MAX;
+        b.DirtyEnd = 0;
+        return b.Storage;
+    }
+
     id<MTLBuffer> BufferBinding(Buffer& b, uint64_t minSize, uint64_t& offset, uint64_t* size)
     {
         auto& core = Core::Get();
+        if (b.GpuOwned)
+        {
+            id<MTLBuffer> s = StorageBuffer(b);
+            offset = 0;
+            if (size)
+                *size = s ? [s length] : 0;
+            return s;
+        }
         const uint64_t frame = core.FrameSerial();
         if (b.Dirty)
         {
@@ -477,6 +583,7 @@ namespace Conqueror::MtlGL
 
     void ReleaseBuffer(Buffer& b)
     {
+        b.Storage = nil;
         b.Dedicated = nil;
         b.GpuBuffer = nil;
         b.GpuVersion = 0;

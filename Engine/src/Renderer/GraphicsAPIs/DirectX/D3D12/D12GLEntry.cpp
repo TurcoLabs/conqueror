@@ -4,6 +4,7 @@
 
 #include "D12GL.h"
 #include "Core/Logging/Log.h"
+#include "Renderer/ShaderCompiler/ShaderCompiler.h"
 
 #include <algorithm>
 #include <array>
@@ -117,9 +118,19 @@ namespace Conqueror::D12GL
         c.Version = "4.6.0 Conqueror D12GL";
         c.Extensions = { "GL_ARB_clip_control", "GL_ARB_direct_state_access", "GL_ARB_texture_storage", "GL_ARB_texture_filter_anisotropic",
                          "GL_EXT_texture_filter_anisotropic" };
+        // 307: hesaplama gölgelendiricisi (cs_5_0, hesaplama PSO'su, ExecuteIndirect): NIS, CMAA2, FSR 2, ışın izleme, GPU parçacıkları
+        s_Limits.Compute = true;
+        for (const char* e : { "GL_ARB_compute_shader", "GL_ARB_shader_image_load_store", "GL_ARB_shader_storage_buffer_object",
+                               "GL_CQ_image_atomics" })
+            c.Extensions.push_back(e);
         s_Limits.MaxTextureSize = D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION;
         s_Limits.MaxCubeMapSize = D3D12_REQ_TEXTURECUBE_DIMENSION;
         s_Limits.MaxTextureUnits = 32;
+        // D3D12 aşama başına en çok 16 örnekleyici (D3D12_COMMONSHADER_SAMPLER_SLOT_COUNT / kök tablosu) bağlar: PBR, PBRSkinned ve
+        // Terrain 19-22 birleşik örnekleyiciyle bağlanamıyor, sahnede yalnız gökyüzü çiziliyordu (Ray Traced GI'nin üç dokusu eklendiğinden
+        // beri; Metal ve WebGPU'daki gibi 16 dokuluk bütçe: yansıtma probu gökyüzü yansımasını kullanır, APV / dinamik GI / düzlemsel
+        // yansıma örneklenmez, 2B toplu çizim 14 yuva)
+        ShaderCompiler::SetTextureBudget16(true);
         s_Limits.MaxVertexAttribs = 16;
         s_Limits.MaxUniformBufferBindings = DX12::kRootCBVs;
         s_Limits.MaxUniformBlockSize = D3D12_REQ_CONSTANT_BUFFER_ELEMENT_COUNT * 16;
@@ -151,6 +162,11 @@ namespace Conqueror::D12GL
         sv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
         sv.Texture2D.MipLevels = 1;
         dev->CreateShaderResourceView(nullptr, &sv, c.NullSRV.Handle);
+        c.NullUAV = core.Pool(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV).Allocate();
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uv{};
+        uv.Format = DXGI_FORMAT_R32_UINT;
+        uv.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+        dev->CreateUnorderedAccessView(nullptr, nullptr, &uv, c.NullUAV.Handle);
         c.NullRTV = core.Pool(D3D12_DESCRIPTOR_HEAP_TYPE_RTV).Allocate();
         D3D12_RENDER_TARGET_VIEW_DESC rv{};
         rv.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
@@ -206,6 +222,9 @@ namespace Conqueror::D12GL
         for (auto& [n, b] : c.Buffers) ReleaseBuffer(*b);
         for (auto& [n, p] : c.Programs) DestroyProgram(*p);
         ReleaseDrawHelpers();
+        for (auto& [k, sig] : c.CommandSignatures)
+            DeferRelease(sig);
+        c.CommandSignatures.clear();
         DeferRelease(c.NullVertexBuffer);
         DeferRelease(c.ZeroConstants);
         c.SamplerCache.clear();
@@ -217,7 +236,7 @@ namespace Conqueror::D12GL
         c.ShaderObjects.clear();
         c.QueryObjects.clear();
         c.NullTexture2D = c.NullTextureCube = c.NullTextureInt = nullptr;
-        c.NullSRV = c.NullRTV = c.NullSampler = CpuDescriptor{};
+        c.NullSRV = c.NullRTV = c.NullSampler = c.NullUAV = CpuDescriptor{};
         core.Flush();   // ertelenen bırakmalar
     }
 }

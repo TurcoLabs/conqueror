@@ -4,6 +4,8 @@
 
 #include <glad/glad.h>
 
+#include "GLEmuCommon.h"
+
 #include <cstdint>
 #include <string>
 #include <unordered_map>
@@ -19,6 +21,7 @@ namespace Conqueror::GLEmu
         uint32_t MatrixStride = 16;
         int Sampler = -1;
         int SamplerElement = 0;
+        int Image = -1;                  // görüntü uniform'u ise Images dizini (değer görüntü birimi)
         uint32_t ArrayStride = 0;
         int ArrayRemaining = 1;
     };
@@ -57,6 +60,7 @@ namespace Conqueror::GLEmu
         uint32_t ConstantBuffers = 14;
         uint32_t Resources = 128;
         uint32_t Samplers = 16;
+        uint32_t UnorderedAccess = 8;                    // hesaplama: depolama görüntüsü + bloğu (D3D11 cs_5_0: 8 UAV)
         const char* ApiName = "GPU";
     };
 
@@ -81,6 +85,14 @@ namespace Conqueror::GLEmu
         uint32_t GlobalsSize = 0;
         std::vector<uint8_t> Globals;                    // ilk değerler (uniform x = ...;) yazılmış
         std::vector<uint32_t> VertexSpirv, FragmentSpirv;
+        // Hesaplama programı (307): tek hesaplama aşaması. Görüntüler (image2D) ve depolama blokları (std430) UAV yazmaçlarını u0..
+        // sırayla alır (D3D: register(u#); Metal arka ucu görüntüleri doku, blokları arabellek dizinlerine taşır)
+        bool Compute = false;
+        uint32_t LocalSize[3] = { 1, 1, 1 };
+        std::vector<uint32_t> ComputeSpirv;
+        std::vector<ImageBinding> Images;
+        std::vector<StorageBlockBinding> StorageBlocks;
+        uint32_t TextureRegisters = 0;                   // örneklenen doku yazmaçlarının sayısı (t0..)
     };
 
     bool ReflectProgram(const std::vector<ShaderSource>& shaders, const ResourceLimits& limits, ReflectedProgram& out, std::string& log);

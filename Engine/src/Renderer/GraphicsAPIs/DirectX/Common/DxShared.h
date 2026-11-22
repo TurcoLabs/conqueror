@@ -39,6 +39,7 @@ namespace Conqueror::DXCommon
     struct TranslatedProgram : GLEmu::ReflectedProgram
     {
         std::vector<uint8_t> VS, PS;
+        std::vector<uint8_t> CS;                     // hesaplama programı (307): cs_5_0
     };
 
     // GLSL köşe + parça gölgelendiricisini HLSL'e çevirip derler; id yalnızca döküm dosyası adı içindir

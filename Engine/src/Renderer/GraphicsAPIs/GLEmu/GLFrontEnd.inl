@@ -56,6 +56,12 @@
                 case GL_ELEMENT_ARRAY_BUFFER: return &CurrentVAO()->ElementBuffer;
                 case GL_UNIFORM_BUFFER: return &c.S.UniformBuffer;
                 case GL_PIXEL_UNPACK_BUFFER: return &c.S.PixelUnpackBuffer;
+                case GL_SHADER_STORAGE_BUFFER: return &c.S.Compute.StorageBuffer;
+                case GL_DISPATCH_INDIRECT_BUFFER: return &c.S.Compute.DispatchIndirect;
+                case GL_DRAW_INDIRECT_BUFFER: return &c.S.Compute.DrawIndirect;
+                case GL_PARAMETER_BUFFER: return &c.S.Compute.Parameter;
+                case GL_COPY_READ_BUFFER: return &c.S.Compute.CopyRead;
+                case GL_COPY_WRITE_BUFFER: return &c.S.Compute.CopyWrite;
                 default: return nullptr;
             }
         }
@@ -83,6 +89,8 @@
             size = std::min(size, b.Shadow.size() - offset);
             std::memcpy(b.Shadow.data() + offset, data, size);
             b.HighWater = std::max(b.HighWater, offset + size);
+            b.DirtyBegin = std::min(b.DirtyBegin, offset);
+            b.DirtyEnd = std::max(b.DirtyEnd, offset + size);
             b.Dirty = true;
         }
 
@@ -204,6 +212,13 @@
             UniformSlot* s = FindUniform(*p, location);
             if (!s)
                 return;
+            if (s->Image >= 0)
+            {
+                // Görüntü uniform'u: değer görüntü birimidir (glBindImageTexture)
+                if ((size_t)s->Image < p->Images.size())
+                    p->Images[(size_t)s->Image].Unit = (int)values[0];
+                return;
+            }
             if (s->Sampler >= 0)
             {
                 // Örnekleyici: değer doku birimidir
@@ -1002,6 +1017,29 @@
                 c.S.UBOSizes[index] = 0;
                 c.S.UniformBuffer = name;
             }
+            else if (target == GL_SHADER_STORAGE_BUFFER && index < c.S.Compute.Storage.size())
+            {
+                c.S.Compute.Storage[index] = name;
+                c.S.Compute.StorageOffsets[index] = 0;
+                c.S.Compute.StorageSizes[index] = 0;
+                c.S.Compute.StorageBuffer = name;
+            }
+        }
+
+        void APIENTRY BindBufferRange(GLenum target, GLuint index, GLuint name, GLintptr offset, GLsizeiptr size)
+        {
+            auto& c = Ctx();
+            BindBufferBase(target, index, name);
+            if (target == GL_UNIFORM_BUFFER && index < 64)
+            {
+                c.S.UBOOffsets[index] = offset;
+                c.S.UBOSizes[index] = size;
+            }
+            else if (target == GL_SHADER_STORAGE_BUFFER && index < c.S.Compute.Storage.size())
+            {
+                c.S.Compute.StorageOffsets[index] = offset;
+                c.S.Compute.StorageSizes[index] = size;
+            }
         }
 
         void APIENTRY BufferData(GLenum target, GLsizeiptr size, const void* data, GLenum usage)
@@ -1014,6 +1052,8 @@
             b->Usage = usage;
             if (data)
                 WriteBuffer(*b, 0, (size_t)size, data);
+            b->DirtyBegin = 0;                       // içerik baştan tanımlandı (GPU'ya ait arabellekte de bütünü yüklenir)
+            b->DirtyEnd = b->Shadow.size();
             b->Dirty = true;
         }
 
@@ -1614,6 +1654,8 @@
             b->Usage = usage;
             if (data)
                 WriteBuffer(*b, 0, (size_t)size, data);
+            b->DirtyBegin = 0;                       // içerik baştan tanımlandı (GPU'ya ait arabellekte de bütünü yüklenir)
+            b->DirtyEnd = b->Shadow.size();
             b->Dirty = true;
         }
 
@@ -1838,6 +1880,505 @@
                 std::copy(savedBufs, savedBufs + 8, fb->DrawBuffers);
                 fb->NumDrawBuffers = savedCount;
             }
+        }
+
+        // ── Örnekleyici nesneleri (glGenSamplers / glCreateSamplers): yalnız parametreler; çizim, birimde bağlı örnekleyicinin parametreleriyle
+        // örnekler (FSR 2'nin nokta / doğrusal örnekleyicileri; yoktu, FSR 2 dokunun kendi parametreleriyle örnekliyordu) ──
+        void APIENTRY GenSamplers(GLsizei n, GLuint* samplers)
+        {
+            auto& c = Ctx();
+            for (GLsizei i = 0; i < n && samplers; ++i)
+            {
+                const uint32_t name = c.NextSamplerName++;
+                c.SamplerObjects[name] = std::make_unique<Texture>();
+                samplers[i] = name;
+            }
+        }
+
+        void APIENTRY DeleteSamplers(GLsizei n, const GLuint* samplers)
+        {
+            auto& c = Ctx();
+            for (GLsizei i = 0; i < n && samplers; ++i)
+            {
+                if (!samplers[i])
+                    continue;
+                for (auto& u : c.S.Samplers)
+                    if (u == samplers[i])
+                        u = 0;
+                c.SamplerObjects.erase(samplers[i]);
+            }
+        }
+
+        GLboolean APIENTRY IsSampler(GLuint sampler) { return Ctx().SamplerObjects.count(sampler) ? GL_TRUE : GL_FALSE; }
+
+        Texture* SamplerObject(GLuint sampler)
+        {
+            auto& c = Ctx();
+            auto it = c.SamplerObjects.find(sampler);
+            return it != c.SamplerObjects.end() ? it->second.get() : nullptr;
+        }
+
+        void APIENTRY SamplerParameteri(GLuint sampler, GLenum pname, GLint param)
+        {
+            if (Texture* t = SamplerObject(sampler))
+                SetTexParam(*t, pname, param, (float)param);
+        }
+
+        void APIENTRY SamplerParameterf(GLuint sampler, GLenum pname, GLfloat param)
+        {
+            if (Texture* t = SamplerObject(sampler))
+                SetTexParam(*t, pname, (GLint)param, param);
+        }
+
+        void APIENTRY SamplerParameteriv(GLuint sampler, GLenum pname, const GLint* params)
+        {
+            if (params)
+                SamplerParameteri(sampler, pname, params[0]);
+        }
+
+        void APIENTRY SamplerParameterfv(GLuint sampler, GLenum pname, const GLfloat* params)
+        {
+            if (params)
+                SamplerParameterf(sampler, pname, params[0]);
+        }
+
+        // ── Program arayüzü sorguları (GL 4.3; FSR 2 doku / görüntü / blok adlarını bunlarla bulur) ──
+        // GL_UNIFORM dizini = uniform konumu (yansıtma sırası); GL_UNIFORM_BLOCK dizini = glGetUniformBlockIndex'inki
+        void APIENTRY GetProgramInterfaceiv(GLuint program, GLenum programInterface, GLenum pname, GLint* params)
+        {
+            if (!params)
+                return;
+            *params = 0;
+            Program* p = GetProgram(program);
+            if (!p)
+                return;
+            size_t count = 0, maxName = 0;
+            auto take = [&](const std::string& n) { ++count; maxName = std::max(maxName, n.size() + 1); };
+            switch (programInterface)
+            {
+                case GL_UNIFORM: for (const auto& u : p->Uniforms) take(u.Name); break;
+                case GL_UNIFORM_BLOCK: for (const auto& b : p->Blocks) take(b.Name); break;
+                case GL_SHADER_STORAGE_BLOCK: for (const auto& b : p->StorageBlocks) take(b.Name); break;
+                case GL_PROGRAM_INPUT: for (const auto& in : p->Inputs) take(in.Name); break;
+                default: break;
+            }
+            if (pname == GL_ACTIVE_RESOURCES)
+                *params = (GLint)count;
+            else if (pname == GL_MAX_NAME_LENGTH)
+                *params = (GLint)maxName;
+        }
+
+        const std::string* ResourceName(Program& p, GLenum programInterface, GLuint index)
+        {
+            switch (programInterface)
+            {
+                case GL_UNIFORM: return index < p.Uniforms.size() ? &p.Uniforms[index].Name : nullptr;
+                case GL_UNIFORM_BLOCK: return index < p.Blocks.size() ? &p.Blocks[index].Name : nullptr;
+                case GL_SHADER_STORAGE_BLOCK: return index < p.StorageBlocks.size() ? &p.StorageBlocks[index].Name : nullptr;
+                case GL_PROGRAM_INPUT: return index < p.Inputs.size() ? &p.Inputs[index].Name : nullptr;
+                default: return nullptr;
+            }
+        }
+
+        GLuint APIENTRY GetProgramResourceIndex(GLuint program, GLenum programInterface, const GLchar* name)
+        {
+            Program* p = GetProgram(program);
+            if (!p || !name)
+                return GL_INVALID_INDEX;
+            if (programInterface == GL_UNIFORM)
+            {
+                const GLint loc = GetUniformLocation(program, name);
+                return loc >= 0 ? (GLuint)loc : GL_INVALID_INDEX;
+            }
+            if (programInterface == GL_UNIFORM_BLOCK)
+                return GetUniformBlockIndex(program, name);
+            for (GLuint i = 0;; ++i)
+            {
+                const std::string* n = ResourceName(*p, programInterface, i);
+                if (!n)
+                    return GL_INVALID_INDEX;
+                if (*n == name)
+                    return i;
+            }
+        }
+
+        void APIENTRY GetProgramResourceName(GLuint program, GLenum programInterface, GLuint index, GLsizei bufSize, GLsizei* length, GLchar* name)
+        {
+            Program* p = GetProgram(program);
+            const std::string* n = p ? ResourceName(*p, programInterface, index) : nullptr;
+            CopyLog(n ? *n : std::string(), bufSize, length, name);
+        }
+
+        GLint APIENTRY GetProgramResourceLocation(GLuint program, GLenum programInterface, const GLchar* name)
+        {
+            return programInterface == GL_UNIFORM ? GetUniformLocation(program, name) : -1;
+        }
+
+        void APIENTRY GetProgramResourceiv(GLuint program, GLenum programInterface, GLuint index, GLsizei propCount, const GLenum* props, GLsizei bufSize,
+                                           GLsizei* length, GLint* params)
+        {
+            Program* p = GetProgram(program);
+            GLsizei written = 0;
+            for (GLsizei k = 0; p && props && params && k < propCount && written < bufSize; ++k)
+            {
+                GLint v = 0;
+                const std::string* n = ResourceName(*p, programInterface, index);
+                if (!n)
+                    break;
+                switch (props[k])
+                {
+                    case GL_NAME_LENGTH: v = (GLint)n->size() + 1; break;
+                    case GL_TYPE: v = programInterface == GL_UNIFORM ? (GLint)p->Uniforms[index].Type : 0; break;
+                    case GL_LOCATION: v = programInterface == GL_UNIFORM ? (GLint)index : programInterface == GL_PROGRAM_INPUT ? p->Inputs[index].Location : -1; break;
+                    case GL_BLOCK_INDEX: v = -1; break;   // CQ_Globals üyeleri, örnekleyiciler ve görüntüler varsayılan blokta
+                    case GL_ARRAY_SIZE: v = programInterface == GL_UNIFORM ? std::max(1, p->Uniforms[index].ArrayRemaining) : 1; break;
+                    case GL_BUFFER_BINDING:
+                        v = programInterface == GL_UNIFORM_BLOCK ? (GLint)p->Blocks[index].GLBinding :
+                            programInterface == GL_SHADER_STORAGE_BLOCK ? (GLint)p->StorageBlocks[index].GLBinding : 0;
+                        break;
+                    case GL_BUFFER_DATA_SIZE: v = programInterface == GL_UNIFORM_BLOCK ? (GLint)p->Blocks[index].Size : 0; break;
+                    default: break;
+                }
+                params[written++] = v;
+            }
+            if (length)
+                *length = written;
+        }
+
+        // glProgramUniform*: hedef program geçici olarak geçerli yapılır (uniform yazımı geçerli programa gider)
+        template <typename F>
+        void WithProgram(GLuint program, F&& fn)
+        {
+            auto& c = Ctx();
+            const uint32_t prev = c.S.Program;
+            c.S.Program = program;
+            fn();
+            c.S.Program = prev;
+        }
+
+        void APIENTRY ProgramUniform1i(GLuint program, GLint loc, GLint v0) { WithProgram(program, [&] { UniformVec<GLint>(loc, 1, 1, &v0); }); }
+        void APIENTRY ProgramUniform1iv(GLuint program, GLint loc, GLsizei count, const GLint* v) { WithProgram(program, [&] { UniformVec<GLint>(loc, count, 1, v); }); }
+        void APIENTRY ProgramUniform1f(GLuint program, GLint loc, GLfloat v0) { WithProgram(program, [&] { UniformVec<GLfloat>(loc, 1, 1, &v0); }); }
+        void APIENTRY ProgramUniform1ui(GLuint program, GLint loc, GLuint v0) { WithProgram(program, [&] { UniformVec<GLuint>(loc, 1, 1, &v0); }); }
+        void APIENTRY ProgramUniform2f(GLuint program, GLint loc, GLfloat v0, GLfloat v1)
+        {
+            const GLfloat v[2] = { v0, v1 };
+            WithProgram(program, [&] { UniformVec<GLfloat>(loc, 1, 2, v); });
+        }
+        void APIENTRY ProgramUniform4f(GLuint program, GLint loc, GLfloat v0, GLfloat v1, GLfloat v2, GLfloat v3)
+        {
+            const GLfloat v[4] = { v0, v1, v2, v3 };
+            WithProgram(program, [&] { UniformVec<GLfloat>(loc, 1, 4, v); });
+        }
+        void APIENTRY ProgramUniform4ui(GLuint program, GLint loc, GLuint v0, GLuint v1, GLuint v2, GLuint v3)
+        {
+            const GLuint v[4] = { v0, v1, v2, v3 };
+            WithProgram(program, [&] { UniformVec<GLuint>(loc, 1, 4, v); });
+        }
+
+        // glCheckNamedFramebufferStatus: yoktu (saplama 0 döndürüyordu); motor nesne hız geçişini, geç tepki maskesini, SRAA ve örtme
+        // pişirme çerçevelerini "tamam değil" sayıp atlıyordu (Vulkan / Direct3D / Metal / WebGPU'da TAA ve FSR 2 nesne hızı olmadan)
+        GLenum APIENTRY CheckNamedFramebufferStatus(GLuint framebuffer, GLenum target)
+        {
+            GLenum status = GL_FRAMEBUFFER_COMPLETE;
+            WithFramebuffer(framebuffer, [&] { status = CheckFramebufferStatus(target == GL_READ_FRAMEBUFFER ? GL_READ_FRAMEBUFFER : GL_DRAW_FRAMEBUFFER); });
+            return status;
+        }
+
+        // ── Eksik uniform türleri (glUniform*v / *ui; motorun ışın izleme, küme çizici ve parçacık programları kullanır) ──
+        void APIENTRY Uniform2fv(GLint loc, GLsizei count, const GLfloat* v) { UniformVec<GLfloat>(loc, count, 2, v); }
+        void APIENTRY Uniform4fv(GLint loc, GLsizei count, const GLfloat* v) { UniformVec<GLfloat>(loc, count, 4, v); }
+        void APIENTRY Uniform2iv(GLint loc, GLsizei count, const GLint* v) { UniformVec<GLint>(loc, count, 2, v); }
+        void APIENTRY Uniform3iv(GLint loc, GLsizei count, const GLint* v) { UniformVec<GLint>(loc, count, 3, v); }
+        void APIENTRY Uniform4iv(GLint loc, GLsizei count, const GLint* v) { UniformVec<GLint>(loc, count, 4, v); }
+        void APIENTRY Uniform1ui(GLint loc, GLuint v0) { UniformVec<GLuint>(loc, 1, 1, &v0); }
+        void APIENTRY Uniform2ui(GLint loc, GLuint v0, GLuint v1) { const GLuint v[2] = { v0, v1 }; UniformVec<GLuint>(loc, 1, 2, v); }
+        void APIENTRY Uniform3ui(GLint loc, GLuint v0, GLuint v1, GLuint v2) { const GLuint v[3] = { v0, v1, v2 }; UniformVec<GLuint>(loc, 1, 3, v); }
+        void APIENTRY Uniform4ui(GLint loc, GLuint v0, GLuint v1, GLuint v2, GLuint v3) { const GLuint v[4] = { v0, v1, v2, v3 }; UniformVec<GLuint>(loc, 1, 4, v); }
+        void APIENTRY Uniform1uiv(GLint loc, GLsizei count, const GLuint* v) { UniformVec<GLuint>(loc, count, 1, v); }
+        void APIENTRY Uniform2uiv(GLint loc, GLsizei count, const GLuint* v) { UniformVec<GLuint>(loc, count, 2, v); }
+        void APIENTRY Uniform3uiv(GLint loc, GLsizei count, const GLuint* v) { UniformVec<GLuint>(loc, count, 3, v); }
+        void APIENTRY Uniform4uiv(GLint loc, GLsizei count, const GLuint* v) { UniformVec<GLuint>(loc, count, 4, v); }
+        void APIENTRY UniformMatrix2fv(GLint loc, GLsizei count, GLboolean transpose, const GLfloat* v) { UniformMatrix(loc, count, transpose, v, 2); }
+
+        // glGetActiveUniform: yansıtılmış uniform (dizi tabanı kalan eleman sayısıyla)
+        void APIENTRY GetActiveUniform(GLuint program, GLuint index, GLsizei bufSize, GLsizei* length, GLint* size, GLenum* type, GLchar* name)
+        {
+            Program* p = GetProgram(program);
+            if (!p || index >= p->Uniforms.size())
+            {
+                CopyLog(std::string(), bufSize, length, name);
+                return;
+            }
+            const auto& u = p->Uniforms[index];
+            if (size)
+                *size = std::max(1, u.ArrayRemaining);
+            if (type)
+                *type = u.Type;
+            CopyLog(u.Name, bufSize, length, name);
+        }
+
+        // glClearBufferuiv / iv: tamsayı ekin temizleme değeri (katman tamsayı ekte değeri olduğu gibi kullanır)
+        void APIENTRY ClearBufferuivEntry(GLenum buffer, GLint drawbuffer, const GLuint* value)
+        {
+            if (!value)
+                return;
+            const GLfloat f[4] = { (GLfloat)value[0], (GLfloat)value[1], (GLfloat)value[2], (GLfloat)value[3] };
+            ClearBufferfvEntry(buffer, drawbuffer, f);
+        }
+
+        void APIENTRY ClearBufferivEntry(GLenum buffer, GLint drawbuffer, const GLint* value)
+        {
+            if (!value || !Live())
+                return;
+            if (buffer == GL_STENCIL)
+            {
+                auto& st = Ctx().S;
+                const GLint saved = st.ClearStencil;
+                st.ClearStencil = value[0];
+                ClearCurrent(GL_STENCIL_BUFFER_BIT);
+                st.ClearStencil = saved;
+                return;
+            }
+            const GLfloat f[4] = { (GLfloat)value[0], (GLfloat)value[1], (GLfloat)value[2], (GLfloat)value[3] };
+            ClearBufferfvEntry(buffer, drawbuffer, f);
+        }
+
+        // ── Eşitleme nesneleri (glFenceSync): çit, kaydedildiği gönderim sayacını tutar; GPU o gönderimi bitirdiyse işaretlidir. Zaman aşımı
+        // 0 ile sorgu beklemez (küme çizicinin birkaç kare sonra okuduğu sayaçlar), sıfırdan büyük zaman aşımında komutlar gönderilip beklenir ──
+        struct SyncObject { uint64_t Serial = 0; };
+
+        GLsync APIENTRY FenceSync(GLenum condition, GLbitfield)
+        {
+            if (condition != GL_SYNC_GPU_COMMANDS_COMPLETE)
+                return nullptr;
+            auto* so = new SyncObject();
+            so->Serial = SubmitSerialGL();
+            return reinterpret_cast<GLsync>(so);
+        }
+
+        void APIENTRY DeleteSync(GLsync sync) { delete reinterpret_cast<SyncObject*>(sync); }
+
+        GLboolean APIENTRY IsSync(GLsync sync) { return sync ? GL_TRUE : GL_FALSE; }
+
+        GLenum APIENTRY ClientWaitSync(GLsync sync, GLbitfield, GLuint64 timeout)
+        {
+            auto* so = reinterpret_cast<SyncObject*>(sync);
+            if (!so)
+                return GL_WAIT_FAILED;
+            if (SerialCompletedGL(so->Serial))
+                return GL_ALREADY_SIGNALED;
+            if (timeout == 0 || !Live())
+                return GL_TIMEOUT_EXPIRED;
+            FlushAndWaitGL();
+            return GL_CONDITION_SATISFIED;
+        }
+
+        void APIENTRY WaitSync(GLsync, GLbitfield, GLuint64) {}   // tek kuyruk: GPU komutları zaten sırayla
+
+        void APIENTRY GetSynciv(GLsync sync, GLenum pname, GLsizei count, GLsizei* length, GLint* values)
+        {
+            auto* so = reinterpret_cast<SyncObject*>(sync);
+            if (!values || count < 1)
+                return;
+            GLint v = 0;
+            switch (pname)
+            {
+                case GL_OBJECT_TYPE: v = GL_SYNC_FENCE; break;
+                case GL_SYNC_STATUS: v = (so && SerialCompletedGL(so->Serial)) ? GL_SIGNALED : GL_UNSIGNALED; break;
+                case GL_SYNC_CONDITION: v = GL_SYNC_GPU_COMMANDS_COMPLETE; break;
+                default: v = 0; break;
+            }
+            values[0] = v;
+            if (length)
+                *length = 1;
+        }
+
+        // ── Arabellek kopyası ve geri okuma: hesaplama gölgelendiricisinin yazdığı (GPU'ya ait) arabellekte içerik GPU'dadır ──
+        void APIENTRY CopyNamedBufferSubData(GLuint readBuffer, GLuint writeBuffer, GLintptr readOffset, GLintptr writeOffset, GLsizeiptr size)
+        {
+            Buffer* src = GetBuffer(readBuffer);
+            Buffer* dst = GetBuffer(writeBuffer);
+            if (!Live() || !src || !dst || size <= 0 || readOffset < 0 || writeOffset < 0 || (size_t)(readOffset + size) > src->Shadow.size() ||
+                (size_t)(writeOffset + size) > dst->Shadow.size())
+                return;
+            // Gölge kopyası her durumda (CPU'nun bildiği içerik); kaynak ya da hedef GPU'ya aitse katman GPU'da da kopyalar
+            std::memmove(dst->Shadow.data() + writeOffset, src->Shadow.data() + readOffset, (size_t)size);
+            dst->HighWater = std::max(dst->HighWater, (size_t)(writeOffset + size));
+            if (!CopyBufferGL(*src, *dst, (size_t)readOffset, (size_t)writeOffset, (size_t)size))
+            {
+                dst->DirtyBegin = std::min(dst->DirtyBegin, (size_t)writeOffset);
+                dst->DirtyEnd = std::max(dst->DirtyEnd, (size_t)(writeOffset + size));
+                dst->Dirty = true;
+            }
+        }
+
+        void APIENTRY CopyBufferSubData(GLenum readTarget, GLenum writeTarget, GLintptr readOffset, GLintptr writeOffset, GLsizeiptr size)
+        {
+            uint32_t* r = BufferBindingPoint(readTarget);
+            uint32_t* w = BufferBindingPoint(writeTarget);
+            if (r && w)
+                CopyNamedBufferSubData(*r, *w, readOffset, writeOffset, size);
+        }
+
+        void APIENTRY GetNamedBufferSubData(GLuint buffer, GLintptr offset, GLsizeiptr size, void* data)
+        {
+            Buffer* b = GetBuffer(buffer);
+            if (!b || !data || offset < 0 || size <= 0 || (size_t)(offset + size) > b->Shadow.size())
+                return;
+            if (Live() && ReadBufferGL(*b, (size_t)offset, (size_t)size, data))
+                return;
+            std::memcpy(data, b->Shadow.data() + offset, (size_t)size);
+        }
+
+        void APIENTRY GetBufferSubData(GLenum target, GLintptr offset, GLsizeiptr size, void* data)
+        {
+            if (uint32_t* point = BufferBindingPoint(target))
+                GetNamedBufferSubData(*point, offset, size, data);
+        }
+
+        // ── Dolaylı çizim (GL_DRAW_INDIRECT_BUFFER; Count sürümlerinde sayı GL_PARAMETER_BUFFER'da). Katman desteklemiyorsa
+        // (BackendSupportsGL) işlevler bulunmaz: motor GetProcAddress'ten boş gösterici alıp CPU yoluna düşer ──
+        void IndirectDraw(GLenum mode, bool indexed, GLenum type, const void* indirect, GLsizei drawcount, GLsizei stride, bool counted, GLintptr countOffset,
+                          GLsizei maxdrawcount)
+        {
+            auto& c = Ctx();
+            if (!Live() || !c.S.Compute.DrawIndirect)
+                return;
+            const GLsizei n = counted ? maxdrawcount : drawcount;
+            if (n <= 0 || (counted && !c.S.Compute.Parameter))
+                return;
+            const GLsizei natural = indexed ? 20 : 16;
+            DrawIndirectGL(mode, indexed, type, c.S.Compute.DrawIndirect, (int64_t)(uintptr_t)indirect, n, stride ? stride : natural,
+                           counted ? c.S.Compute.Parameter : 0, (int64_t)countOffset);
+        }
+
+        void APIENTRY DrawArraysIndirect(GLenum mode, const void* indirect) { IndirectDraw(mode, false, 0, indirect, 1, 0, false, 0, 0); }
+        void APIENTRY DrawElementsIndirect(GLenum mode, GLenum type, const void* indirect) { IndirectDraw(mode, true, type, indirect, 1, 0, false, 0, 0); }
+        void APIENTRY MultiDrawArraysIndirect(GLenum mode, const void* indirect, GLsizei drawcount, GLsizei stride)
+        {
+            IndirectDraw(mode, false, 0, indirect, drawcount, stride, false, 0, 0);
+        }
+        void APIENTRY MultiDrawElementsIndirect(GLenum mode, GLenum type, const void* indirect, GLsizei drawcount, GLsizei stride)
+        {
+            IndirectDraw(mode, true, type, indirect, drawcount, stride, false, 0, 0);
+        }
+        void APIENTRY MultiDrawArraysIndirectCount(GLenum mode, const void* indirect, GLintptr drawcount, GLsizei maxdrawcount, GLsizei stride)
+        {
+            IndirectDraw(mode, false, 0, indirect, 0, stride, true, drawcount, maxdrawcount);
+        }
+        void APIENTRY MultiDrawElementsIndirectCount(GLenum mode, GLenum type, const void* indirect, GLintptr drawcount, GLsizei maxdrawcount, GLsizei stride)
+        {
+            IndirectDraw(mode, true, type, indirect, 0, stride, true, drawcount, maxdrawcount);
+        }
+
+        // ── Hesaplama gölgelendiricisi (307) ──
+        // Motorun NIS'i ve CMAA2'si hesaplama gölgelendiricisidir; çeviri katmanlarında yoktu (bağlama "Program needs a vertex and a fragment
+        // shader" diye başarısız oluyor, NIS ve CMAA2 Vulkan / D3D / Metal projelerinde hiç çalışmıyordu)
+        void APIENTRY BindImageTexture(GLuint unit, GLuint texture, GLint level, GLboolean layered, GLint layer, GLenum access, GLenum format)
+        {
+            auto& c = Ctx();
+            if (unit >= c.S.Compute.Images.size())
+                return;
+            GLEmu::ImageUnit& u = c.S.Compute.Images[unit];
+            u.Texture = texture;
+            u.Level = level;
+            u.Layered = layered != GL_FALSE;
+            u.Layer = layer;
+            u.Access = access;
+            u.Format = format;
+        }
+
+        void APIENTRY DispatchComputeEntry(GLuint x, GLuint y, GLuint z)
+        {
+            if (!Live() || x == 0 || y == 0 || z == 0)
+                return;
+            DispatchComputeGL(x, y, z, 0, 0);
+        }
+
+        void APIENTRY DispatchComputeIndirectEntry(GLintptr offset)
+        {
+            auto& c = Ctx();
+            if (!Live() || !c.S.Compute.DispatchIndirect)
+                return;
+            DispatchComputeGL(0, 0, 0, c.S.Compute.DispatchIndirect, (int64_t)offset);
+        }
+
+        void APIENTRY MemoryBarrierEntry(GLbitfield barriers)
+        {
+            if (Live())
+                MemoryBarrierGL(barriers);
+        }
+
+        // glNamedBufferStorage: değişmez boyutlu arabellek; çeviri katmanında glNamedBufferData gibi (bayraklar yalnız GL doğrulaması içindir)
+        void APIENTRY NamedBufferStorage(GLuint buffer, GLsizeiptr size, const void* data, GLbitfield)
+        {
+            Buffer* b = GetBuffer(buffer);
+            if (!b)
+                return;
+            b->Shadow.assign((size_t)std::max<GLsizeiptr>(size, 0), 0);
+            b->HighWater = 0;
+            b->Usage = GL_DYNAMIC_DRAW;
+            if (data)
+                WriteBuffer(*b, 0, (size_t)size, data);
+            b->HighWater = b->Shadow.size();
+            b->DirtyBegin = 0;
+            b->DirtyEnd = b->Shadow.size();
+            b->Dirty = true;
+        }
+
+        void APIENTRY BufferStorage(GLenum target, GLsizeiptr size, const void* data, GLbitfield flags)
+        {
+            if (uint32_t* point = BufferBindingPoint(target))
+                NamedBufferStorage(*point, size, data, flags);
+        }
+
+        // glClearNamedBufferData / SubData: aralık, iç biçimin bir öğesi kadar desenle doldurulur (CMAA2 sayaç / liste arabellekleri,
+        // küme çizicinin sayaçları)
+        size_t FormatElementBytes(GLenum internalformat)
+        {
+            switch (internalformat)
+            {
+                case GL_R8: case GL_R8I: case GL_R8UI: return 1;
+                case GL_R16: case GL_R16F: case GL_R16I: case GL_R16UI: case GL_RG8: case GL_RG8I: case GL_RG8UI: return 2;
+                case GL_RG32F: case GL_RG32I: case GL_RG32UI: case GL_RGBA16: case GL_RGBA16F: case GL_RGBA16I: case GL_RGBA16UI: return 8;
+                case GL_RGBA32F: case GL_RGBA32I: case GL_RGBA32UI: return 16;
+                case GL_RGB32F: case GL_RGB32I: case GL_RGB32UI: return 12;
+                default: return 4;
+            }
+        }
+
+        void APIENTRY ClearNamedBufferSubData(GLuint buffer, GLenum internalformat, GLintptr offset, GLsizeiptr size, GLenum, GLenum, const void* data)
+        {
+            Buffer* b = GetBuffer(buffer);
+            if (!b || b->Shadow.empty() || offset < 0 || size <= 0 || (size_t)offset >= b->Shadow.size())
+                return;
+            const size_t elem = FormatElementBytes(internalformat);
+            const size_t bytes = std::min((size_t)size, b->Shadow.size() - (size_t)offset);
+            std::vector<uint8_t> fill(bytes, 0);
+            if (data)
+                for (size_t o = 0; o + elem <= fill.size(); o += elem)
+                    std::memcpy(fill.data() + o, data, elem);
+            WriteBuffer(*b, (size_t)offset, fill.size(), fill.data());
+        }
+
+        void APIENTRY ClearNamedBufferData(GLuint buffer, GLenum internalformat, GLenum format, GLenum type, const void* data)
+        {
+            Buffer* b = GetBuffer(buffer);
+            if (b)
+                ClearNamedBufferSubData(buffer, internalformat, 0, (GLsizeiptr)b->Shadow.size(), format, type, data);
+        }
+
+        void APIENTRY ClearBufferSubData(GLenum target, GLenum internalformat, GLintptr offset, GLsizeiptr size, GLenum format, GLenum type, const void* data)
+        {
+            if (uint32_t* point = BufferBindingPoint(target))
+                ClearNamedBufferSubData(*point, internalformat, offset, size, format, type, data);
+        }
+
+        void APIENTRY ClearBufferData(GLenum target, GLenum internalformat, GLenum format, GLenum type, const void* data)
+        {
+            if (uint32_t* point = BufferBindingPoint(target))
+                ClearNamedBufferData(*point, internalformat, format, type, data);
         }
 
         // glGetBooleani_v(GL_COLOR_WRITEMASK, i): ek başına renk maskesi (glColorMaski)
@@ -2178,6 +2719,34 @@
             CQ_VKGL_FN(NamedFramebufferDrawBuffers, NamedFramebufferDrawBuffers), CQ_VKGL_FN(NamedFramebufferDrawBuffer, NamedFramebufferDrawBuffer),
             CQ_VKGL_FN(NamedFramebufferReadBuffer, NamedFramebufferReadBuffer), CQ_VKGL_FN(BlitNamedFramebuffer, BlitNamedFramebuffer),
             CQ_VKGL_FN(CopyImageSubData, CopyImageSubDataEntry), CQ_VKGL_FN(ClearBufferfv, ClearBufferfvEntry), CQ_VKGL_FN(GetBooleani_v, GetBooleani_v),
+            CQ_VKGL_FN(BindImageTexture, BindImageTexture), CQ_VKGL_FN(DispatchCompute, DispatchComputeEntry),
+            CQ_VKGL_FN(DispatchComputeIndirect, DispatchComputeIndirectEntry), CQ_VKGL_FN(MemoryBarrier, MemoryBarrierEntry),
+            CQ_VKGL_FN(NamedBufferStorage, NamedBufferStorage), CQ_VKGL_FN(BufferStorage, BufferStorage),
+            CQ_VKGL_FN(ClearNamedBufferData, ClearNamedBufferData), CQ_VKGL_FN(ClearBufferData, ClearBufferData),
+            CQ_VKGL_FN(BindBufferRange, BindBufferRange),
+            CQ_VKGL_FN(GenSamplers, GenSamplers), CQ_VKGL_FN(CreateSamplers, GenSamplers), CQ_VKGL_FN(DeleteSamplers, DeleteSamplers),
+            CQ_VKGL_FN(IsSampler, IsSampler), CQ_VKGL_FN(SamplerParameteri, SamplerParameteri), CQ_VKGL_FN(SamplerParameterf, SamplerParameterf),
+            CQ_VKGL_FN(SamplerParameteriv, SamplerParameteriv), CQ_VKGL_FN(SamplerParameterfv, SamplerParameterfv),
+            CQ_VKGL_FN(GetProgramInterfaceiv, GetProgramInterfaceiv), CQ_VKGL_FN(GetProgramResourceIndex, GetProgramResourceIndex),
+            CQ_VKGL_FN(GetProgramResourceName, GetProgramResourceName), CQ_VKGL_FN(GetProgramResourceLocation, GetProgramResourceLocation),
+            CQ_VKGL_FN(GetProgramResourceiv, GetProgramResourceiv), CQ_VKGL_FN(ProgramUniform1i, ProgramUniform1i),
+            CQ_VKGL_FN(ProgramUniform1iv, ProgramUniform1iv), CQ_VKGL_FN(ProgramUniform1f, ProgramUniform1f),
+            CQ_VKGL_FN(ProgramUniform1ui, ProgramUniform1ui), CQ_VKGL_FN(ProgramUniform2f, ProgramUniform2f),
+            CQ_VKGL_FN(ProgramUniform4f, ProgramUniform4f), CQ_VKGL_FN(ProgramUniform4ui, ProgramUniform4ui),
+            CQ_VKGL_FN(CheckNamedFramebufferStatus, CheckNamedFramebufferStatus),
+            CQ_VKGL_FN(Uniform2fv, Uniform2fv), CQ_VKGL_FN(Uniform4fv, Uniform4fv), CQ_VKGL_FN(Uniform2iv, Uniform2iv), CQ_VKGL_FN(Uniform3iv, Uniform3iv),
+            CQ_VKGL_FN(Uniform4iv, Uniform4iv), CQ_VKGL_FN(Uniform1ui, Uniform1ui), CQ_VKGL_FN(Uniform2ui, Uniform2ui), CQ_VKGL_FN(Uniform3ui, Uniform3ui),
+            CQ_VKGL_FN(Uniform4ui, Uniform4ui), CQ_VKGL_FN(Uniform1uiv, Uniform1uiv), CQ_VKGL_FN(Uniform2uiv, Uniform2uiv), CQ_VKGL_FN(Uniform3uiv, Uniform3uiv),
+            CQ_VKGL_FN(Uniform4uiv, Uniform4uiv), CQ_VKGL_FN(UniformMatrix2fv, UniformMatrix2fv), CQ_VKGL_FN(GetActiveUniform, GetActiveUniform),
+            CQ_VKGL_FN(ClearBufferuiv, ClearBufferuivEntry), CQ_VKGL_FN(ClearBufferiv, ClearBufferivEntry),
+            CQ_VKGL_FN(FenceSync, FenceSync), CQ_VKGL_FN(DeleteSync, DeleteSync), CQ_VKGL_FN(IsSync, IsSync), CQ_VKGL_FN(ClientWaitSync, ClientWaitSync),
+            CQ_VKGL_FN(WaitSync, WaitSync), CQ_VKGL_FN(GetSynciv, GetSynciv),
+            CQ_VKGL_FN(CopyNamedBufferSubData, CopyNamedBufferSubData), CQ_VKGL_FN(CopyBufferSubData, CopyBufferSubData),
+            CQ_VKGL_FN(GetNamedBufferSubData, GetNamedBufferSubData), CQ_VKGL_FN(GetBufferSubData, GetBufferSubData),
+            CQ_VKGL_FN(ClearNamedBufferSubData, ClearNamedBufferSubData), CQ_VKGL_FN(ClearBufferSubData, ClearBufferSubData),
+            CQ_VKGL_FN(DrawArraysIndirect, DrawArraysIndirect), CQ_VKGL_FN(DrawElementsIndirect, DrawElementsIndirect),
+            CQ_VKGL_FN(MultiDrawArraysIndirect, MultiDrawArraysIndirect), CQ_VKGL_FN(MultiDrawElementsIndirect, MultiDrawElementsIndirect),
+            CQ_VKGL_FN(MultiDrawArraysIndirectCount, MultiDrawArraysIndirectCount), CQ_VKGL_FN(MultiDrawElementsIndirectCount, MultiDrawElementsIndirectCount),
             CQ_VKGL_FN(GetNamedFramebufferAttachmentParameteriv, GetNamedFramebufferAttachmentParameteriv),
             CQ_VKGL_FN(CreateRenderbuffers, CreateRenderbuffers), CQ_VKGL_FN(NamedRenderbufferStorage, NamedRenderbufferStorage),
             CQ_VKGL_FN(NamedRenderbufferStorageMultisample, NamedRenderbufferStorageMultisample),
@@ -2239,7 +2808,7 @@
                 return nullptr;
             for (const auto& f : g_Functions)
                 if (std::strcmp(f.Name, name) == 0)
-                    return f.Fn;
+                    return BackendSupportsGL(name) ? f.Fn : nullptr;
 #if defined(__EMSCRIPTEN__)
             // WebAssembly dolaylı çağrıda imza denetler: imzası farklı genel saplama sayfayı durdururdu. Gösterici boş kalır,
             // katman kurulunca GLProfile::InstallMissingStubs imzası aynı saplamaları koyar
