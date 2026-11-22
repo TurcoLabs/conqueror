@@ -114,6 +114,8 @@ namespace Conqueror::VK
         uint32_t ApiVersion() const { return m_ApiVersion; }
         bool HasDynamicDepthBiasEnable() const { return g_Fn.CmdSetDepthBiasEnable != nullptr; }
         bool HasDrawIndirectCount() const { return m_DrawIndirectCount && g_Fn.CmdDrawIndexedIndirectCount && g_Fn.CmdDrawIndirectCount; }
+        // 323: VK_EXT_debug_utils örnekte açık (nesne adları için)
+        bool HasDebugUtils() const { return m_DebugUtils; }
         bool IsInFrame() const { return m_InFrame; }
         bool IsPortability() const { return m_Portability; }
 
@@ -136,6 +138,7 @@ namespace Conqueror::VK
         VkPhysicalDeviceMemoryProperties m_MemProps{};
         VkPhysicalDeviceFeatures m_EnabledFeatures{};
         bool m_DrawIndirectCount = false;
+        bool m_DebugUtils = false;
         VkFormat m_DepthStencilFormat = VK_FORMAT_D32_SFLOAT_S8_UINT;
         uint32_t m_ApiVersion = 0;
         bool m_Portability = false;

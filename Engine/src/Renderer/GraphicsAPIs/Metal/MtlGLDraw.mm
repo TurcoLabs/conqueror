@@ -900,6 +900,8 @@ fragment ClearOut cq_clear(VSOut i [[stage_in]], constant Params& p [[buffer(0)]
             d.depthAttachmentPixelFormat = c.RenderingDepthFormat;
             if (c.RenderingHasStencil)
                 d.stencilAttachmentPixelFormat = c.RenderingDepthFormat;
+            if (!p->Label.empty())
+                d.label = [NSString stringWithUTF8String:p->Label.c_str()];
             NSError* err = nil;
             pso = [core.Device() newRenderPipelineStateWithDescriptor:d error:&err];
             if (!pso)

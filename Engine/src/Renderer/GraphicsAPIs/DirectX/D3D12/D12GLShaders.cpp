@@ -71,6 +71,8 @@ namespace Conqueror::D12GL
             p.Linked = p.ComputePSO != nullptr;
             if (!p.Linked)
                 p.Log = "Direct3D 12 compute pipeline creation failed";
+            else if (!p.Label.empty())
+                ProgramLabelGL(p);
             return p.Linked;
         }
         p.Linked = !p.VS.empty() && !p.PS.empty();
@@ -78,6 +80,17 @@ namespace Conqueror::D12GL
             p.Log = "Direct3D 12 shader compilation produced no bytecode";
         return p.Linked;
     }
+
+    // 323: ID3D12Object::SetName (PIX / RenderDoc / hata katmanı); çizim PSO'ları oluşturulurken aynı adı alır (D12GLDraw)
+    void NameD3D12Object(ID3D12Object* o, const std::string& label)
+    {
+        if (!o || label.empty())
+            return;
+        std::wstring w(label.begin(), label.end());
+        o->SetName(w.c_str());
+    }
+
+    void ProgramLabelGL(Program& p) { NameD3D12Object(p.ComputePSO, p.Label); }
 
     UniformSlot* FindUniform(Program& p, GLint location)
     {

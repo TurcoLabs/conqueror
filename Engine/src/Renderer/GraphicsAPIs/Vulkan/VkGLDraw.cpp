@@ -694,6 +694,8 @@ namespace Conqueror::VkGL
                 CQ_CORE_ERROR("[VkGL] Pipeline creation failed");
                 pipeline = VK_NULL_HANDLE;
             }
+            else
+                NameVkObject(VK_OBJECT_TYPE_PIPELINE, (uint64_t)pipeline, p->Label);
             c.Pipelines[key.H] = pipeline;
         }
         if (!pipeline)

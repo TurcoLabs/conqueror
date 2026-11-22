@@ -95,14 +95,6 @@ namespace Conqueror::WgpuGL
 
         GLenum APIENTRY W_CheckNamedFramebufferStatus(GLuint, GLenum) { return GL_FRAMEBUFFER_COMPLETE; }
 
-        void APIENTRY W_ObjectLabel(GLenum identifier, GLuint name, GLsizei length, const GLchar* label)
-        {
-            if (identifier != GL_PROGRAM || !label)
-                return;
-            if (Program* p = GetProgram(name))
-                p->Label = length < 0 ? std::string(label) : std::string(label, (size_t)length);
-        }
-
         // glClearBuffer*: çizim çerçeve arabelleğinin tek eki (renk eki i, derinlik, şablon) kendi geçişinde temizlenir
         void ClearAttachment(GLenum buffer, GLint drawbuffer, const float color[4], float depth, int stencil, bool hasDepth, bool hasStencil)
         {
@@ -272,8 +264,6 @@ namespace Conqueror::WgpuGL
         glad_glCopyImageSubData = &W_CopyImageSubData;
         if (!glad_glCheckNamedFramebufferStatus)
             glad_glCheckNamedFramebufferStatus = &W_CheckNamedFramebufferStatus;
-        if (!glad_glObjectLabel)
-            glad_glObjectLabel = &W_ObjectLabel;
         glad_glClearBufferfv = &W_ClearBufferfv;
         if (!glad_glClearBufferiv) glad_glClearBufferiv = &W_ClearBufferiv;
         if (!glad_glClearBufferuiv) glad_glClearBufferuiv = &W_ClearBufferuiv;

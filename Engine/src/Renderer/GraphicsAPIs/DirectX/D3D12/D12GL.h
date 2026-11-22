@@ -149,6 +149,7 @@ namespace Conqueror::D12GL
 
     struct Program
     {
+        std::string Label;                  // glObjectLabel (motorun gölgelendirici adı, 323)
         uint64_t Id = 0;
         std::vector<uint32_t> Shaders;
         // Hesaplama gölgelendiricisi (307): görüntü uniform'ları ve depolama blokları; IsCompute ise köşe / parça aşaması yok
@@ -351,6 +352,8 @@ namespace Conqueror::D12GL
     // Hesaplama gölgelendiricisi (307): geçerli program IsCompute ise dispatch (indirectBuffer 0: doğrudan x / y / z; değilse o arabellekte
     // indirectOffset'teki üç uint), glMemoryBarrier
     void DispatchComputeGL(uint32_t x, uint32_t y, uint32_t z, uint32_t indirectBuffer, int64_t indirectOffset);
+    void ProgramLabelGL(Program& p);       // 323: glObjectLabel(GL_PROGRAM) arka uç nesnelerine hata ayıklama adı verir
+    void NameD3D12Object(ID3D12Object* o, const std::string& label);
     void MemoryBarrierGL(GLbitfield barriers);
     // 307: GPU'ya ait arabellek (hesaplama gölgelendiricisinin yazdığı) kopyası / geri okuması (false: ön yüz gölge kopyayı kullanır),
     // glFenceSync gönderim sayacı, dolaylı çizim ve katmanın sağlamadığı GL işlevleri (GetProcAddress boş döner)

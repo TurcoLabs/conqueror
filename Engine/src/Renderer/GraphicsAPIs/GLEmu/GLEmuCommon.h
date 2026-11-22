@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Core/Base/Base.h"
+
 #include <array>
 #include <cstdint>
 #include <string>
@@ -7,6 +9,10 @@
 // GL ön yüzünün (GLFrontEnd.inl) arka uçtan istediği cihaz sınırları
 namespace Conqueror::GLEmu
 {
+    // 323: çeviri katmanlarında çağrılan uygulanmamış GL işlevleri (her ad bir kez sayılır; testler 0 bekler)
+    CQ_API void NoteUnimplementedCall(const char* name);
+    CQ_API int UnimplementedCallCount();
+    CQ_API std::string UnimplementedCallNames();
     struct Limits
     {
         int32_t MaxTextureSize = 16384;

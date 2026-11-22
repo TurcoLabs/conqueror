@@ -170,6 +170,13 @@ namespace Conqueror::VK
             else
                 CQ_CORE_WARN("[Vulkan] Validation layer requested but not installed");
         }
+        // 323: nesne adları (glObjectLabel -> vkSetDebugUtilsObjectNameEXT) RenderDoc gibi araçlarda görünsün diye uzantı varsa hep açık
+        m_DebugUtils = std::find_if(exts.begin(), exts.end(), [](const char* e) { return std::strcmp(e, VK_EXT_DEBUG_UTILS_EXTENSION_NAME) == 0; }) != exts.end();
+        if (!m_DebugUtils && HasInstanceExtension(VK_EXT_DEBUG_UTILS_EXTENSION_NAME))
+        {
+            exts.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+            m_DebugUtils = true;
+        }
         // Yükleyici sürümü: 1.3 tercih edilir, 1.2 + uzantılar da kabul (MoltenVK / eski sürücüler)
         uint32_t loaderVersion = VK_API_VERSION_1_0;
         if (auto enumerate = (PFN_vkEnumerateInstanceVersion)vkGetInstanceProcAddr(nullptr, "vkEnumerateInstanceVersion"))

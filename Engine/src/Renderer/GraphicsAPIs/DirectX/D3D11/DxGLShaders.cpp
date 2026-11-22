@@ -82,7 +82,24 @@ namespace Conqueror::DxGL
         p.Linked = (p.IsCompute ? p.CS != nullptr : (p.VS && p.PS)) && (p.GlobalsRegister < 0 || p.GlobalsBuffer);
         if (!p.Linked)
             p.Log = "Direct3D 11 shader object creation failed";
+        else if (!p.Label.empty())
+            ProgramLabelGL(p);   // yeniden bağlamada yeni nesneler de adını alır
         return p.Linked;
+    }
+
+    // 323: hata ayıklama adı (WKPDID_D3DDebugObjectName: PIX, RenderDoc ve D3D11 hata katmanı iletilerinde görünür)
+    void ProgramLabelGL(Program& p)
+    {
+        static const GUID kDebugObjectName = { 0x429b8c22, 0x9188, 0x4b0c, { 0x87, 0x42, 0xac, 0xb0, 0xbf, 0x85, 0xc2, 0x00 } };
+        const UINT size = (UINT)p.Label.size();
+        auto name = [&](ID3D11DeviceChild* o) {
+            if (o)
+                o->SetPrivateData(kDebugObjectName, size, size ? p.Label.data() : nullptr);
+        };
+        name(p.VS);
+        name(p.PS);
+        name(p.CS);
+        name(p.GlobalsBuffer);
     }
 
     UniformSlot* FindUniform(Program& p, GLint location)

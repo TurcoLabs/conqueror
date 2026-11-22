@@ -962,6 +962,8 @@ float4 PSPresent(VSOut i) : SV_Target { return float4(g_Src.SampleLevel(g_Smp, i
                 CQ_CORE_ERROR("[D12GL] Pipeline creation failed for program {0}", p->Id);
                 pso = nullptr;
             }
+            else
+                NameD3D12Object(pso, p->Label);
         }
         if (!pso)
             return;

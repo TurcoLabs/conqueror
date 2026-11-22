@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <mutex>
 #include <cstdlib>
 #include <cstring>
 #include <map>
@@ -18,6 +19,34 @@
 
 namespace Conqueror::GLEmu
 {
+    namespace
+    {
+        std::mutex g_UnimplementedMutex;
+        std::string g_UnimplementedNames;
+        int g_UnimplementedCount = 0;
+    }
+
+    void NoteUnimplementedCall(const char* name)
+    {
+        std::lock_guard<std::mutex> lock(g_UnimplementedMutex);
+        ++g_UnimplementedCount;
+        if (!g_UnimplementedNames.empty())
+            g_UnimplementedNames += ", ";
+        g_UnimplementedNames += name ? name : "?";
+    }
+
+    int UnimplementedCallCount()
+    {
+        std::lock_guard<std::mutex> lock(g_UnimplementedMutex);
+        return g_UnimplementedCount;
+    }
+
+    std::string UnimplementedCallNames()
+    {
+        std::lock_guard<std::mutex> lock(g_UnimplementedMutex);
+        return g_UnimplementedNames;
+    }
+
     namespace
     {
         // Aşama başına 16 örnekleyici: büyük örnekleyici dizileri ayrı doku dizisi + tek örnekleyiciye çevrilir

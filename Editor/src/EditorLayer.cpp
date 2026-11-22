@@ -131,6 +131,7 @@
 #include <nfd.h>
 #include <sstream>
 #include "Renderer/AntiAliasing.h"
+#include "Renderer/GraphicsAPIs/GLEmu/GLEmuCommon.h"
 #include "Renderer/UpscalerSelfTest.h"
 #include "Renderer/Upscalers/VkGLInterop.h"
 #include "Renderer/Upscalers/DLSSUpscaler.h"
@@ -7221,6 +7222,15 @@ namespace Conqueror::Editor
             };
             if (a.size() < 2) { err = "gpu simulate|expect_aa|expect_upscaler|self_test|self_test_done|expect_report|report_has_no ..."; return false; }
             const std::string sub = a[1];
+            if (sub == "expect_no_unimplemented")
+            {
+                // 323: çeviri katmanında (Vulkan / Direct3D / Metal / WebGPU) uygulanmamış GL işlevi çağrılmadı (glObjectLabel her açılışta
+                // uyarı veriyordu); OpenGL'de sayaç hep 0
+                const int n = GLEmu::UnimplementedCallCount();
+                Automation::Report("UNIMPLEMENTED GL calls: " + std::to_string(n) + (n ? " (" + GLEmu::UnimplementedCallNames() + ")" : std::string()));
+                if (n) { err = "unimplemented GL functions called: " + GLEmu::UnimplementedCallNames(); return false; }
+                return true;
+            }
             if (sub == "expect_shaders_ok")
             {
                 // Çizim gölgelendiricilerinin hepsi bu arka uçta bağlandı mı (arka ucun bilinen eksikleri hariç: hesaplama gölgelendiricisi,
