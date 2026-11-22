@@ -24,6 +24,18 @@ namespace Conqueror::MTL
     const char* g_DiagLabel = "frame";
     std::atomic<int> g_DiagErrors{ 0 };
     std::atomic<int> g_DiagSlow{ 0 };
+    std::atomic<int> g_DiagPipelines{ 0 }, g_DiagTextures{ 0 }, g_DiagResourceLines{ 0 };
+    std::atomic<int64_t> g_DiagPipelineUs{ 0 }, g_DiagTextureBytes{ 0 };
+    void DiagCountPipeline(double ms)
+    {
+        g_DiagPipelines.fetch_add(1);
+        g_DiagPipelineUs.fetch_add((int64_t)(ms * 1000.0));
+    }
+    void DiagCountTexture(uint64_t bytes)
+    {
+        g_DiagTextures.fetch_add(1);
+        g_DiagTextureBytes.fetch_add((int64_t)bytes);
+    }
 
     namespace
     {
@@ -246,13 +258,19 @@ namespace Conqueror::MTL
         dispatch_semaphore_t sem = m_Inflight;
         volatile uint64_t* completed = &m_CompletedFrame;
         const char* label = g_DiagLabel;
+        // Bu karede oluşturulan kaynaklar (yavaş kare satırına eklenir; ilk 400 karede kaynak oluşturan her kare ayrıca yazılır)
+        const int newPipelines = g_DiagPipelines.exchange(0), newTextures = g_DiagTextures.exchange(0);
+        const double pipelineMs = (double)g_DiagPipelineUs.exchange(0) / 1000.0, textureMB = (double)g_DiagTextureBytes.exchange(0) / 1048576.0;
+        if ((newPipelines > 0 || newTextures > 0) && serial <= 400 && g_DiagResourceLines.fetch_add(1) < 80)
+            CQ_CORE_WARN("[Metal diag] frame {0} resources: {1} new pipelines ({2:.1f} ms to create), {3} new textures ({4:.1f} MB)", serial, newPipelines,
+                         pipelineMs, newTextures, textureMB);
         [cmd addCompletedHandler:^(id<MTLCommandBuffer> done) {
             if (done.error && g_DiagErrors.fetch_add(1) < 40)
                 CQ_CORE_ERROR("[Metal diag] command buffer failed (frame {0}, last '{1}', GPU {2:.1f} ms): {3}", serial, label ? label : "?",
                               (done.GPUEndTime - done.GPUStartTime) * 1000.0, [[done.error description] UTF8String]);
             else if (!done.error && done.GPUEndTime - done.GPUStartTime > 0.25 && g_DiagSlow.fetch_add(1) < 40)
-                CQ_CORE_WARN("[Metal diag] slow frame command buffer (frame {0}, last '{1}'): GPU {2:.1f} ms", serial, label ? label : "?",
-                             (done.GPUEndTime - done.GPUStartTime) * 1000.0);
+                CQ_CORE_WARN("[Metal diag] slow frame command buffer (frame {0}, last '{1}'): GPU {2:.1f} ms; this frame {3} new pipelines, {4} new textures "
+                             "({5:.1f} MB)", serial, label ? label : "?", (done.GPUEndTime - done.GPUStartTime) * 1000.0, newPipelines, newTextures, textureMB);
             if (!done.error && (serial == 30 || serial == 120 || serial == 600))
                 CQ_CORE_WARN("[Metal diag] frame {0} command buffer: GPU {1:.1f} ms", serial, (done.GPUEndTime - done.GPUStartTime) * 1000.0);
             if (*completed < serial)

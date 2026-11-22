@@ -17,6 +17,9 @@ namespace Conqueror::MTL
 {
     // CI TANI (ci/mtlgl-ios-ar): son kodlanan işin etiketi; komut arabelleği hata verince günlüğe yazılır
     extern const char* g_DiagLabel;
+    // Dördüncü tanı: bu karede oluşturulan pipeline / doku sayısı (oluşturma süresi, bayt); Present karede bir okuyup sıfırlar
+    void DiagCountPipeline(double ms);
+    void DiagCountTexture(uint64_t bytes);
 
     // Arabellek dizinleri: köşe öznitelikleri 0..15, sabit arabellekler (yazmaç b) 16 + b
     constexpr uint32_t kConstantBufferBase = 16;

@@ -4,6 +4,7 @@
 #include "Core/Logging/Log.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <unordered_map>
@@ -364,7 +365,8 @@ fragment ClearOut cq_clear(VSOut i [[stage_in]], constant Params& p [[buffer(0)]
                 d.stencilAttachmentPixelFormat = t.Depth;
             d.rasterSampleCount = t.Samples;
             NSError* err = nil;
-            id<MTLRenderPipelineState> pso = [Core::Get().Device() newRenderPipelineStateWithDescriptor:d error:&err];
+            const auto cqDiagT0 = std::chrono::steady_clock::now();
+            id<MTLRenderPipelineState> pso = [Core::Get().Device() newRenderPipelineStateWithDescriptor:d error:&err]; ::Conqueror::MTL::DiagCountPipeline(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - cqDiagT0).count());
             if (!pso)
                 CQ_CORE_ERROR("[MtlGL] Helper pipeline failed: {0}", err ? [[err localizedDescription] UTF8String] : "unknown");
             h.Pipelines[k.H] = pso;
@@ -836,7 +838,8 @@ fragment ClearOut cq_clear(VSOut i [[stage_in]], constant Params& p [[buffer(0)]
             if (c.RenderingHasStencil)
                 d.stencilAttachmentPixelFormat = c.RenderingDepthFormat;
             NSError* err = nil;
-            pso = [core.Device() newRenderPipelineStateWithDescriptor:d error:&err];
+            const auto cqDiagT0 = std::chrono::steady_clock::now();
+            pso = [core.Device() newRenderPipelineStateWithDescriptor:d error:&err]; ::Conqueror::MTL::DiagCountPipeline(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - cqDiagT0).count());
             if (!pso)
                 CQ_CORE_ERROR("[MtlGL] Pipeline creation failed for program {0}: {1}", p->Id, err ? [[err localizedDescription] UTF8String] : "unknown");
         }
@@ -1130,7 +1133,8 @@ fragment DCDepth cq_dcopy_fs(DCOut i [[stage_in]], depth2d<float> src [[texture(
                     d.stencilAttachmentPixelFormat = dst.Format;
                 d.rasterSampleCount = 1;
                 NSError* err = nil;
-                pso = [core.Device() newRenderPipelineStateWithDescriptor:d error:&err];
+                const auto cqDiagT0 = std::chrono::steady_clock::now();
+                pso = [core.Device() newRenderPipelineStateWithDescriptor:d error:&err]; ::Conqueror::MTL::DiagCountPipeline(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - cqDiagT0).count());
                 if (!pso)
                 {
                     CQ_CORE_ERROR("[MtlGL diag] depth copy pipeline failed: {0}", err ? [[err localizedDescription] UTF8String] : "unknown");

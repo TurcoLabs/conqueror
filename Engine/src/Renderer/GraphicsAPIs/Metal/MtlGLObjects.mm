@@ -179,6 +179,7 @@ namespace Conqueror::MtlGL
         d.storageMode = MTLStorageModePrivate;
         d.usage = MTLTextureUsageShaderRead | MTLTextureUsageRenderTarget;
         t.Image = [Core::Get().Device() newTextureWithDescriptor:d];
+        ::Conqueror::MTL::DiagCountTexture((uint64_t)t.Width * t.Height * std::max(1u, (unsigned)t.Samples) * 4u * (t.Layers == 6 ? 6u : 1u));
         if (!t.Image)
         {
             CQ_CORE_ERROR("[MtlGL] Cannot create {0}x{1} texture (format {2}, {3} samples)", t.Width, t.Height, (int)t.Format, t.Samples);

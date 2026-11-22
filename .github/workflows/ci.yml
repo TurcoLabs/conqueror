@@ -7,6 +7,9 @@ name: CI
 # runs on a freshly booted simulator with time limits, results also go to annotations, and two alternative depth copies are tried
 # (CQ_MTLGL_DEPTHCOPY=buffer / draw).
 # Third run: the second one ran no variant (exit 127 everywhere: macOS has no GNU timeout); the script now uses a perl helper.
+# Fourth run: the third one showed slow GPU frames (0.3-5 s) in every variant, also in frames without a copy / clear, and a stuck grep;
+# now the old behaviour (copy / clears skipped, as before a42424d6) and the new one alternate three times each, plus runs without
+# the 3D game, with the per-frame count of new pipelines / textures.
 on:
   push:
     branches: ["ci/**"]
@@ -20,7 +23,7 @@ jobs:
   macos:
     name: macOS iOS Simulator AR diagnosis (MtlGL copy / clear)
     runs-on: macos-15
-    timeout-minutes: 240
+    timeout-minutes: 300
     steps:
       - uses: actions/checkout@v5
       - name: Install dependencies
@@ -42,7 +45,7 @@ jobs:
             fi
           done
       - name: Run the AR game once per variant on a freshly booted simulator (the 3D game runs beside it, as in the failed CI run)
-        timeout-minutes: 80
+        timeout-minutes: 130
         run: bash .github/diag_ar_variants.sh
       - name: Upload the diagnosis files
         if: always()
@@ -50,5 +53,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: mtlgl-ios-ar-diagnosis
-          path: diag
+          path: |
+            diag/*.txt
+            diag/*.log
+            diag/*.oslog
+            diag/*.out
           if-no-files-found: ignore
