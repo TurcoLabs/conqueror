@@ -63,6 +63,8 @@ uniform sampler2D u_CoverageHistory;    // önceki karenin birikmiş örtme pay�
 uniform int u_CoverageHistoryValid = 0;
 uniform mat4 u_PrevViewProjection;      // önceki karenin titreşimsiz görüş-izdüşümü
 uniform float u_CoverageFeedback = 0.9;
+uniform sampler2D u_ObjectVelocity;     // nesne hareket vektörleri (sahnenin iç çözünürlüğünde; w: 0 durağan, 1 hareket eden nesne,
+uniform int u_HasObjectVelocity = 0;    // 2 nesnenin önceki karedeki yeri, 3 yeni beliren sprite)
 layout(location = 1) out float CoverageOut;   // composite: bu karenin birikmiş örtme payı (sahneye çizerken bu ek maskelenir)
 
 // Ben Golus "pristine grid" uyarlaması: AA'lı, moiré'siz, SABİT piksel kalınlığında çizgiler.
@@ -139,6 +141,18 @@ float TemporalCoverage(vec3 world, float pull)
     }
     if (u_CoverageHistoryValid == 0)
         return c;
+    // Nesne bu pikselde ya da 3x3 komşusunda hareket etti, belirdi ya da buradan ayrıldı (silindi / gizlendi / sürüklendi): geçmişteki
+    // pay o nesneye aittir, bu karenin payı kullanılır (291 / 292). Komşuluk kırpması yalnız hareket eden kenarı düzeltiyordu; duvarın
+    // dibi gibi durağan bir örtme kenarında (artı komşulukta hem 0 hem 1) silinen ya da duvarın üstünden sürüklenen küpün bıraktığı
+    // "örtülü" pay %93 ağırlıkla kalıyor, küpün yerinde ızgara çizgileri 1 saniye kadar yavaşça beliriyordu
+    if (u_HasObjectVelocity == 1)
+    {
+        ivec2 vsz = textureSize(u_ObjectVelocity, 0);
+        ivec2 vc = clamp(ivec2(px / u_OutputSize * vec2(vsz)), ivec2(0), vsz - 1);
+        for (int k = 0; k < 9; ++k)
+            if (texelFetch(u_ObjectVelocity, clamp(vc + ivec2(k % 3 - 1, k / 3 - 1), ivec2(0), vsz - 1), 0).w > 0.5)
+                return c;
+    }
     vec4 prev = u_PrevViewProjection * vec4(world, 1.0);
     if (prev.w <= 0.0)
         return c;

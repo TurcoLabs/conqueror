@@ -178,7 +178,7 @@ namespace Conqueror
     // ve Unreal'ın editör ilkelleri gibi ızgara artık kenar yumuşatma ve ton eşlemeden sonra çizilir; kendi çizgi yumuşatması
     // (Golus "pristine grid") olduğundan TAA'ya ihtiyacı yoktur. Nesnelerin önünde / arkasında kalması sahne derinliğinden, sahnenin
     // bu karedeki titreşimiyle örnek örnek (eskiden olduğu gibi) bulunur; karışım doğrusal uzaydadır (ton eşleme kapalı aralıkta eskisiyle aynı)
-    void EditorGrid::RenderDeferred(uint32_t colorTexture, uint32_t width, uint32_t height, uint32_t sceneDepth)
+    void EditorGrid::RenderDeferred(uint32_t colorTexture, uint32_t width, uint32_t height, uint32_t sceneDepth, uint32_t objectVelocity)
     {
         if (!s_Deferred.Pending)
             return;
@@ -280,9 +280,12 @@ namespace Conqueror
         glBindTextureUnit(0, sceneDepth);
         glBindTextureUnit(1, s_BelowTexture);
         glBindTextureUnit(2, h.Texture[read]);
+        glBindTextureUnit(3, objectVelocity);
         s_GridShader->SetInt("u_SceneDepth", 0);
         s_GridShader->SetInt("u_Below", 1);
         s_GridShader->SetInt("u_CoverageHistory", 2);
+        s_GridShader->SetInt("u_ObjectVelocity", 3);
+        s_GridShader->SetInt("u_HasObjectVelocity", objectVelocity ? 1 : 0);
         glBindVertexArray(s_EmptyVAO);
         glDrawArrays(GL_TRIANGLES, 0, 3);
         glBindVertexArray(0);

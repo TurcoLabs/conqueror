@@ -7020,6 +7020,12 @@ namespace Conqueror::Editor
                 ok = have < limit;
                 if (!ok) err = "change " + std::to_string(have) + " (earlier " + std::to_string(s_LastChange) + ", limit " + std::to_string(limit) + ")";
             }
+            else if (cond.rfind("px20<", 0) == 0)
+            {
+                // px20<N: 20 seviyeden çok değişen piksel sayısı N'den az (ince çizgi izi: ortalama titreşim gürültüsünde kaybolur, 291 / 292)
+                ok = over20 < std::stoi(cond.substr(5));
+                if (!ok) err = std::to_string(over20) + " pixels changed by more than 20 levels";
+            }
             else
             {
                 if (cond[0] == '>') ok = have > std::stof(cond.substr(1));

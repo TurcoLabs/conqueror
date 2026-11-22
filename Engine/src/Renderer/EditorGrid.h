@@ -34,7 +34,8 @@ namespace Conqueror
         static bool DeferToComposite(const RenderCamera& camera);
         // Ertelenen ızgarayı son görüntüye (dokusu colorTexture, sRGB) çizer; ertelenen yoksa bir şey yapmaz. sceneDepth: görünümün
         // (çok örneklide çözülmüş) sahne derinliği (PostProcessStack::GetSceneDepthTexture)
-        static void RenderDeferred(uint32_t colorTexture, uint32_t width, uint32_t height, uint32_t sceneDepth);
+        // objectVelocity: PostProcessStack::GetObjectVelocityTexture (0: bu karede hareket eden / silinen nesne yok)
+        static void RenderDeferred(uint32_t colorTexture, uint32_t width, uint32_t height, uint32_t sceneDepth, uint32_t objectVelocity = 0);
         static void Shutdown();
     };
 }

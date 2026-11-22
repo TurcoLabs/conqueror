@@ -349,7 +349,7 @@ namespace Conqueror::Editor
         {
             const auto& spec = m_Framebuffer->GetSpecification();
             EditorGrid::RenderDeferred(m_Framebuffer->GetColorAttachmentRendererID(0), std::min(width, spec.Width), std::min(height, spec.Height),
-                                       m_PostStack.GetSceneDepthTexture());
+                                       m_PostStack.GetSceneDepthTexture(), m_PostStack.GetObjectVelocityTexture());
         }
 
         // 4b. Screen UI in Scene (274 / 294): kenar yumuşatma ve ton eşlemeden sonra (Game görünümündeki gibi); sahne derinliği bu tampona

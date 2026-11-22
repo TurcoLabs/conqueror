@@ -1,0 +1,24 @@
+# template: fps
+# matrix: AA=3 5
+# 291 / 292: Viewport'ta silinen ya da sürüklenen küpün yerinde 1-1,5 saniye iz kalıyordu (TAA ve Temporal Stability açık MSAA: ikisi
+# de TAA çözümünden geçer). İki neden: ızgaranın örtme payı geçmişi duvarın dibi / duvar üstünün kenarı gibi durağan örtme kenarlarında
+# küpün bıraktığı "örtülü" payı %93 ağırlıkla tutuyordu (ızgara çizgileri küpün yerinde yavaşça beliriyordu) ve TAA nesnenin ayrıldığı
+# yerin yalnız kendi pikseline bakıyordu (kenar / çizgi pikselinde ve silüetin bir piksel dışında geçmiş kalıyordu). Sürüklemede aynı
+# işaret (hareket vektörü geçişinde nesnenin önceki yeri) kullanılır; duvarın üstündeki iz yalnız bazı kadrajlarda oluştuğu için burada
+# silme ölçülür. İz yalnız 20 seviyeden çok değişen piksel sayısıyla görünür (ince çizgi; ortalama değişim titreşim gürültüsünde
+# kaybolur). Geçmişi atılan piksel ilk 10 karede yeni titreşim örnekleriyle yeniden yumuşar (duvarın dibi bir an hafif kesik): ölçüm
+# silmeden 10 kare sonra başlar. Eski kodla 80'den çok piksel
+wait_until 3000 layout_settled
+wait 10
+cvar r.AntiAliasing {matrix}
+camera 9 32 -15 -28 0.5 3
+create_primitive Cube GhostCube -29.2 0.5 3
+select GhostCube
+focus Viewport
+wait 120
+key delete
+wait 10
+viewport_region_change mark 0.324 0.412 0.383 0.522
+wait 30
+viewport_region_change expect 0.324 0.412 0.383 0.522 px20<25
+quit

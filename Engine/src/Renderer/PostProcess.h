@@ -45,6 +45,10 @@ namespace Conqueror
 
         uint32_t GetSceneColorTexture() const;
         uint32_t GetSceneDepthTexture() const;
+        // Bu karenin nesne hareket vektörleri (x >= 5000: hız yok; w: 1 hareket eden nesne, 2 nesnenin önceki karedeki yeri, 3 yeni beliren
+        // sprite); bu kare çizilmediyse (hareket eden / silinen nesne yok, zamansal yöntem değil) 0. Viewport ızgarasının örtme payı geçmişi
+        // nesnenin ayrıldığı yerde kullanılmaz (291 / 292)
+        uint32_t GetObjectVelocityTexture() const { return m_FinalHasVelocity ? m_Velocity.Texture : 0; }
         // Sahne derinliğini başka bir çerçeve tamponunun derinlik ekine kopyalar (boyut farklıysa en yakın örnek; 274: Viewport'ta son
         // görüntünün üstüne çizilen Screen UI nesnelerin arkasında kalsın)
         void CopySceneDepthTo(uint32_t framebuffer, uint32_t width, uint32_t height) const;
