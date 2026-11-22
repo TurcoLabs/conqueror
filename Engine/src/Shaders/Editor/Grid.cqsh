@@ -163,11 +163,15 @@ float TemporalCoverage(vec3 world, float pull)
     return mix(c, h, u_CoverageFeedback);
 }
 
-// Tek bir eksen çizgisi (piksel genişliği sabit)
+// Tek bir eksen çizgisi (piksel genişliği sabit). Piksel alanı kadar örtme (kutu süzgeci): çizgiye ekran uzayı uzaklık (türev vektörünün
+// boyu; fwidth'in |dx| + |dy|'si yatık çizgide kalınlığı değiştirir) ve 1 piksellik doğrusal geçiş. Bu profilde pikseller boyunca toplam
+// yoğunluk çizginin alt piksel konumundan bağımsız olarak hep 'pixels'tır (214: eski düz çekirdek + smoothstep kenarı, çizgi uzaklaşırken
+// / yakınlaşırken ekranda kaydıkça kareden kareye %5-10, en çok %24 parlaklık ve 2 <-> 3 piksel kalınlık sıçraması yapıyordu)
 float AxisLine(float coord, float pixels)
 {
-    float d = fwidth(coord);
-    return 1.0 - smoothstep(d * pixels * 0.5, d * (pixels * 0.5 + 1.0), abs(coord));
+    float d = length(vec2(dFdx(coord), dFdy(coord)));
+    float distPx = abs(coord) / max(d, 1e-12);
+    return clamp(pixels * 0.5 + 0.5 - distPx, 0.0, 1.0);
 }
 
 void main()
@@ -243,14 +247,19 @@ void main()
     // Eksen çizgileri
     vec3 xAxisColor = vec3(0.93, 0.26, 0.28);
     vec3 secondAxisColor = (u_Plane == 0) ? vec3(0.25, 0.48, 0.96) : vec3(0.42, 0.85, 0.30);
-    float axisA = AxisLine(coord.y, 2.0);   // X ekseni boyunca (z=0 / y=0)
-    float axisB = AxisLine(coord.x, 2.0);   // Z (ya da Y) ekseni boyunca (x=0)
+    // 3 piksel: eski düz 2 piksel çekirdek + 1 piksellik yumuşak kenarlarla aynı görsel ağırlık (toplam yoğunluk)
+    float axisA = AxisLine(coord.y, 3.0);   // X ekseni boyunca (z=0 / y=0)
+    float axisB = AxisLine(coord.x, 3.0);   // Z (ya da Y) ekseni boyunca (x=0)
     if (axisA > 0.0 || axisB > 0.0)
     {
+        // Eksen ızgaranın üstüne "over" bileşimiyle: katkısı örtmeyle doğru orantılı (eskiden sRGB renk karışımı ve alpha = max(...) ile
+        // kenar piksellerinde örtmeyle doğrusal değildi, çizgi kaydıkça parlaklığı oynuyordu)
         vec3 axisColor = axisA >= axisB ? xAxisColor : secondAxisColor;
-        float a = max(axisA, axisB);
-        color = mix(color, axisColor, a);
-        alpha = max(alpha, a * 0.95);
+        float axisAlpha = max(axisA, axisB) * 0.95;
+        // Renkler sRGB kodlu, bileşik geçiş doğrusal uzayda karıştırır: "over" da doğrusal uzayda
+        vec3 premul = SRGBToLinear(axisColor) * axisAlpha + SRGBToLinear(color) * alpha * (1.0 - axisAlpha);
+        alpha = axisAlpha + alpha * (1.0 - axisAlpha);
+        color = LinearToSRGB(premul / max(alpha, 1e-6));
     }
 
     // Uzaklık solması (kamera yüksekliğine göre ölçeklenir)

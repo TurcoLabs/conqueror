@@ -6934,6 +6934,77 @@ namespace Conqueror::Editor
         };
         Automation::RegisterCommand("game_flicker", flickerCommand("game_flicker", [this]() { return m_GamePanel ? m_GamePanel->GetFramebuffer() : nullptr; }));
         Automation::RegisterCommand("viewport_flicker", flickerCommand("viewport_flicker", [this]() { return m_ViewportPanel ? m_ViewportPanel->GetFramebuffer() : nullptr; }));
+        // viewport_line_flicker <kare> u0 v0 u1 v1 [mean% x] [max% y] (214): bölgedeki kırmızı eksen çizgisinin (doğrusal uzayda kırmızı - yeşil
+        // fazlası) her sütunda tepe ±6 satırdaki, çevresine göre fazla enerjisi; kareler boyunca sütun ortalamasının göreli ikinci farkı.
+        // Kamera uzaklaşırken çizgi ekranda kaydıkça parlaklığı sabit kalmalı (eski profilde kareden kareye %5-10, en çok %24 oynuyordu)
+        Automation::RegisterCommand("viewport_line_flicker", [this](const Args& a, std::string& err) {
+            if (a.size() < 6 || !m_ViewportPanel || !m_ViewportPanel->GetFramebuffer()) { err = "viewport_line_flicker <frames> u0 v0 u1 v1 [mean% x] [max% y]"; return false; }
+            const int frames = std::max(3, std::atoi(a[1].c_str()));
+            const float u0 = std::stof(a[2]), v0 = std::stof(a[3]), u1 = std::stof(a[4]), v1 = std::stof(a[5]);
+            float meanLimit = -1.0f, maxLimit = -1.0f;
+            for (size_t k = 6; k + 1 < a.size(); k += 2)
+            {
+                if (a[k] == "mean%") meanLimit = std::stof(a[k + 1]);
+                else if (a[k] == "max%") maxLimit = std::stof(a[k + 1]);
+            }
+            auto energies = std::make_shared<std::vector<double>>();
+            Automation::AddFrameCheck("viewport line flicker", frames, [this, energies, frames, u0, v0, u1, v1, meanLimit, maxLimit](uint32_t, uint32_t, std::string& e) {
+                const auto fb = m_ViewportPanel ? m_ViewportPanel->GetFramebuffer() : nullptr;
+                if (!fb) { e = "no viewport image"; return false; }
+                const auto& spec = fb->GetSpecification();
+                const int x0 = (int)(u0 * spec.Width), y0 = (int)(v0 * spec.Height);
+                const int w = std::max(1, (int)((u1 - u0) * spec.Width)), h = std::max(13, (int)((v1 - v0) * spec.Height));
+                std::vector<uint8_t> px((size_t)w * h * 4);
+                glGetTextureSubImage(fb->GetColorAttachmentRendererID(0), 0, x0, y0, 0, w, h, 1, GL_RGBA, GL_UNSIGNED_BYTE, (GLsizei)px.size(), px.data());
+                auto lin = [](uint8_t v) { const double c = v / 255.0; return c <= 0.04045 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4); };
+                std::vector<double> red((size_t)w * h);
+                for (size_t i = 0; i < red.size(); ++i)
+                    red[i] = lin(px[i * 4]) - lin(px[i * 4 + 1]);
+                double total = 0.0;
+                int columns = 0;
+                for (int x = 0; x < w; ++x)
+                {
+                    int peak = 0;
+                    for (int y = 1; y < h; ++y)
+                        if (red[(size_t)y * w + x] > red[(size_t)peak * w + x])
+                            peak = y;
+                    if (red[(size_t)peak * w + x] < 0.05)
+                        continue;
+                    std::vector<double> bg;
+                    for (int d = 7; d <= 12; ++d)
+                    {
+                        if (peak - d >= 0) bg.push_back(red[(size_t)(peak - d) * w + x]);
+                        if (peak + d < h) bg.push_back(red[(size_t)(peak + d) * w + x]);
+                    }
+                    std::sort(bg.begin(), bg.end());
+                    const double base = bg.empty() ? 0.0 : bg[bg.size() / 2];
+                    double sum = 0.0;
+                    for (int y = std::max(0, peak - 6); y <= std::min(h - 1, peak + 6); ++y)
+                        sum += std::max(0.0, red[(size_t)y * w + x] - base);
+                    total += sum;
+                    ++columns;
+                }
+                if (columns == 0) { e = "no red line in the region"; return false; }
+                energies->push_back(total / columns);
+                if ((int)energies->size() < frames)
+                    return true;
+                const auto& en = *energies;
+                double mean = 0.0, worst = 0.0;
+                for (size_t i = 1; i + 1 < en.size(); ++i)
+                {
+                    const double d2 = std::abs(en[i + 1] - 2.0 * en[i] + en[i - 1]) / std::max(en[i], 1e-9) * 100.0;
+                    mean += d2;
+                    worst = std::max(worst, d2);
+                }
+                mean /= (double)(en.size() - 2);
+                char line[160];
+                std::snprintf(line, sizeof(line), "LINE FLICKER %d frames: energy %.3f, second difference mean %.2f%%, max %.2f%%", frames, en[0], mean, worst);
+                Automation::Report(line);
+                if ((meanLimit >= 0.0f && mean > meanLimit) || (maxLimit >= 0.0f && worst > maxLimit)) { e = std::string("line flicker over the limit: ") + line; return false; }
+                return true;
+            });
+            return true;
+        });
         Automation::RegisterCommand("game_region_change", [this](const Args& a, std::string& err) {
             static std::vector<uint8_t> s_Marked;
             static int s_W = 0, s_H = 0;

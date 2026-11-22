@@ -1,0 +1,21 @@
+# template: basic3d
+# matrix: AA=0 3
+# 214: Viewport'ta uzaklaşıp yakınlaşırken bakış yönüne paralel duran eksen çizgisi (kırmızı X / mavi Z) titriyordu. Eksen düz bir 2 piksellik
+# çekirdek + smoothstep kenarla (fwidth) çiziliyor ve ızgaraya sRGB renk karışımı + alpha = max(...) ile ekleniyordu: çizgi ekranda kaydıkça
+# pikseller boyunca toplam parlaklığı kareden kareye %5-10 (en çok %24) oynuyordu. Şimdi piksel alanı kadar örtme (ekran uzayı uzaklık, 1 piksel
+# doğrusal geçiş, 3 piksel: eskisiyle aynı görsel ağırlık) ve doğrusal uzayda "over" bileşimi: %0.5-1.0 (en çok %1.5-4). Izgara TAA'dan sonra çizildiği için AA kipinden bağımsız
+wait 40
+focus Viewport
+wait_until 3000 layout_settled
+cvar r.AntiAliasing {matrix}
+camera 8 35 0 0 0 4
+wait 60
+viewport_line_flicker 90 0.07 0.05 0.45 0.85 mean% 3 max% 10
+camera_fly 0 0 -4 90
+wait 100
+camera 8 12 0 0 0 6
+wait 60
+viewport_line_flicker 90 0.07 0.05 0.45 0.85 mean% 3 max% 10
+camera_fly 0 0 -4 90
+wait 100
+quit
