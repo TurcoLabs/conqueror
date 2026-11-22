@@ -144,7 +144,7 @@ namespace Conqueror
         static std::shared_ptr<AdaptiveProbeVolume> GetGlobalAPV();
 
         // Editör görünüm modları
-        enum class DebugView : int { Shaded = 0, Unlit, Normals, LightingOnly, MetallicRoughness, AmbientOcclusion };
+        enum class DebugView : int { Shaded = 0, Unlit, Normals, LightingOnly, MetallicRoughness, AmbientOcclusion, Metallic, Roughness };
         static void SetDebugView(DebugView view);
         static DebugView GetDebugView();
         static void SetWireframe(bool wireframe);   // yalnızca tel kafes

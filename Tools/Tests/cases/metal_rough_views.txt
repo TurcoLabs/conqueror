@@ -1,0 +1,21 @@
+# template: fps
+# 318: ayrı gri tonlu Metallic ve Roughness görünümleri (Unreal Buffer Visualization, Unity HDRP Material > Metal / Smoothness);
+# birleşik Metallic / Roughness görünümü (kırmızı metallik, yeşil pürüzlülük) korunur. FPS şablonunun zemini metal değil, pürüzlülüğü
+# 0.75 (ekranda ham değer: 191 gri)
+wait_until 3000 layout_settled
+wait 10
+focus Viewport
+camera 16 10 0 -1.5 1.5 2
+cvar r.AntiAliasing 0
+shading roughness
+wait 30
+# gri: üç kanal eşit, zeminin en koyu pikseli 0.75 (ızgara çizgileri ortalamayı biraz açar)
+viewport_region 0.10 0.05 0.40 0.20 r mean 194 g mean 194 b mean 194 lum min 191
+shading metallic
+wait 30
+viewport_region 0.10 0.05 0.40 0.20 lum min <5 lum mean <40
+shading metalrough
+wait 30
+viewport_region 0.10 0.05 0.40 0.20 r mean <40 g min 191
+shading shaded
+quit
