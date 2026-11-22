@@ -3863,7 +3863,15 @@ namespace Conqueror::Editor
         s.SavedEditorScene = m_EditorScene;
         s.SavedScenePath = m_CurrentScenePath;
         s.RootID = (uint64_t)root.GetComponent<IDComponent>().ID;
-        s.SavedText = ReadWholeFile(path);
+        // Karşılaştırma tabanı dosyanın ham metni değil, açılan aşamanın kaydedileceği biçimde yeniden yazılmış hâli (308): dosya
+        // başka bir araçla yazılmışsa (örneklerin gen_levels.py'si metinleri tırnakla yazar) ham metin hep farklı çıkıyor, Auto Save
+        // yalnız açılan, hiç değiştirilmeyen widget / prefab'ı yeniden kaydediyordu (depodaki örnek dosyaları açınca değişiyordu)
+        {
+            const std::filesystem::path tmp = StageTempFile();
+            s.SavedText = PrefabSerializer::Serialize(root, tmp, widget) ? ReadWholeFile(tmp) : ReadWholeFile(path);
+            std::error_code ec;
+            std::filesystem::remove(tmp, ec);
+        }
         // Sahnedeki, prefab'den farkı olmayan kopyalar (çıkınca yenilenecek). Oyun sırasında: düzenlenen sahnedekiler (Unity gibi
         // çalışan oyundaki kopyalar değişmez, Stop'tan sonra sahne yeni prefab'i gösterir)
         if (m_EditorScene)
@@ -3935,7 +3943,9 @@ namespace Conqueror::Editor
         if (!root)
             return;
         const std::filesystem::path tmp = StageTempFile();
-        if (!PrefabSerializer::Serialize(root, tmp))
+        // Kaydedilen biçimle aynı (UI Widget öğeleri kimlikleriyle yazılır): kimliksiz yazılınca her denetimde kaydedilen dosyadan farklı
+        // çıkıyor, widget açık kaldıkça yarım saniyede bir yeniden kaydediliyordu (308)
+        if (!PrefabSerializer::Serialize(root, tmp, s.Path.extension() == UIWidgets::Extension))
             return;
         const std::string now = ReadWholeFile(tmp);
         std::error_code ec;
@@ -9373,7 +9383,7 @@ namespace Conqueror::Editor
         AndroidSigning::RegisterAutomation();    // 47: Android yayın anahtarı (Keystore Manager)
         // prefab_mode open <yol> | close [discard] | autosave on|off | expect_active <0|1> | expect_saves <n> (218)
         Automation::RegisterCommand("prefab_mode", [this](const Args& a, std::string& err) {
-            if (a.size() < 2) { err = "prefab_mode open <path> | close [discard] | autosave on|off | expect_active <0|1> | expect_saves <n>"; return false; }
+            if (a.size() < 2) { err = "prefab_mode open <path> | close [discard] | autosave on|off | expect_active <0|1> | expect_saves <n> | expect_saves_max <n>"; return false; }
             if (a[1] == "open" && a.size() > 2)
             {
                 std::filesystem::path p(a[2]);
@@ -9393,6 +9403,13 @@ namespace Conqueror::Editor
             {
                 Automation::Report("prefab mode saves " + std::to_string(m_PrefabStage.Saves));
                 if (m_PrefabStage.Saves < std::atoi(a[2].c_str())) { err = "only " + std::to_string(m_PrefabStage.Saves) + " saves"; return false; }
+                return true;
+            }
+            // expect_saves_max <n>: en çok n kayıt (308: yalnız açılıp bakılan widget / prefab dosyası yeniden yazılmamalı)
+            if (a[1] == "expect_saves_max" && a.size() > 2)
+            {
+                Automation::Report("prefab mode saves " + std::to_string(m_PrefabStage.Saves));
+                if (m_PrefabStage.Saves > std::atoi(a[2].c_str())) { err = std::to_string(m_PrefabStage.Saves) + " saves"; return false; }
                 return true;
             }
             err = "unknown prefab_mode command";

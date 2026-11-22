@@ -1,0 +1,19 @@
+# sample-project: EmberTrail
+# 308: UI Widget / prefab yalnız açılıp bakılınca dosyası yeniden yazılmamalı. Prefab Mode değişikliği dosyanın ham metniyle
+# karşılaştırıyordu: örneklerin widget'ları başka araçla yazıldığından (metinler tırnaklı) içerik aynıyken metin farklı çıkıyor, Auto Save
+# açılan Menu.cqwidget'i kaydediyordu; widget'lar ayrıca kimliksiz yazılıp karşılaştırıldığı için açık kaldıkça yarım saniyede bir
+# yeniden kaydediliyordu. Değişiklik yapılınca yine kaydedilir (ui_widget, prefab_mode)
+wait 60
+prefab_mode open Assets/UI/Menu.cqwidget
+prefab_mode expect_active 1
+wait 90
+prefab_mode expect_saves_max 0
+prefab_mode close
+wait 5
+prefab_mode expect_saves_max 0
+prefab_mode open Assets/UI/HUD.cqwidget
+wait 90
+prefab_mode expect_saves_max 0
+prefab_mode close
+wait 5
+quit
