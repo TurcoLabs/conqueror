@@ -7005,6 +7005,98 @@ namespace Conqueror::Editor
             });
             return true;
         });
+        // viewport_route <yükseltici> <keskinleştirici|none> (310): Viewport'un son karede çözdüğü yükseltme yolu. Zamansal AA + uzamsal
+        // yükseltici: büyütmeyi AA'nın zamansal yükselticisi yapar (TAA -> TAAU, FSR AA -> FSR 2), NIS / FSR 1 / CAS yalnız keskinleştirir
+        Automation::RegisterCommand("viewport_route", [this](const Args& a, std::string& err) {
+            if (a.size() < 3 || !m_ViewportPanel) { err = "viewport_route <upscaler> <sharpener|none>"; return false; }
+            auto norm = [](std::string s) {
+                std::string o;
+                for (char ch : s)
+                    if (std::isalnum((unsigned char)ch))
+                        o += (char)std::tolower((unsigned char)ch);
+                return o;
+            };
+            auto name = [](UpscalerMode m) { return m == UpscalerMode::None ? std::string("none") : std::string(AntiAliasing::GetUpscalerInfo(m).Name); };
+            const PostProcessStack& stack = m_ViewportPanel->GetPostProcessStack();
+            const std::string up = name(stack.GetResolvedUpscaler()), sh = name(stack.GetSpatialSharpener());
+            Automation::Report("ROUTE upscaler " + up + ", sharpener " + sh);
+            if (norm(up) != norm(a[1]) || norm(sh) != norm(a[2])) { err = "route is " + up + " + " + sh; return false; }
+            return true;
+        });
+        // viewport_motion_blink <kare> u0 v0 u1 v1 [blue] [max x] (310): kamera hareket ederken (camera_fly ile birlikte) bölgedeki ince
+        // aralıkların görünürlüğü (5x5 komşuluğun en parlağı - piksel; blue: yalnız mavi yüzeylerin 2 piksel çevresi) 12x12 hücrelerde;
+        // kareler boyunca hücre değerinin ikinci farkı = ileri geri giderken yanıp sönme (eski TAA + NIS 0.34, TAAU 0.15)
+        Automation::RegisterCommand("viewport_motion_blink", [this](const Args& a, std::string& err) {
+            if (a.size() < 6 || !m_ViewportPanel || !m_ViewportPanel->GetFramebuffer()) { err = "viewport_motion_blink <frames> u0 v0 u1 v1 [blue] [max x]"; return false; }
+            const int frames = std::max(3, std::atoi(a[1].c_str()));
+            const float u0 = std::stof(a[2]), v0 = std::stof(a[3]), u1 = std::stof(a[4]), v1 = std::stof(a[5]);
+            bool blueOnly = false;
+            float limit = -1.0f;
+            for (size_t k = 6; k < a.size(); ++k)
+            {
+                if (a[k] == "blue") blueOnly = true;
+                else if (a[k] == "max" && k + 1 < a.size()) limit = std::stof(a[++k]);
+            }
+            auto cells = std::make_shared<std::vector<std::vector<float>>>();
+            Automation::AddFrameCheck("viewport motion blink", frames, [this, cells, frames, u0, v0, u1, v1, blueOnly, limit](uint32_t, uint32_t, std::string& e) {
+                const auto fb = m_ViewportPanel ? m_ViewportPanel->GetFramebuffer() : nullptr;
+                if (!fb) { e = "no viewport image"; return false; }
+                const auto& spec = fb->GetSpecification();
+                const int x0 = (int)(u0 * spec.Width), y0 = (int)(v0 * spec.Height);
+                const int w = std::max(12, (int)((u1 - u0) * spec.Width)), h = std::max(12, (int)((v1 - v0) * spec.Height));
+                std::vector<uint8_t> px((size_t)w * h * 4);
+                glGetTextureSubImage(fb->GetColorAttachmentRendererID(0), 0, x0, y0, 0, w, h, 1, GL_RGBA, GL_UNSIGNED_BYTE, (GLsizei)px.size(), px.data());
+                std::vector<float> lum((size_t)w * h);
+                std::vector<uint8_t> blue((size_t)w * h);
+                for (size_t i = 0; i < lum.size(); ++i)
+                {
+                    const float r = px[i * 4], g = px[i * 4 + 1], b = px[i * 4 + 2];
+                    lum[i] = (r + g + b) / 3.0f;
+                    blue[i] = (b - std::max(r, g)) > 40.0f;
+                }
+                const int cw = w / 12, ch = h / 12;
+                std::vector<float> cell((size_t)cw * ch, 0.0f);
+                for (int y = 0; y < ch * 12; ++y)
+                    for (int x = 0; x < cw * 12; ++x)
+                    {
+                        float mx = 0.0f;
+                        bool nearBlue = !blueOnly;
+                        for (int dy = -2; dy <= 2; ++dy)
+                            for (int dx = -2; dx <= 2; ++dx)
+                            {
+                                const int sx = std::clamp(x + dx, 0, w - 1), sy = std::clamp(y + dy, 0, h - 1);
+                                mx = std::max(mx, lum[(size_t)sy * w + sx]);
+                                if (!nearBlue && x + dx >= 0 && x + dx < w && y + dy >= 0 && y + dy < h && blue[(size_t)(y + dy) * w + x + dx])
+                                    nearBlue = true;
+                            }
+                        if (nearBlue)
+                            cell[(size_t)(y / 12) * cw + x / 12] += (mx - lum[(size_t)y * w + x]) / 144.0f;
+                    }
+                cells->push_back(std::move(cell));
+                if ((int)cells->size() < frames)
+                    return true;
+                const auto& c = *cells;
+                double sum = 0.0, vis = 0.0;
+                size_t n = 0, over3 = 0;
+                for (size_t f = 1; f + 1 < c.size(); ++f)
+                    for (size_t i = 0; i < c[f].size(); ++i)
+                    {
+                        const double d2 = std::abs(c[f + 1][i] - 2.0 * c[f][i] + c[f - 1][i]);
+                        sum += d2;
+                        over3 += d2 > 3.0;
+                        vis += c[f][i];
+                        ++n;
+                    }
+                char line[240];
+                std::snprintf(line, sizeof(line), "MOTION BLINK %d frames (%ux%u image): second difference mean %.3f (cells > 3: %.2f%%), mean gap visibility %.2f",
+                              frames, spec.Width, spec.Height, sum / std::max<size_t>(1, n), 100.0 * (double)over3 / (double)std::max<size_t>(1, n),
+                              vis / std::max<size_t>(1, n));
+                Automation::Report(line);
+                if (limit >= 0.0f && sum / std::max<size_t>(1, n) > limit) { e = std::string("motion blink over the limit: ") + line; return false; }
+                return true;
+            });
+            return true;
+        });
         Automation::RegisterCommand("game_region_change", [this](const Args& a, std::string& err) {
             static std::vector<uint8_t> s_Marked;
             static int s_W = 0, s_H = 0;

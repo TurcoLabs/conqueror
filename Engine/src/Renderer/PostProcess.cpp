@@ -143,6 +143,7 @@ namespace Conqueror
         LoadShader("CAS", "Engine/src/Shaders/PostProcess/CAS.cqsh");
         LoadShader("CAS_Scale", "Engine/src/Shaders/PostProcess/CAS_Scale.cqsh");
         LoadShader("NIS", "Engine/src/Shaders/PostProcess/NIS.cqsh");
+        LoadShader("NIS_Sharpen", "Engine/src/Shaders/PostProcess/NIS_Sharpen.cqsh");
         LoadShader("CMAA2Edges", "Engine/src/Shaders/PostProcess/CMAA2_Edges.cqsh");
         LoadShader("CMAA2Args", "Engine/src/Shaders/PostProcess/CMAA2_Args.cqsh");
         LoadShader("CMAA2Process", "Engine/src/Shaders/PostProcess/CMAA2_Process.cqsh");
@@ -757,7 +758,8 @@ namespace Conqueror
     {
         // Kamera dururken derinlik kenarlarında (ince boşluk, merdiven) zamansal yükselticinin çıktısının yavaş ortalaması ve kenar
         // dışında 16 seviyeye kadar kıpırtının kısa ortalaması (FSR2Hold.cqsh). Işık değişen karede (namlu alevi) ve hareket eden
-        // nesnenin yakınında ortalama yapılmaz; kamera hareket ederken geçiş yalnız durumu yeniler. owner: 1 FSR 2, 2 SGSR 2
+        // nesnenin yakınında ortalama yapılmaz; kamera hareket ederken geçiş yalnız durumu yeniler. owner: 1 FSR 2, 2 SGSR 2, 3 TAA (NIS
+        // öncesi, zamansal ikizi olmayan yolda), 4 TAAU (uzamsal keskinleştirici öncesi, 310)
         auto hold = PostProcess::GetShader("FSR2Hold");
         if (!Valid(hold))
         {
@@ -1253,9 +1255,70 @@ namespace Conqueror
         }
     }
 
+    uint32_t PostProcessStack::RunSpatialSharpener(uint32_t source, uint32_t w, uint32_t h, float sharpness)
+    {
+        if (m_SpatialSharpener != UpscalerMode::NIS && m_SpatialSharpener != UpscalerMode::FSR1 && m_SpatialSharpener != UpscalerMode::CAS)
+            return source;
+        EnsureTarget(m_SpatialSharpen, w, h, GL_RGBA8);
+        sharpness = std::clamp(sharpness, 0.0f, 1.0f);
+        if (m_SpatialSharpener == UpscalerMode::NIS)
+        {
+            // NVSharpen (NIS'in 1:1 kipi): hesaplama gölgelendiricisi, sabitler NVScaler'ınkiyle aynı tamponda
+            auto nis = PostProcess::GetShader("NIS_Sharpen");
+            NISConfig config{};
+            if (!Valid(nis) || !NVSharpenUpdateConfig(config, sharpness, 0, 0, w, h, w, h, 0, 0, NISHDRMode::None))
+                return source;
+            EnsureNISResources();
+            glNamedBufferSubData(m_NISConstants, 0, sizeof(NISConfig), &config);
+            nis->Bind();
+            nis->SetInt("in_texture", 0);
+            nis->SetInt("out_texture", 0);
+            glBindBufferBase(GL_UNIFORM_BUFFER, UniformBinding::PostProcessConstants, m_NISConstants);
+            BindTexture(0, source);
+            glBindImageTexture(0, m_SpatialSharpen.Texture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA8);
+            glDispatchCompute((w + 31) / 32, (h + 31) / 32, 1);
+            glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT | GL_FRAMEBUFFER_BARRIER_BIT);
+            glBindImageTexture(0, 0, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA8);
+            Renderer::GetStats().PostProcessPasses++;
+            return m_SpatialSharpen.Texture;
+        }
+        glBindFramebuffer(GL_FRAMEBUFFER, m_SpatialSharpen.Framebuffer);
+        glViewport(0, 0, (GLsizei)w, (GLsizei)h);
+        if (m_SpatialSharpener == UpscalerMode::FSR1)
+        {
+            // FSR 1'in keskinleştirme yarısı (RCAS): 0 = en keskin .. 2 durak azaltma
+            auto rcas = PostProcess::GetShader("FSR_RCAS");
+            if (!Valid(rcas))
+                return source;
+            rcas->Bind();
+            rcas->SetInt("u_Source", 0);
+            rcas->SetFloat2("u_OutOrigin", glm::vec2(0.0f));
+            const float rs = std::exp2(-(1.0f - sharpness) * 2.0f);
+            SetUInt4(rcas, "u_Con", glm::uvec4(FloatBits(rs), glm::packHalf2x16(glm::vec2(rs, rs)), 0u, 0u));
+        }
+        else
+        {
+            // CAS (ölçeklemesiz)
+            auto cas = PostProcess::GetShader("CAS");
+            if (!Valid(cas))
+                return source;
+            cas->Bind();
+            cas->SetInt("u_Source", 0);
+            cas->SetFloat2("u_OutOrigin", glm::vec2(0.0f));
+            const float sharp = -1.0f / glm::mix(8.0f, 5.0f, sharpness);
+            SetUInt4(cas, "u_Const0", glm::uvec4(FloatBits(1.0f), FloatBits(1.0f), FloatBits(0.0f), FloatBits(0.0f)));
+            SetUInt4(cas, "u_Const1", glm::uvec4(FloatBits(sharp), glm::packHalf2x16(glm::vec2(sharp, 0.0f)), FloatBits(8.0f), 0u));
+        }
+        BindTexture(0, source);
+        PostProcess::DrawFullscreenQuad();
+        Renderer::GetStats().PostProcessPasses++;
+        return m_SpatialSharpen.Texture;
+    }
+
     void PostProcessStack::ResolveAntiAliasing(const PostProcessSettings& settings, const RenderCamera& camera, bool litScene)
     {
         m_Upscaler = UpscalerMode::None;
+        m_SpatialSharpener = UpscalerMode::None;
         m_CASSharpen = false;
         m_CASStrength = 0.0f;
         m_UseFSR2 = false;
@@ -1300,6 +1363,42 @@ namespace Conqueror
                 m_Upscaler = UpscalerMode::FSR1;
             if (m_AAMode == AntiAliasingMode::FSRAA)
                 m_AAMode = AntiAliasingMode::TAA;
+        }
+        // 310 / 149: zamansal AA + uzamsal yükseltici, diğer motorlardaki gibi (Unreal'in varsayılanı: zamansal yükseltme açık, NVIDIA'nın NIS
+        // eklentisi ikincil yükseltici kipinde; Unity HDRP / Godot'ta da büyütmeyi zamansal yöntem yapar): büyütmeyi AA'nın kendi zamansal
+        // yükselticisi yapar (TAA -> TAAU, FSR AA -> FSR 2, DLAA -> DLSS, XeSS AA -> XeSS), seçilen uzamsal yükseltici çıktı çözünürlüğünde
+        // yalnız keskinleştirir (NIS -> NVSharpen, FSR 1 -> RCAS, CAS -> CAS; Bilinear / Nearest / Lanczos / SGSR'nin keskinleştirmesi yok).
+        // Eskiden zamansal AA iç çözünürlükte çalışıp sonucu uzamsal yükseltici büyütüyordu: TAA + NIS'te ileri geri giderken küplerin arası
+        // yanıp sönüyordu (0.337 / 0.306; TAAU 0.146 / 0.137), NIS'in basamaklarını gizlemek için çıktıya standart dışı bir FXAA ekleniyordu (149),
+        // FSR AA + NIS bulanıktı (yerel FSR AA ayrıntısının %74 / 61 / 65'i; FSR 2 büyütünce %84 / 67 / 72)
+        if (!camera.Orthographic && m_Upscaler != UpscalerMode::None && !AntiAliasing::IsSupersampling(m_AAMode))
+        {
+            const bool spatial = m_Upscaler == UpscalerMode::NIS || m_Upscaler == UpscalerMode::FSR1 || m_Upscaler == UpscalerMode::CAS ||
+                                 m_Upscaler == UpscalerMode::Bilinear || m_Upscaler == UpscalerMode::NearestNeighbor ||
+                                 m_Upscaler == UpscalerMode::Lanczos || m_Upscaler == UpscalerMode::SGSR;
+            UpscalerMode twin = UpscalerMode::None;
+            switch (m_AAMode)
+            {
+                case AntiAliasingMode::TAA:
+                case AntiAliasingMode::TAA_FXAA: twin = UpscalerMode::TAAU; break;
+                case AntiAliasingMode::FSRAA: twin = UpscalerMode::FSR2; break;
+                case AntiAliasingMode::DLAA: twin = UpscalerMode::DLSS; break;
+                case AntiAliasingMode::XeSSAA: twin = UpscalerMode::XeSS; break;
+                default:
+                    // Zamansal Kararlılık açıkken FXAA / SMAA / SMAA T2x da TAA çözümüyle birikir (titreşimli): büyütmeyi TAA gibi TAAU yapar.
+                    // Uzamsal NIS büyütmesinde ileri geri giderken küplerin arası 0.362 / 0.346 yanıp sönüyordu (TAA + NIS'in eski sorunu)
+                    if (UsesTAAResolve(m_AAMode, settings))
+                        twin = UpscalerMode::TAAU;
+                    break;
+            }
+            if (spatial && twin != UpscalerMode::None && AntiAliasing::ResolveUpscalerForThisSystem(twin) == twin)
+            {
+                // FSR 2 keskinleştirmeyi kendi RCAS'ıyla yapar (üstüne NIS / CAS her ölçüde daha kötüydü, aşağıda FSR 2 yolunda);
+                // Bilinear / Nearest / Lanczos / SGSR'nin keskinleştirmesi yok
+                const bool sharpens = m_Upscaler == UpscalerMode::NIS || m_Upscaler == UpscalerMode::FSR1 || m_Upscaler == UpscalerMode::CAS;
+                m_SpatialSharpener = twin != UpscalerMode::FSR2 && sharpens ? m_Upscaler : UpscalerMode::None;
+                m_Upscaler = twin;
+            }
         }
         m_UseFSR2 = !camera.Orthographic && (m_Upscaler == UpscalerMode::FSR2 || m_AAMode == AntiAliasingMode::FSRAA);
         {
@@ -1506,12 +1605,21 @@ namespace Conqueror
     // NIS keskinliği = Upscaling Sharpness (varsayılan 0.5, NVIDIA'nın varsayılanı). TAA + NIS (67%) yerel çözünürlüğün ayrıntısının
     // %100 / 95 / 85'ini gösterir (zemin / küpler / merdiven; 286'da hâlâ bulanık bulundu: 0.75 katında %91 / 90 / 80). Tam keskinlik
     // eskiden TAA'nın kalan titreşimini büyütüyordu; NIS'ten önce TAA çıktısındaki tutucuyla duran görüntüde >16 seviye %0.013 (doğal TAA
-    // %0.026). Basamaklar (149) yalnız geometri kenarlarına uygulanan FXAA ile yumuşatılır
+    // %0.026). 310'dan beri yalnız zamansal olmayan AA'da (Zamansal Kararlılık kapalı FXAA / SMAA, MSAA ...) NIS büyütür; çıktıya FXAA
+    // eklenmez (149, Unreal'daki gibi)
     static constexpr float kNISSharpnessScale = 1.0f;
     // FSR AA + NIS: FSR 2'nin çıktısı TAA'nınkinden keskin (tam keskinlikte doğal çözünürlüğün ayrıntısının %107'si, aşırı); yarı keskinlik
     // hem doğal ayrıntıya denk gelir hem FSR 2'nin kalan titreşimini daha az büyütür (fsraa_flicker). 285'te tutucu NIS ve FXAA'dan sonraya
     // alındı; tam keskinlik orada da oyuncu görünümünde titremeyi ikiye katlıyordu (>8 seviye %0.33 -> %1.0), yarı keskinlik kaldı
     static constexpr float kNISSharpnessScaleFSR = 0.5f;
+    // 310: TAA + NIS / FSR 1 / CAS: TAAU büyütür, seçilen yükseltici yalnız keskinleştirir (tutucudan sonra). Yarı keskinlik: yerel FSR AA
+    // ayrıntısının %80 / 64 / 62'si (eski TAA + NIS %77 / 58 / 63), ileri geri giderken küplerin arası 0.186 / 0.178 (eski 0.337 / 0.306),
+    // kamera dururken >8 seviye %0.030 (eski %0.377). Tam keskinlik %101 / 80 / 76 ama 0.256 / 0.240 ve %0.072; çeyrek keskinlik bulanık
+    static constexpr float kNISSharpnessScaleTAAU = 0.5f;
+    // Zamansal Kararlılıklı FXAA / SMAA + NIS (TAAU büyütür): FXAA / SMAA iç çözünürlükte biraz yumuşattığı için tam keskinlik. FXAA: ayrıntı
+    // %87 / 71 / 68 (eski FXAA + NIS + FXAA %76 / 58 / 62), küplerin arası 0.205 / 0.193 (eski 0.318 / 0.310), duran görüntü %0.048 (eski
+    // %0.377); SMAA %93 / 74 / 70, 0.232 / 0.216, %0.066. Yarı keskinlikte FXAA %68 / 56 / 59 (eskisinden bulanık)
+    static constexpr float kNISSharpnessScaleTAAUSingleFrame = 1.0f;
 
     void PostProcessStack::RunFinal(const PostProcessSettings& settings, uint32_t outputFramebuffer, const int outputViewport[4])
     {
@@ -1861,11 +1969,16 @@ namespace Conqueror
         // Üretici yükselticisinin çıktısı (çıktı çözünürlüğünde) -> çıktıya keskinleştirerek kopya
         auto presentVendorOutput = [&](uint32_t texture, bool native)
         {
+            // 310: DLAA / XeSS AA + NIS / FSR 1 / CAS: üretici yükselticisi büyüttü, keskinleştirmeyi seçilen uzamsal yükseltici yapar
+            const bool spatialSharpen = !native && (m_SpatialSharpener == UpscalerMode::NIS || m_SpatialSharpener == UpscalerMode::FSR1 ||
+                                                    m_SpatialSharpener == UpscalerMode::CAS);
+            if (spatialSharpen)
+                texture = RunSpatialSharpener(texture, outW, outH, kNISSharpnessScaleTAAU * upSharp);
             toOutput();
             sharpen->Bind();
             sharpen->SetInt("u_ScreenTexture", 0);
             sharpen->SetFloat2("u_InverseScreenSize", glm::vec2(1.0f / (float)outW, 1.0f / (float)outH));
-            sharpen->SetFloat("u_Amount", std::min((native ? settings.TAASharpness : 0.5f * upSharp) +
+            sharpen->SetFloat("u_Amount", std::min((native ? settings.TAASharpness : spatialSharpen ? 0.0f : 0.5f * upSharp) +
                                                    ((settings.Sharpen && !m_CASSharpen) ? settings.SharpenAmount : 0.0f), 1.0f));
             sharpen->SetInt("u_HasMotionState", 0);
             BindTexture(0, texture);
@@ -2072,6 +2185,9 @@ namespace Conqueror
             // FSR AA (yerel çözünürlük): RCAS birikmiş görüntüdeki ince çizgileri (duvar ızgarası, uzak kenar) noktalı / benekli
             // keskinleştiriyordu; yerel çözünürlükte keskinlik TAA'nınkiyle aynı (TAA Sharpness + hareket ederken artış)
             const bool nativeFSR = m_AAMode == AntiAliasingMode::FSRAA && fsrW == m_Width && fsrH == m_Height;
+            // 310: FSR AA + uzamsal yükseltici: FSR 2 büyütür ve kendi RCAS'ıyla keskinleştirir (Unreal'in FSR eklentisi gibi); üstüne NIS /
+            // CAS eklenmez: NIS'in keskinleştirmesi her ölçüde RCAS'tan kötüydü (0.25 keskinlikte ayrıntı %76 / 58 / 62, küplerin arası 0.180 /
+            // 0.167, duran görüntü %0.083; RCAS %84 / 67 / 72, 0.176 / 0.162, %0.081; eski FSR AA + NIS %74 / 61 / 65, 0.198 / 0.173, %0.101)
             prm.Sharpen = !nativeFSR && upSharp > 0.0f;
             prm.Sharpness = upSharp;
             if (m_FSR2->Dispatch(prm))
@@ -2221,8 +2337,8 @@ namespace Conqueror
             const uint32_t normals = GetSceneNormalTexture();
             taau->SetInt("u_HasMotionFlag", normals ? 1 : 0);
             taau->SetInt("u_HasVelocity", m_FinalHasVelocity ? 1 : 0);
-            taau->SetInt("u_HistoryValid", (m_TAAUValid && m_HasPrevViewProj && m_TAAUHistory[m_TAAUIndex].Width == outW &&
-                                            m_TAAUHistory[m_TAAUIndex].Height == outH) ? 1 : 0);
+            const bool historyValid = m_TAAUValid && m_HasPrevViewProj && m_TAAUHistory[m_TAAUIndex].Width == outW && m_TAAUHistory[m_TAAUIndex].Height == outH;
+            taau->SetInt("u_HistoryValid", historyValid ? 1 : 0);
             taau->SetInt("u_CameraStill", m_CameraStill ? 1 : 0);
             taau->SetMat4("u_InvViewProj", m_FinalInvViewProj);
             {
@@ -2266,15 +2382,28 @@ namespace Conqueror
             glTextureParameteri(cur, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
             m_TAAUIndex = ni;
             m_TAAUValid = true;
+            // 310 / 149: TAA + NIS / FSR 1 / CAS: TAAU büyüttü, keskinleştirmeyi seçilen uzamsal yükseltici yapar (kendi 0.5 x keskinliği yerine)
+            const bool spatialSharpen = m_SpatialSharpener == UpscalerMode::NIS || m_SpatialSharpener == UpscalerMode::FSR1 ||
+                                        m_SpatialSharpener == UpscalerMode::CAS;
+            // Keskinleştirme TAAU'nun kamera dururken kalan küçük titreşimini büyütür (285 / 288'deki gibi): önce FSR 2 / SGSR 2'deki duran
+            // kamera tutucusu (owner 4), sonra keskinleştirici
+            uint32_t taauResult = m_TAAUHistory[ni].Texture;
+            if (spatialSharpen)
+            {
+                taauResult = RunStillHold(4, taauResult, outW, outH, m_ReactiveUsed ? m_Reactive.Texture : 0, 0, m_CameraStill, !historyValid);
+                taauResult = RunSpatialSharpener(taauResult, outW, outH,
+                                                 (AntiAliasing::IsSingleFrame(m_AAMode) || m_AAMode == AntiAliasingMode::SMAA_T2X ? kNISSharpnessScaleTAAUSingleFrame
+                                                                                                                                  : kNISSharpnessScaleTAAU) * upSharp);
+            }
             toOutput();
             sharpen->Bind();
             sharpen->SetInt("u_ScreenTexture", 0);
             sharpen->SetFloat2("u_InverseScreenSize", glm::vec2(1.0f / (float)outW, 1.0f / (float)outH));
-            sharpen->SetFloat("u_Amount", std::min(0.5f * upSharp + ((settings.Sharpen && !m_CASSharpen) ? settings.SharpenAmount : 0.0f), 1.0f));
+            sharpen->SetFloat("u_Amount", std::min((spatialSharpen ? 0.0f : 0.5f * upSharp) + ((settings.Sharpen && !m_CASSharpen) ? settings.SharpenAmount : 0.0f), 1.0f));
             // Hareket ederken geçmiş her karede yeniden örneklenip yumuşar (TAA'daki gibi): kamera kıpırdadıysa keskinlik artar
             sharpen->SetInt("u_HasMotionState", m_CameraStill ? 0 : 2);
             sharpen->SetFloat("u_MotionAmount", kTAAMotionSharpen);
-            BindTexture(0, m_TAAUHistory[ni].Texture);
+            BindTexture(0, taauResult);
             PostProcess::DrawFullscreenQuad();
             sharpen->SetInt("u_HasMotionState", 0);
             Renderer::GetStats().PostProcessPasses += 2;
@@ -2395,32 +2524,17 @@ namespace Conqueror
             }
             else if (up == UpscalerMode::NIS && Valid(nis) && NISUpscale(cur, outW, outH, (m_UseFSR2 ? kNISSharpnessScaleFSR : kNISSharpnessScale) * upSharp))
             {
-                // NIS çıktısı çıktı boyutunda ara hedefte: çıktıya FXAA ile. NIS'in yön duyarlı büyütmesi iç çözünürlüğün kenarlarını
-                // (duvar üstü) çıktıda 1.5 piksellik basamaklara çeviriyordu; çıktı çözünürlüğündeki FXAA bu basamakları yumuşatır
+                // NIS çıktısı çıktı boyutunda ara hedefte: çıktıya kopya. 149: buraya standart dışı bir FXAA ekleniyordu (NIS'in basamaklarını
+                // yumuşatmak için; görüntüyü yumuşatıyor, kenar maskesi titreşimli derinlikten olduğu için kamera dururken kenarları kıpırdatıyordu).
+                // Diğer motorlardaki gibi kaldırıldı: zamansal AA'da büyütmeyi artık AA'nın zamansal yükselticisi yapar (basamak oluşmaz), NIS
+                // yalnız zamansal olmayan AA'da (FXAA, SMAA, MSAA ...) büyütür; Unreal'in NIS'i ve Unity'nin FSR 1'i de orada FXAA eklemez
                 toOutput();
-                const bool fxaaOut = Valid(fxaa);
-                auto& copy = fxaaOut ? fxaa : sharpen;
-                copy->Bind();
-                copy->SetInt("u_ScreenTexture", 0);
-                copy->SetFloat2("u_InverseScreenSize", glm::vec2(1.0f / oW, 1.0f / oH));
-                const uint32_t edgeDepth = GetSceneDepthTexture();
-                if (fxaaOut)
-                {
-                    copy->SetInt("u_UseMotionMask", 0);
-                    // Yalnız geometri kenarları (iç çözünürlüğün derinliğinde kesinti): dokular NIS keskinliğinde kalır
-                    copy->SetInt("u_DepthEdgeOnly", edgeDepth ? 1 : 0);
-                    copy->SetInt("u_EdgeDepth", 5);
-                    copy->SetFloat2("u_EdgeDepthTexel", glm::vec2(1.0f / (float)m_Width, 1.0f / (float)m_Height));
-                    copy->SetFloat("u_EdgeNear", m_FinalNear);
-                    copy->SetFloat("u_EdgeFar", m_FinalFar);
-                    BindTexture(5, edgeDepth);
-                }
-                else
-                    copy->SetFloat("u_Amount", 0.0f);
+                sharpen->Bind();
+                sharpen->SetInt("u_ScreenTexture", 0);
+                sharpen->SetFloat2("u_InverseScreenSize", glm::vec2(1.0f / oW, 1.0f / oH));
+                sharpen->SetFloat("u_Amount", 0.0f);
                 BindTexture(0, m_Upscale.Texture);
                 PostProcess::DrawFullscreenQuad();
-                if (fxaaOut)
-                    copy->SetInt("u_DepthEdgeOnly", 0);
                 Renderer::GetStats().PostProcessPasses++;
             }
             else if ((up == UpscalerMode::Bilinear || up == UpscalerMode::NearestNeighbor || up == UpscalerMode::Lanczos || up == UpscalerMode::SGSR) &&
