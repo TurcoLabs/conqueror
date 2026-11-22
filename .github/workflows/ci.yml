@@ -3,6 +3,9 @@ name: CI
 # CI DIAGNOSIS BRANCH (ci/mtlgl-ios-ar), not for main: the AR template crashed on the iOS Simulator after the GL translation
 # layers got glCopyImageSubData / glClearBufferfv (a42424d6): Metal command buffer timeout, then access revoked, then SIGABRT in
 # -[CAMetalLayer nextDrawable]. This job builds only the iOS players and runs the AR game with one variant per launch.
+# Second run: the first runner lost communication with the server (log cut during the build, files never uploaded); each variant now
+# runs on a freshly booted simulator with time limits, results also go to annotations, and two alternative depth copies are tried
+# (CQ_MTLGL_DEPTHCOPY=buffer / draw).
 on:
   push:
     branches: ["ci/**"]
@@ -16,6 +19,7 @@ jobs:
   macos:
     name: macOS iOS Simulator AR diagnosis (MtlGL copy / clear)
     runs-on: macos-15
+    timeout-minutes: 240
     steps:
       - uses: actions/checkout@v5
       - name: Install dependencies
@@ -25,7 +29,7 @@ jobs:
       - name: Build
         run: cmake --build build --parallel
       - name: Build the 3D template and the AR template for the iOS Simulator
-        timeout-minutes: 170
+        timeout-minutes: 100
         run: |
           set +e
           for c in ios_simulator ios_simulator_ar; do
@@ -36,53 +40,12 @@ jobs:
               exit 1
             fi
           done
-      - name: Run the AR game once per variant (the 3D game keeps running beside it, as in the failed CI run)
-        timeout-minutes: 60
-        run: |
-          set +e
-          mkdir -p diag
-          basic=$(ls -d ~/.cache/cq-build/regression/Reg_ios_simulator/Builds/iOS/*.app | head -1)
-          app=$(ls -d ~/.cache/cq-build/regression/Reg_ios_simulator_ar/Builds/iOS/*.app | head -1)
-          basic_id=$(/usr/libexec/PlistBuddy -c "Print CFBundleIdentifier" "$basic/Info.plist")
-          bid=$(/usr/libexec/PlistBuddy -c "Print CFBundleIdentifier" "$app/Info.plist")
-          python3 Tools/iOS/simulator_test.py "$basic" --screenshot diag/basic.png --wait 45 > diag/basic.out 2>&1
-          echo "basic 3D game: exit $?" | tee -a diag/summary.txt
-          variant() {
-            name=$1; shift
-            xcrun simctl terminate booted "$bid" > /dev/null 2>&1
-            if [ "$name" != "alone" ] && [ "$name" != "alone_nodepthcopy" ] && ! xcrun simctl spawn booted launchctl list | grep -q "$basic_id"; then
-              echo "  (3D game was not running, started again)" | tee -a diag/summary.txt
-              xcrun simctl launch booted "$basic_id" > /dev/null 2>&1
-              sleep 20
-            fi
-            env "$@" python3 Tools/iOS/simulator_test.py "$app" --screenshot "diag/$name.png" --wait 45 --expect-log "ARKit" > "diag/$name.out" 2>&1
-            code=$?
-            echo "$name: exit $code | $(grep -m1 'Screenshot' "diag/$name.out" | sed 's/.*Screenshot/Screenshot/') | $*" | tee -a diag/summary.txt
-            xcrun simctl spawn booted log show --last 2m --style compact --predicate 'process == "conqueror"' > "diag/$name.oslog" 2>&1
-            container=$(xcrun simctl get_app_container booted "$bid" data 2>/dev/null)
-            mkdir -p "diag/$name"
-            if [ -n "$container" ] && [ -d "$container" ]; then
-              find "$container" -name "*.log" -exec cp {} "diag/$name/" \;
-              find "$container" -path "*crash_dumps*" -type f -exec mv {} "diag/$name/" \;
-            fi
-            grep -h "Metal diag\|GLEmu trace\|MtlGL\|Unsupported\|crashed\|Signal:" "diag/$name"/*.log "diag/$name.log" "diag/$name.out" 2>/dev/null | sort -u | head -60 | sed 's/^/    /' | tee -a diag/summary.txt
-            grep -h -i "MTLDebug\|failed assertion\|validation\|command buffer" "diag/$name.oslog" "diag/$name.log" 2>/dev/null | head -20 | sed 's/^/    os: /' | tee -a diag/summary.txt
-          }
-          variant baseline
-          variant trace SIMCTL_CHILD_CQ_GLEMU_TRACE=1
-          variant isolate SIMCTL_CHILD_CQ_GLEMU_TRACE=1 SIMCTL_CHILD_CQ_GLEMU_ISOLATE=1
-          variant validation SIMCTL_CHILD_CQ_GLEMU_TRACE=1 SIMCTL_CHILD_MTL_DEBUG_LAYER=1 SIMCTL_CHILD_MTL_DEBUG_LAYER_ERROR_MODE=nslog SIMCTL_CHILD_MTL_DEBUG_LAYER_WARNING_MODE=nslog
-          variant nocopy SIMCTL_CHILD_CQ_GLEMU_TRACE=1 SIMCTL_CHILD_CQ_GLEMU_SKIP_COPYIMAGE=1
-          variant nodepthcopy SIMCTL_CHILD_CQ_GLEMU_TRACE=1 SIMCTL_CHILD_CQ_GLEMU_SKIP_DEPTHCOPY=1
-          variant noclear SIMCTL_CHILD_CQ_GLEMU_TRACE=1 SIMCTL_CHILD_CQ_GLEMU_SKIP_CLEARBUFFER=1
-          variant nocopy_noclear SIMCTL_CHILD_CQ_GLEMU_SKIP_COPYIMAGE=1 SIMCTL_CHILD_CQ_GLEMU_SKIP_CLEARBUFFER=1
-          variant baseline2
-          xcrun simctl terminate booted "$basic_id" > /dev/null 2>&1
-          variant alone
-          variant alone_nodepthcopy SIMCTL_CHILD_CQ_GLEMU_SKIP_DEPTHCOPY=1
-          exit 0
+      - name: Run the AR game once per variant on a freshly booted simulator (the 3D game runs beside it, as in the failed CI run)
+        timeout-minutes: 80
+        run: bash .github/diag_ar_variants.sh
       - name: Upload the diagnosis files
         if: always()
+        timeout-minutes: 15
         uses: actions/upload-artifact@v4
         with:
           name: mtlgl-ios-ar-diagnosis

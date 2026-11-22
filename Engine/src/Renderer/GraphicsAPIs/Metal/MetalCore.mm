@@ -16,11 +16,14 @@
 #endif
 
 #include <algorithm>
+#include <atomic>
 #include <mach/mach_time.h>
 
 namespace Conqueror::MTL
 {
     const char* g_DiagLabel = "frame";
+    std::atomic<int> g_DiagErrors{ 0 };
+    std::atomic<int> g_DiagSlow{ 0 };
 
     namespace
     {
@@ -212,9 +215,12 @@ namespace Conqueror::MTL
         {
             [m_Command commit];
             [m_Command waitUntilCompleted];
-            if (m_Command.error)
+            if (m_Command.error && g_DiagErrors.fetch_add(1) < 40)
                 CQ_CORE_ERROR("[Metal diag] command buffer failed (flush after '{0}', frame {1}): {2}", g_DiagLabel ? g_DiagLabel : "?", m_FrameSerial,
                               [[m_Command.error description] UTF8String]);
+            else if (!m_Command.error && m_Command.GPUEndTime - m_Command.GPUStartTime > 0.1 && g_DiagSlow.fetch_add(1) < 40)
+                CQ_CORE_WARN("[Metal diag] slow command buffer (flush after '{0}', frame {1}): GPU {2:.1f} ms", g_DiagLabel ? g_DiagLabel : "?", m_FrameSerial,
+                             (m_Command.GPUEndTime - m_Command.GPUStartTime) * 1000.0);
             m_Command = nil;
         }
     }
@@ -241,8 +247,14 @@ namespace Conqueror::MTL
         volatile uint64_t* completed = &m_CompletedFrame;
         const char* label = g_DiagLabel;
         [cmd addCompletedHandler:^(id<MTLCommandBuffer> done) {
-            if (done.error)
-                CQ_CORE_ERROR("[Metal diag] command buffer failed (frame {0}, last '{1}'): {2}", serial, label ? label : "?", [[done.error description] UTF8String]);
+            if (done.error && g_DiagErrors.fetch_add(1) < 40)
+                CQ_CORE_ERROR("[Metal diag] command buffer failed (frame {0}, last '{1}', GPU {2:.1f} ms): {3}", serial, label ? label : "?",
+                              (done.GPUEndTime - done.GPUStartTime) * 1000.0, [[done.error description] UTF8String]);
+            else if (!done.error && done.GPUEndTime - done.GPUStartTime > 0.25 && g_DiagSlow.fetch_add(1) < 40)
+                CQ_CORE_WARN("[Metal diag] slow frame command buffer (frame {0}, last '{1}'): GPU {2:.1f} ms", serial, label ? label : "?",
+                             (done.GPUEndTime - done.GPUStartTime) * 1000.0);
+            if (!done.error && (serial == 30 || serial == 120 || serial == 600))
+                CQ_CORE_WARN("[Metal diag] frame {0} command buffer: GPU {1:.1f} ms", serial, (done.GPUEndTime - done.GPUStartTime) * 1000.0);
             if (*completed < serial)
                 *completed = serial;
             dispatch_semaphore_signal(sem);

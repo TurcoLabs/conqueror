@@ -4,7 +4,9 @@
 #include "Core/Logging/Log.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
+#include <unordered_map>
 
 namespace Conqueror::MtlGL
 {
@@ -992,6 +994,175 @@ fragment ClearOut cq_clear(VSOut i [[stage_in]], constant Params& p [[buffer(0)]
         t.DefinedLevels = t.Levels >= 32 ? ~0u : ((1u << t.Levels) - 1);
     }
 
+    // CI TANI (yalnız ci/mtlgl-ios-ar dalı): tam derinlik kopyasının seçenekleri, CQ_MTLGL_DEPTHCOPY = blit (varsayılan: doku -> doku
+    // blit) | buffer (derinlik ve şablon düzlemleri ayrı ayrı geçici arabellek üzerinden) | draw (derinlik yazan tam ekran üçgen; şablon
+    // kopyalanmaz)
+    namespace
+    {
+        int DiagDepthCopyMode()
+        {
+            static const int mode = [] {
+                const char* v = std::getenv("CQ_MTLGL_DEPTHCOPY");
+                if (!v)
+                    return 0;
+                if (std::strcmp(v, "buffer") == 0)
+                    return 1;
+                if (std::strcmp(v, "draw") == 0)
+                    return 2;
+                return 0;
+            }();
+            return mode;
+        }
+
+        bool DepthCopyViaBuffer(Texture& src, Texture& dst, int w, int h)
+        {
+            if (src.Samples > 1 || dst.Samples > 1 || w <= 0 || h <= 0)
+                return false;
+            auto& core = Core::Get();
+            const NSUInteger dp = ((NSUInteger)w * 4 + 255) / 256 * 256;
+            const NSUInteger sp = ((NSUInteger)w + 255) / 256 * 256;
+            const NSUInteger depthBytes = dp * (NSUInteger)h;
+            const NSUInteger stencilBytes = (src.Stencil && dst.Stencil) ? sp * (NSUInteger)h : 0;
+            id<MTLBuffer> tmp = [core.Device() newBufferWithLength:depthBytes + stencilBytes options:MTLResourceStorageModePrivate];
+            if (!tmp)
+                return false;
+            const MTLBlitOption depthOpt = src.Stencil ? MTLBlitOptionDepthFromDepthStencil : MTLBlitOptionNone;
+            const MTLSize size = MTLSizeMake((NSUInteger)w, (NSUInteger)h, 1);
+            id<MTLBlitCommandEncoder> blit = core.Blit();
+            [blit copyFromTexture:src.Image
+                             sourceSlice:0
+                             sourceLevel:0
+                            sourceOrigin:MTLOriginMake(0, 0, 0)
+                              sourceSize:size
+                                toBuffer:tmp
+                       destinationOffset:0
+                  destinationBytesPerRow:dp
+                destinationBytesPerImage:depthBytes
+                                 options:depthOpt];
+            [blit copyFromBuffer:tmp
+                       sourceOffset:0
+                  sourceBytesPerRow:dp
+                sourceBytesPerImage:depthBytes
+                         sourceSize:size
+                          toTexture:dst.Image
+                   destinationSlice:0
+                   destinationLevel:0
+                  destinationOrigin:MTLOriginMake(0, 0, 0)
+                            options:(dst.Stencil ? MTLBlitOptionDepthFromDepthStencil : MTLBlitOptionNone)];
+            if (stencilBytes)
+            {
+                [blit copyFromTexture:src.Image
+                                 sourceSlice:0
+                                 sourceLevel:0
+                                sourceOrigin:MTLOriginMake(0, 0, 0)
+                                  sourceSize:size
+                                    toBuffer:tmp
+                           destinationOffset:depthBytes
+                      destinationBytesPerRow:sp
+                    destinationBytesPerImage:stencilBytes
+                                     options:MTLBlitOptionStencilFromDepthStencil];
+                [blit copyFromBuffer:tmp
+                           sourceOffset:depthBytes
+                      sourceBytesPerRow:sp
+                    sourceBytesPerImage:stencilBytes
+                             sourceSize:size
+                              toTexture:dst.Image
+                       destinationSlice:0
+                       destinationLevel:0
+                      destinationOrigin:MTLOriginMake(0, 0, 0)
+                                options:MTLBlitOptionStencilFromDepthStencil];
+            }
+            return true;
+        }
+
+        const char* kDiagDepthCopyMSL = R"(
+#include <metal_stdlib>
+using namespace metal;
+struct DCOut { float4 pos [[position]]; };
+vertex DCOut cq_dcopy_vs(uint vid [[vertex_id]])
+{
+    float2 q = float2((vid << 1) & 2, vid & 2);
+    DCOut o;
+    o.pos = float4(q * 2.0 - 1.0, 0.0, 1.0);
+    return o;
+}
+struct DCDepth { float d [[depth(any)]]; };
+fragment DCDepth cq_dcopy_fs(DCOut i [[stage_in]], depth2d<float> src [[texture(0)]])
+{
+    DCDepth o;
+    o.d = src.read(uint2(i.pos.xy));
+    return o;
+}
+)";
+
+        bool DepthCopyViaDraw(Texture& src, Texture& dst, int w, int h)
+        {
+            if (src.Samples > 1 || dst.Samples > 1 || w <= 0 || h <= 0)
+                return false;
+            auto& core = Core::Get();
+            static bool tried = false;
+            static id<MTLLibrary> lib = nil;
+            static id<MTLDepthStencilState> ds = nil;
+            static std::unordered_map<uint64_t, id<MTLRenderPipelineState>> psos;
+            if (!tried)
+            {
+                tried = true;
+                NSError* err = nil;
+                lib = [core.Device() newLibraryWithSource:[NSString stringWithUTF8String:kDiagDepthCopyMSL] options:nil error:&err];
+                if (!lib)
+                    CQ_CORE_ERROR("[MtlGL diag] depth copy shader failed: {0}", err ? [[err localizedDescription] UTF8String] : "unknown");
+                MTLDepthStencilDescriptor* dd = [MTLDepthStencilDescriptor new];
+                dd.depthCompareFunction = MTLCompareFunctionAlways;
+                dd.depthWriteEnabled = YES;
+                ds = [core.Device() newDepthStencilStateWithDescriptor:dd];
+            }
+            if (!lib || !ds)
+                return false;
+            const uint64_t key = (uint64_t)dst.Format | ((uint64_t)(dst.Stencil ? 1 : 0) << 32);
+            __strong id<MTLRenderPipelineState>& pso = psos[key];
+            if (!pso)
+            {
+                MTLRenderPipelineDescriptor* d = [MTLRenderPipelineDescriptor new];
+                d.vertexFunction = [lib newFunctionWithName:@"cq_dcopy_vs"];
+                d.fragmentFunction = [lib newFunctionWithName:@"cq_dcopy_fs"];
+                d.depthAttachmentPixelFormat = dst.Format;
+                if (dst.Stencil)
+                    d.stencilAttachmentPixelFormat = dst.Format;
+                d.rasterSampleCount = 1;
+                NSError* err = nil;
+                pso = [core.Device() newRenderPipelineStateWithDescriptor:d error:&err];
+                if (!pso)
+                {
+                    CQ_CORE_ERROR("[MtlGL diag] depth copy pipeline failed: {0}", err ? [[err localizedDescription] UTF8String] : "unknown");
+                    return false;
+                }
+            }
+            MTLRenderPassDescriptor* pass = [MTLRenderPassDescriptor renderPassDescriptor];
+            pass.depthAttachment.texture = dst.Image;
+            pass.depthAttachment.loadAction = MTLLoadActionLoad;
+            pass.depthAttachment.storeAction = MTLStoreActionStore;
+            if (dst.Stencil)
+            {
+                pass.stencilAttachment.texture = dst.Image;
+                pass.stencilAttachment.loadAction = MTLLoadActionLoad;
+                pass.stencilAttachment.storeAction = MTLStoreActionStore;
+            }
+            id<MTLRenderCommandEncoder> enc = core.BeginRender(pass);
+            if (!enc)
+                return false;
+            MTLViewport vp{ 0.0, 0.0, (double)w, (double)h, 0.0, 1.0 };
+            [enc setViewport:vp];
+            [enc setRenderPipelineState:pso];
+            [enc setDepthStencilState:ds];
+            [enc setCullMode:MTLCullModeNone];
+            [enc setFragmentTexture:src.Image atIndex:0];
+            [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+            core.EndEncoding();
+            s_Bound = Bound{};
+            return true;
+        }
+    }
+
     void BlitFramebuffer(GLint sx0, GLint sy0, GLint sx1, GLint sy1, GLint dx0, GLint dy0, GLint dx1, GLint dy1, GLbitfield mask, GLenum filter)
     {
         auto& c = Ctx();
@@ -1084,7 +1255,16 @@ fragment ClearOut cq_clear(VSOut i [[stage_in]], constant Params& p [[buffer(0)]
                 const int sw = (int)src->Width, sh = (int)src->Height;
                 const bool full = std::min(sx0, sx1) == 0 && std::min(sy0, sy1) == 0 && std::max(sx0, sx1) == sw && std::max(sy0, sy1) == sh &&
                                   (int)dst->Width == sw && (int)dst->Height == sh;
-                if (full && sameSize && noFlip && src->Samples == dst->Samples && src->Format == dst->Format)
+                const int diagMode = DiagDepthCopyMode();
+                if (full && sameSize && noFlip && src->Samples == dst->Samples && src->Format == dst->Format && diagMode == 1 &&
+                    DepthCopyViaBuffer(*src, *dst, sw, sh))
+                {
+                }
+                else if (full && sameSize && noFlip && src->Samples == dst->Samples && src->Format == dst->Format && diagMode == 2 &&
+                         DepthCopyViaDraw(*src, *dst, sw, sh))
+                {
+                }
+                else if (full && sameSize && noFlip && src->Samples == dst->Samples && src->Format == dst->Format)
                     [core.Blit() copyFromTexture:src->Image
                                      sourceSlice:0
                                      sourceLevel:0
