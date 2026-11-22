@@ -6,6 +6,7 @@
 #include "crn_winhdr.h"
 #endif
 #ifndef _MSC_VER
+#ifndef __MINGW32__  // MinGW's CRT (sec_api) already provides sprintf_s / vsprintf_s
 int sprintf_s(char* buffer, size_t sizeOfBuffer, const char* format, ...) {
   if (!sizeOfBuffer)
     return 0;
@@ -36,6 +37,7 @@ int vsprintf_s(char* buffer, size_t sizeOfBuffer, const char* format, va_list ar
 
   return CRNLIB_MIN(c, (int)sizeOfBuffer - 1);
 }
+#endif  // __MINGW32__
 
 char* strlwr(char* p) {
   char* q = p;

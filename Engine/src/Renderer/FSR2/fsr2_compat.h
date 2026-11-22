@@ -9,6 +9,8 @@
 #define _countof(a) (sizeof(a) / sizeof((a)[0]))
 #endif
 
+// Windows'ta (MSVC, MinGW sec_api) wcscpy_s zaten var
+#if !defined(_WIN32)
 template <size_t N>
 inline int wcscpy_s(wchar_t (&dst)[N], const wchar_t* src)
 {
@@ -23,3 +25,4 @@ inline int wcscpy_s(wchar_t* dst, size_t n, const wchar_t* src)
     dst[n - 1] = 0;
     return 0;
 }
+#endif
