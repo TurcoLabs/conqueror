@@ -23,10 +23,23 @@ uniform float u_Amount = 0.0;
 uniform sampler2D u_MotionState;
 uniform int u_HasMotionState = 0;
 uniform float u_MotionAmount = 0.0;
+// 330: TAA + NIS / FSR 1 / CAS (uzamsal keskinleştirici TAAU'dan sonra): geometrik kenarda (iç çözünürlükte 3x3'te derinlik kesintisi ya
+// da normal kıvrımı) keskinleştiricinin çıktısı yerine TAAU'nun keskinleştirilmemiş çıktısı. TAAU kenarındaki piksel altı basamaklar
+// (yerel TAA kadar: rampanın kenarında düz çizgiden ortalama 0.14 piksel) keskinleştirmeyle 0.20'ye büyüyor, kenarlar merdivenli
+// görünüyordu; doku ayrıntısı (kenar olmayan her yer) keskinleştirilmiş kalır
+uniform sampler2D u_Unsharpened;
+uniform int u_HasUnsharpened = 0;
+uniform sampler2D u_EdgeMask;     // EdgeMask.cqsh: geometrik kenar (0..1), kamera dururken zamanla biriktirilmiş
 
 void main()
 {
     vec3 c = texture(u_ScreenTexture, v_UV).rgb;
+    if (u_HasUnsharpened == 1)
+    {
+        float edge = texture(u_EdgeMask, v_UV).r;
+        if (edge > 0.0)
+            c = mix(c, texture(u_Unsharpened, v_UV).rgb, edge);
+    }
     float amount = u_Amount;
     if (u_HasMotionState == 1 && u_MotionAmount > 0.0)
     {

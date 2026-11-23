@@ -157,6 +157,7 @@ namespace Conqueror
         LoadShader("SSAOBlur", "Engine/src/Shaders/PostProcess/SSAOBlur.cqsh");
         LoadShader("Composite", "Engine/src/Shaders/PostProcess/Composite.cqsh");
         LoadShader("Sharpen", "Engine/src/Shaders/PostProcess/Sharpen.cqsh");
+        LoadShader("EdgeMask", "Engine/src/Shaders/PostProcess/EdgeMask.cqsh");
         LoadShader("SSR", "Engine/src/Shaders/PostProcess/SSR.cqsh");
         LoadShader("VolumetricFog", "Engine/src/Shaders/PostProcess/VolumetricFog.cqsh");
         LoadShader("Clouds", "Engine/src/Shaders/PostProcess/Clouds.cqsh");
@@ -1310,6 +1311,38 @@ namespace Conqueror
             if (loc >= 0)
                 glProgramUniform4ui(program, loc, v.x, v.y, v.z, v.w);
         }
+    }
+
+    uint32_t PostProcessStack::RunEdgeMask(uint32_t w, uint32_t h)
+    {
+        // 330: keskinleştirmenin geri alındığı geometrik kenar maskesi; kamera dururken önceki karenin maskesiyle karışır (EdgeMask.cqsh)
+        auto mask = PostProcess::GetShader("EdgeMask");
+        if (!Valid(mask))
+            return 0;
+        const int next = 1 - m_EdgeMaskIndex;
+        EnsureTarget(m_EdgeMask[0], w, h, GL_R8);
+        EnsureTarget(m_EdgeMask[1], w, h, GL_R8);
+        glBindFramebuffer(GL_FRAMEBUFFER, m_EdgeMask[next].Framebuffer);
+        glViewport(0, 0, (GLsizei)w, (GLsizei)h);
+        const uint32_t normals = GetSceneNormalTexture();
+        mask->Bind();
+        mask->SetInt("u_EdgeDepth", 0);
+        mask->SetInt("u_EdgeNormal", 1);
+        mask->SetInt("u_PrevMask", 2);
+        mask->SetInt("u_HasEdgeNormal", normals ? 1 : 0);
+        mask->SetFloat2("u_EdgeNearFar", glm::vec2(m_FinalNear, m_FinalFar));
+        mask->SetFloat2("u_EdgeJitterUV", m_JitterNDC * 0.5f);
+        const bool useHistory = m_EdgeMaskValid && m_CameraStill && m_EdgeMask[m_EdgeMaskIndex].Width == w && m_EdgeMask[m_EdgeMaskIndex].Height == h;
+        mask->SetInt("u_UseHistory", useHistory ? 1 : 0);
+        mask->SetFloat("u_HistoryWeight", 0.9f);
+        BindTexture(0, GetSceneDepthTexture());
+        BindTexture(1, normals);
+        BindTexture(2, m_EdgeMask[m_EdgeMaskIndex].Texture);
+        PostProcess::DrawFullscreenQuad();
+        Renderer::GetStats().PostProcessPasses++;
+        m_EdgeMaskIndex = next;
+        m_EdgeMaskValid = true;
+        return m_EdgeMask[next].Texture;
     }
 
     uint32_t PostProcessStack::RunSpatialSharpener(uint32_t source, uint32_t w, uint32_t h, float sharpness)
@@ -2488,13 +2521,17 @@ namespace Conqueror
             // Keskinleştirme TAAU'nun kamera dururken kalan küçük titreşimini büyütür (285 / 288'deki gibi): önce FSR 2 / SGSR 2'deki duran
             // kamera tutucusu (owner 4), sonra keskinleştirici
             uint32_t taauResult = m_TAAUHistory[ni].Texture;
+            uint32_t unsharpened = 0;
             if (spatialSharpen)
             {
                 taauResult = RunStillHold(4, taauResult, outW, outH, m_ReactiveUsed ? m_Reactive.Texture : 0, 0, m_CameraStill, !historyValid);
+                unsharpened = taauResult;
                 taauResult = RunSpatialSharpener(taauResult, outW, outH,
                                                  (AntiAliasing::IsSingleFrame(m_AAMode) || m_AAMode == AntiAliasingMode::SMAA_T2X ? kNISSharpnessScaleTAAUSingleFrame
                                                                                                                                   : kNISSharpnessScaleTAAU) * upSharp);
             }
+            // 330: geometrik kenarda keskinleştirilmemiş TAAU çıktısı (Sharpen.cqsh); keskinleştirici çalışmadıysa (aynı doku) gerekmez
+            const uint32_t edgeMask = unsharpened && unsharpened != taauResult ? RunEdgeMask(outW, outH) : 0;
             toOutput();
             sharpen->Bind();
             sharpen->SetInt("u_ScreenTexture", 0);
@@ -2503,9 +2540,18 @@ namespace Conqueror
             // Hareket ederken geçmiş her karede yeniden örneklenip yumuşar (TAA'daki gibi): kamera kıpırdadıysa keskinlik artar
             sharpen->SetInt("u_HasMotionState", m_CameraStill ? 0 : 2);
             sharpen->SetFloat("u_MotionAmount", kTAAMotionSharpen);
+            sharpen->SetInt("u_HasUnsharpened", edgeMask ? 1 : 0);
+            if (edgeMask)
+            {
+                sharpen->SetInt("u_Unsharpened", 2);
+                sharpen->SetInt("u_EdgeMask", 3);
+                BindTexture(2, unsharpened);
+                BindTexture(3, edgeMask);
+            }
             BindTexture(0, taauResult);
             PostProcess::DrawFullscreenQuad();
             sharpen->SetInt("u_HasMotionState", 0);
+            sharpen->SetInt("u_HasUnsharpened", 0);
             Renderer::GetStats().PostProcessPasses += 2;
             return;
         }

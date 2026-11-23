@@ -6783,7 +6783,8 @@ namespace Conqueror::Editor
         auto regionProbe = [](const std::shared_ptr<Framebuffer>& fb, const Args& a, std::string& err) -> bool {
             // game_region <u0> <v0> <u1> <v1> [<kanal> <min|max|mean|detail> <v | >v | <v>]...: Game görünümünde bölge istatistiği
             // (u, v 0..1, sol alt köşe 0,0). Kanal: r g b a lum, red/green/blue = o kanalın diğerlerinden baskınlığı (r - max(g, b)).
-            // detail: yatay komşu piksel farkının ortalaması (doku / bulut ayrıntısı; düz renk geçişinde ~0)
+            // detail: yatay komşu piksel farkının ortalaması (doku / bulut ayrıntısı; düz renk geçişinde ~0); edgeres: bölgeden geçen
+            // yatay / yatık kenarın düz çizgiden sapması (piksel, merdivenlenme)
             if (a.size() < 5 || !fb) { err = "region u0 v0 u1 v1 [channel stat cond]..."; return false; }
             const auto& spec = fb->GetSpecification();
             auto toPx = [](const std::string& v, uint32_t size) { return std::clamp((int)(std::stof(v) * (float)size), 0, (int)size - 1); };
@@ -6820,9 +6821,64 @@ namespace Conqueror::Editor
                     if ((int)(i % (size_t)w) + 1 < w)
                         diff += std::abs(value(i + 1, ch) - v);
                 }
-                const float have = stat == "min" ? mn : stat == "max" ? mx : stat == "detail" ? diff / (float)std::max<size_t>(1, n - (size_t)h)
-                                 : sum / (float)n;
-                report += " " + ch + "." + stat + "=" + std::to_string((int)std::lround(have));
+                float have = stat == "min" ? mn : stat == "max" ? mx : stat == "detail" ? diff / (float)std::max<size_t>(1, n - (size_t)h)
+                           : sum / (float)n;
+                if (stat == "edgeres")
+                {
+                    // edgeres: bölgeden geçen yatay / yatık bir kenarın düz çizgiden ortalama sapması (piksel, karekök ortalama; 330): her
+                    // sütunda en büyük dikey parlaklık farkının alt piksel yeri, doğruya uydurulur (2 pikselden uzak sapanlar atılıp yeniden).
+                    // Kenar yumuşatma ne kadar iyiyse kenar o kadar düz: merdiven basamakları sapmayı büyütür
+                    std::vector<std::pair<double, double>> pts;
+                    for (int c = 0; c < w; ++c)
+                    {
+                        int best = -1;
+                        float bestG = 0.0f;
+                        for (int r = 0; r + 1 < h; ++r)
+                        {
+                            const float g = std::abs(value((size_t)(r + 1) * w + c, ch) - value((size_t)r * w + c, ch));
+                            if (g > bestG) { bestG = g; best = r; }
+                        }
+                        if (best < 1 || best + 2 >= h || bestG < 4.0f)
+                            continue;
+                        const float gm = std::abs(value((size_t)best * w + c, ch) - value((size_t)(best - 1) * w + c, ch));
+                        const float gp = std::abs(value((size_t)(best + 2) * w + c, ch) - value((size_t)(best + 1) * w + c, ch));
+                        const float den = gm - 2.0f * bestG + gp;
+                        const double off = std::abs(den) > 1e-6f ? 0.5 * (gm - gp) / den : 0.0;
+                        pts.push_back({ (double)c, best + 0.5 + std::clamp(off, -0.5, 0.5) });
+                    }
+                    auto fit = [](const std::vector<std::pair<double, double>>& p, double& k, double& b) {
+                        double sx = 0, sy = 0, sxx = 0, sxy = 0;
+                        for (const auto& [x, y] : p) { sx += x; sy += y; sxx += x * x; sxy += x * y; }
+                        const double nn = (double)p.size(), d = nn * sxx - sx * sx;
+                        k = std::abs(d) > 1e-9 ? (nn * sxy - sx * sy) / d : 0.0;
+                        b = (sy - k * sx) / std::max(nn, 1.0);
+                    };
+                    have = 1e9f;
+                    if (pts.size() >= 8)
+                    {
+                        double k = 0, b = 0;
+                        fit(pts, k, b);
+                        std::vector<std::pair<double, double>> in;
+                        for (const auto& pt : pts)
+                            if (std::abs(pt.second - (k * pt.first + b)) < 2.0)
+                                in.push_back(pt);
+                        if (in.size() >= 8)
+                        {
+                            fit(in, k, b);
+                            double e = 0;
+                            for (const auto& [x, y] : in) e += (y - (k * x + b)) * (y - (k * x + b));
+                            have = (float)std::sqrt(e / (double)in.size());
+                        }
+                    }
+                }
+                if (stat == "detail" || stat == "edgeres")
+                {
+                    char buf[32];
+                    std::snprintf(buf, sizeof(buf), "%.3f", have);
+                    report += " " + ch + "." + stat + "=" + buf;
+                }
+                else
+                    report += " " + ch + "." + stat + "=" + std::to_string((int)std::lround(have));
                 bool ok;
                 if (cond[0] == '>') ok = have > std::stof(cond.substr(1));
                 else if (cond[0] == '<') ok = have < std::stof(cond.substr(1));

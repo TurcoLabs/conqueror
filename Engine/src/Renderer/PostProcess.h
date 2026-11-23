@@ -183,6 +183,7 @@ namespace Conqueror
         // düzlemde) 0.05 pikselin altında (327 / 328: nişan / göz yüksekliği gibi üstel yaklaşan değerler kamerayı 50+ kare boyunca
         // piksel altı oynatıyor, zamansal yöntemler bu sürede hareket yoluyla çizip küplerin arasını titretiyordu)
         bool IsCameraStill(const glm::mat4& viewProj) const;
+        uint32_t RunEdgeMask(uint32_t w, uint32_t h);
         void ReleaseEffectTargets();
 
         std::shared_ptr<Framebuffer> m_SceneFramebuffer;     // MSAA olabilir
@@ -283,6 +284,9 @@ namespace Conqueror
         UpscalerMode m_SpatialSharpener = UpscalerMode::None;   // zamansal AA + uzamsal yükseltici: AA'nın zamansal yükselticisi büyütür,
                                                                 // bu yalnız keskinleştirir (310 / 149)
         RenderTarget m_SpatialSharpen;                          // keskinleştiricinin çıktısı (çıktı çözünürlüğünde)
+        RenderTarget m_EdgeMask[2];                             // 330: keskinleştirmenin geri alındığı geometrik kenar maskesi (EdgeMask.cqsh)
+        int m_EdgeMaskIndex = 0;
+        bool m_EdgeMaskValid = false;
         bool m_CASSharpen = false;                                 // keskinleştirme AMD CAS ile
         float m_CASStrength = 0.0f;
         float m_RenderScale = 1.0f, m_WantRenderScale = 1.0f;     // iç çözünürlük / çıktı çözünürlüğü

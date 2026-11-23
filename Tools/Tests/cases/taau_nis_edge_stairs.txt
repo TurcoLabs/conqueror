@@ -1,0 +1,18 @@
+# template: fps
+# 330 / 314: TAA + NIS'te kenarlar hafif merdivenli görünüyordu (kullanıcının 593 kadrajı: duvarın üstünden zemine, silindire ve rampaya
+# bakış). TAAU'nun kenarındaki piksel altı basamaklar yerel TAA kadardır; NIS (ve FSR 1 / CAS) keskinleştirmesi onları büyütüyordu.
+# Geometrik kenarda (iç çözünürlükte 3x3'te derinlik kesintisi ya da normal kıvrımı) artık keskinleştirilmemiş TAAU çıktısı gösterilir,
+# doku ayrıntısı keskin kalır (bulanıklık artmaz). Kenarın düz çizgiden sapması (piksel, edgeres): rampanın kenarı 0.199 -> 0.136 (yerel
+# TAA ~0.14, SSAA ~0.10), duvarın üst kenarı 0.216 -> 0.162; zemin dokusunun ayrıntısı 1.570 -> 1.570
+wait_until 3000 layout_settled
+wait 10
+focus Viewport
+cvar r.TemporalStability 1
+cvar r.AntiAliasing 3
+cvar r.Upscaler 3
+camera 7 35 -90 30.0 4.0 0
+wait 150
+viewport_region 0.5513 0.874 0.6286 0.966 lum edgeres <0.17
+viewport_region 0.0967 0.462 0.870 0.546 lum edgeres <0.19
+viewport_region 0.29 0.563 0.967 0.748 lum detail >1.5
+quit
