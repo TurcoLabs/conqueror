@@ -2975,7 +2975,9 @@ namespace Conqueror
                             for (auto it = fields.begin(); it != fields.end(); ++it)
                             {
                                 ScriptFieldOverride v;
-                                const YAML::Node& n = it->second;
+                                // Kopya (Node bir tutamaç): yaml-cpp yineleyicisinin -> işleci geçici bir vekil döndürür, ona bağlanan
+                                // referans ifadenin sonunda boşa düşüyordu (45: ASan stack-use-after-scope, betikli her sahne yüklemesinde)
+                                const YAML::Node n = it->second;
                                 if (n["Bool"]) { v.Type = ScriptFieldOverride::Kind::Bool; v.Bool = n["Bool"].as<bool>(); }
                                 else if (n["Int"]) { v.Type = ScriptFieldOverride::Kind::Int; v.Int = n["Int"].as<int64_t>(); }
                                 else if (n["Float"]) { v.Type = ScriptFieldOverride::Kind::Float; v.Float = n["Float"].as<double>(); }
