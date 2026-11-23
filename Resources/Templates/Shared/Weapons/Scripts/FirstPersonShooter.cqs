@@ -497,8 +497,10 @@ script FirstPersonShooter : ConquerorScript
         // Şarjör değiştirirken (ve silah değiştirirken) nişan alınmaz
         var wa = CurrentWeapon();
         if (wa >= 0 && (GetScriptField(wa, "reloading") == true || reloadAnim > 0.0 || switchTimer > 0.0)) { aiming = false; }
-        // Sekme toparlanması
+        // Sekme toparlanması. Üstel toparlanma hedefe hiç varmaz: atıştan sonra bakış saniyelerce piksel altı kayıyor, ince ayrıntı
+        // (küplerin arası) piksellerin üstünde sürünüp yanıp sönüyordu (327). Unreal'ın FInterpTo'su gibi hedefe çok yakınken oturur
         var rec = recoil * (1.0 - MathExp(-9.0 * dt));
+        if (MathAbs(recoil) < 0.002) { rec = recoil; }
         recoil -= rec;
         pitch -= rec * 0.7;
         pitch = MathClamp(pitch, -85.0, 85.0);
@@ -550,8 +552,15 @@ script FirstPersonShooter : ConquerorScript
         if (vy > 0.0 && flags != null && (int(flags) % 4) >= 2) { vy = 0.0; }
 
         // Kamera: göz yüksekliği, bakış, FOV
-        eye = MathLerp(eye, crouching ? crouchEyeHeight : eyeHeight, 1.0 - MathExp(-12.0 * dt));
-        aim01 = MathLerp(aim01, aiming ? 1.0 : 0.0, 1.0 - MathExp(-aimInSpeed * dt));
+        // Göz yüksekliği ve nişan (görüş açısı) üstel yaklaşır ama hedefe çok yakınken oturur (Unreal FInterpTo gibi): yoksa nişan
+        // bırakılınca görüş açısı saniyelerce piksel altı değişiyor, küplerin araları sürünüp yanıp sönüyordu (327; 25 derecelik
+        // nişan aralığında 0.0002 ekranda ~0.04 piksel)
+        var eyeTarget = crouching ? crouchEyeHeight : eyeHeight;
+        eye = MathLerp(eye, eyeTarget, 1.0 - MathExp(-12.0 * dt));
+        if (MathAbs(eye - eyeTarget) < 0.0002) { eye = eyeTarget; }
+        var aimTarget = aiming ? 1.0 : 0.0;
+        aim01 = MathLerp(aim01, aimTarget, 1.0 - MathExp(-aimInSpeed * dt));
+        if (MathAbs(aim01 - aimTarget) < 0.0002) { aim01 = aimTarget; }
         var w = CurrentWeapon();
         var aimFov = w >= 0 ? GetScriptField(w, "aimFov") : 60.0;
         if (cam >= 0)
