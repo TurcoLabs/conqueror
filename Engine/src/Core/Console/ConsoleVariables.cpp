@@ -416,6 +416,8 @@ namespace Conqueror
         if (o.RTGI >= 0) p.RayTracedGI = o.RTGI != 0;
         if (!std::isnan(o.RTGIIntensity)) p.RTGIIntensity = o.RTGIIntensity;
         if (o.RTGIRays >= 0) p.RTGIRaysPerProbe = o.RTGIRays;
+        if (o.RTReflections >= 0) p.RayTracedReflections = o.RTReflections != 0;
+        if (o.RTAO >= 0) p.RayTracedAO = o.RTAO != 0;
         if (o.TemporalStability >= 0) p.TemporalStability = o.TemporalStability != 0;
     }
 
@@ -466,6 +468,8 @@ namespace Conqueror
         AddBoolOverride("r.RTGI", "Ray traced global illumination (Lumen-style probes traced against the scene) on/off", &R::RTGI, [](Scene& s) { return s.GetRenderSettings().Post.RayTracedGI; });
         AddFloatOverride("r.RTGI.Intensity", "Ray traced GI indirect lighting intensity", &R::RTGIIntensity, [](Scene& s) { return s.GetRenderSettings().Post.RTGIIntensity; }, 0.0f, 8.0f);
         AddIntOverride("r.RTGI.Rays", "Ray traced GI rays per probe (32..256)", &R::RTGIRays, [](Scene& s) { return s.GetRenderSettings().Post.RTGIRaysPerProbe; }, 32, 256);
+        AddBoolOverride("r.RTReflections", "Ray traced reflections (scene BVH instead of screen traces) on/off", &R::RTReflections, [](Scene& s) { return s.GetRenderSettings().Post.RayTracedReflections; });
+        AddBoolOverride("r.RTAO", "Ray traced ambient occlusion (scene BVH instead of the depth buffer) on/off", &R::RTAO, [](Scene& s) { return s.GetRenderSettings().Post.RayTracedAO; });
         AddBoolOverride("r.SkyAtmosphere", "Physically based sky atmosphere on/off", &R::SkyAtmosphere, [](Scene& s) { return s.GetRenderSettings().Environment.Sky == SkyMode::Atmosphere; });
         AddIntOverride("r.Tonemapper", "0 none, 1 Neutral, 2 ACES, 3 AgX, 4 Reinhard", &R::Tonemapper, [](Scene& s) { return (int)s.GetRenderSettings().Post.Tonemap; }, 0, 4);
         AddFloatOverride("r.Exposure", "Exposure in EV", &R::Exposure, [](Scene& s) { return s.GetRenderSettings().Post.Exposure; }, -16.0f, 16.0f);

@@ -13,6 +13,7 @@
 #include "Renderer/Renderer.h"
 #include "Renderer/Utilities/Renderer3D/Renderer3D.h"
 #include "Renderer/AntiAliasing.h"
+#include "Renderer/RayTracing/RayTracedEffects.h"
 #include "Renderer/FSR2/FSR2Upscaler.h"
 #include "Renderer/Upscalers/DLSSUpscaler.h"
 #include "Renderer/Upscalers/XeSSUpscaler.h"
@@ -1479,19 +1480,39 @@ namespace Conqueror
         if (!Valid(ssao) || !Valid(blur) || camera.Orthographic)
             return;
 
+        // 316: Ray Traced AO açıkken örtü sahne BVH'sinde izlenir (aynı R8 hedef, sonra aynı bulanıklaştırma); desteklenmezse SSAO
+        bool traced = false;
+        if (settings.RayTracedAO)
+        {
+            CQ_PROFILE_GPU("Ray Traced AO");
+            RayTracedEffects::AOInputs ain;
+            ain.Depth = GetSceneDepthTexture();
+            ain.ViewProj = JitteredProjection(camera) * camera.View;
+            ain.CameraPos = camera.Position;
+            ain.Radius = settings.AORadius;
+            ain.Intensity = settings.AOIntensity;
+            ain.Power = settings.AOPower;
+            ain.Rays = settings.RTAORays;
+            // Titreşimli kipte (TAA ...) desen her karede döner ve birikimle ortalanır; titreşimsizde sabit (SSAO gibi)
+            ain.Frame = m_JitterActive ? m_FrameIndex : 0u;
+            traced = RayTracedEffects::TraceAO(ain, m_AO.Texture);
+        }
         glBindFramebuffer(GL_FRAMEBUFFER, m_AO.Framebuffer);
         glViewport(0, 0, m_AO.Width, m_AO.Height);
-        ssao->Bind();
-        ssao->SetInt("u_Depth", 0);
-        ssao->SetMat4("u_Projection", camera.Projection);
-        ssao->SetMat4("u_InvProjection", glm::inverse(camera.Projection));
-        ssao->SetFloat2("u_DepthTexel", glm::vec2(1.0f / m_Width, 1.0f / m_Height));
-        ssao->SetFloat("u_Radius", settings.AORadius);
-        ssao->SetFloat("u_Intensity", settings.AOIntensity);
-        ssao->SetFloat("u_Power", settings.AOPower);
-        ssao->SetFloat("u_Time", time);
-        BindTexture(0, GetSceneDepthTexture());
-        PostProcess::DrawFullscreenQuad();
+        if (!traced)
+        {
+            ssao->Bind();
+            ssao->SetInt("u_Depth", 0);
+            ssao->SetMat4("u_Projection", camera.Projection);
+            ssao->SetMat4("u_InvProjection", glm::inverse(camera.Projection));
+            ssao->SetFloat2("u_DepthTexel", glm::vec2(1.0f / m_Width, 1.0f / m_Height));
+            ssao->SetFloat("u_Radius", settings.AORadius);
+            ssao->SetFloat("u_Intensity", settings.AOIntensity);
+            ssao->SetFloat("u_Power", settings.AOPower);
+            ssao->SetFloat("u_Time", time);
+            BindTexture(0, GetSceneDepthTexture());
+            PostProcess::DrawFullscreenQuad();
+        }
 
         glBindFramebuffer(GL_FRAMEBUFFER, m_AOBlur.Framebuffer);
         blur->Bind();

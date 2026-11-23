@@ -4,6 +4,7 @@
 #include "Core/Profiling/FrameProfiler.h"
 #include "Core/Logging/Log.h"
 #include "Renderer/Renderer.h"
+#include "Renderer/RayTracing/RayTracedEffects.h"
 #include "Renderer/Utilities/Renderer3D/Renderer3D.h"
 
 #include <glad/glad.h>
@@ -263,13 +264,37 @@ namespace Conqueror
                 BindTexture(1, depth);
                 BindTexture(2, GetSceneNormalTexture());
                 // 1) İz: ışının başlangıcı piksel başına gürültüyle kayar (bantlaşma yok); tek karede yansıma noktalıdır.
-                // İkinci ek isabet uzaklığı (birikimde yansıyan görüntünün yeniden izdüşümü için)
-                glNamedFramebufferTexture(m_SSR.Framebuffer, GL_COLOR_ATTACHMENT1, m_SSRHit.Texture, 0);
-                const GLenum traceBuffers[2] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1 };
-                glNamedFramebufferDrawBuffers(m_SSR.Framebuffer, 2, traceBuffers);
-                glBindFramebuffer(GL_FRAMEBUFFER, m_SSR.Framebuffer);
-                shader->SetInt("u_Mode", 0);
-                PostProcess::DrawFullscreenQuad();
+                // İkinci ek isabet uzaklığı (birikimde yansıyan görüntünün yeniden izdüşümü için).
+                // 316: Ray Traced açıkken ışın sahne BVH'sinde izlenir (aynı çıktı biçimi: birikim ve birleştirme aynı)
+                bool traced = false;
+                if (settings.RayTracedReflections)
+                {
+                    CQ_PROFILE_GPU("Ray Traced Reflections");
+                    RayTracedEffects::ReflectionInputs rin;
+                    rin.Scene = m_Source;
+                    rin.Depth = depth;
+                    rin.Normal = GetSceneNormalTexture();
+                    rin.ViewProj = projection * camera.View;
+                    rin.CameraPos = camera.Position;
+                    rin.MaxDistance = settings.SSRMaxDistance;
+                    rin.MaxRoughness = settings.SSRMaxRoughness;
+                    rin.Frame = fixedNoise ? 0u : m_FrameIndex;
+                    traced = RayTracedEffects::TraceReflections(rin, m_SSR.Texture, m_SSRHit.Texture);
+                    // İz compute geçişi doku birimlerini ve programı değiştirir
+                    shader->Bind();
+                    BindTexture(0, m_Source);
+                    BindTexture(1, depth);
+                    BindTexture(2, GetSceneNormalTexture());
+                }
+                if (!traced)
+                {
+                    glNamedFramebufferTexture(m_SSR.Framebuffer, GL_COLOR_ATTACHMENT1, m_SSRHit.Texture, 0);
+                    const GLenum traceBuffers[2] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1 };
+                    glNamedFramebufferDrawBuffers(m_SSR.Framebuffer, 2, traceBuffers);
+                    glBindFramebuffer(GL_FRAMEBUFFER, m_SSR.Framebuffer);
+                    shader->SetInt("u_Mode", 0);
+                    PostProcess::DrawFullscreenQuad();
+                }
                 // 2) Zamansal birikim (Unreal r.SSR.Temporal, Unity HDRP SSR birikimi gibi). Yalnız TAA'ya bırakılınca kamera
                 // yürürken TAA geçmişi yansımayı tutamıyor, televizyon ekranı / parlak yüzeyler noktalı görünüyordu
                 const int next = 1 - m_SSRHistoryIndex;

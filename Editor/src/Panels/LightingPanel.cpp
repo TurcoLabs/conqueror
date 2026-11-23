@@ -1,5 +1,6 @@
 #include "Renderer/AntiAliasing.h"
 #include "Renderer/RayTracing/RayTracedGI.h"
+#include "Renderer/RayTracing/RayTracedEffects.h"
 #include "Scene/MeshRendererMaterial.h"
 #include "Renderer/Utilities/Renderer3D/Material.h"
 #include "ObjectPicker.h"
@@ -1028,6 +1029,12 @@ namespace Conqueror::Editor
                 UI::SliderFloat("Max Distance##ssr", p.SSRMaxDistance, 1.0f, 200.0f, "%.1f m");
                 UI::SliderFloat("Thickness##ssr", p.SSRThickness, 0.01f, 4.0f, "%.2f m", "How thick objects are assumed to be (reduces holes, may add streaks)");
                 UI::SliderFloat("Max Roughness##ssr", p.SSRMaxRoughness, 0.05f, 1.0f, "%.2f", "Rougher surfaces do not get screen space reflections");
+                UI::Checkbox("Ray Traced##ssr", p.RayTracedReflections, "Trace reflection rays against the scene (the BVH Path Tracing and Ray Traced GI use) "
+                                                                         "instead of the screen: objects outside the view or hidden behind others reflect too. "
+                                                                         "Hits visible on screen keep the lit scene colour. Like Unity HDRP Ray-Traced Reflections "
+                                                                         "and Unreal's ray traced reflections; runs on the GPU with compute shaders on any graphics card.");
+                if (p.RayTracedReflections && !RayTracedEffects::Supported())
+                    ImGui::TextDisabled("Not supported here (needs compute shaders): screen traces are used.");
             }
             UI::EndSection();
         }
@@ -1104,7 +1111,7 @@ namespace Conqueror::Editor
             UI::EndSection();
         }
 
-        if (UI::BeginSection("Ambient Occlusion (SSAO)"))
+        if (UI::BeginSection("Ambient Occlusion"))
         {
             UI::Checkbox("Enabled##ao", p.AmbientOcclusion);
             if (p.AmbientOcclusion)
@@ -1112,6 +1119,15 @@ namespace Conqueror::Editor
                 UI::DragFloat("Radius", p.AORadius, 0.01f, 0.05f, 5.0f, "%.2f m");
                 UI::SliderFloat("Intensity##ao", p.AOIntensity, 0.0f, 4.0f);
                 UI::SliderFloat("Power", p.AOPower, 0.5f, 4.0f);
+                UI::Checkbox("Ray Traced##ao", p.RayTracedAO, "Trace occlusion rays against the scene instead of reading the depth buffer: no darkening "
+                                                               "lost at the screen edges, occluders outside the view count. Like Unity HDRP Ray-Traced "
+                                                               "Ambient Occlusion and Unreal's ray traced AO; compute shaders, any graphics card.");
+                if (p.RayTracedAO)
+                {
+                    UI::SliderInt("Rays per Pixel##rtao", p.RTAORays, 1, 16, "More rays give smoother occlusion and cost more");
+                    if (!RayTracedEffects::Supported())
+                        ImGui::TextDisabled("Not supported here (needs compute shaders): SSAO is used.");
+                }
             }
             UI::EndSection();
         }
