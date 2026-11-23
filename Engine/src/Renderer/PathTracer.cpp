@@ -50,7 +50,9 @@ void main()
             else radiance += throughput * ambient(d);
             break;
         }
-        // İsabet (iki seviyeli BVH: örneğin dünya matrisiyle normal, malzeme doku ortalamalı); normaller ışına bakar
+        // İsabet (iki seviyeli BVH: örneğin dünya matrisiyle normal); normaller ışına bakar. Birincil isabette malzemenin dokusu
+        // örneklenir (315: ham görüntüdeki gibi kareli zemin / duvar dokuları), sekmelerde dokunun ortalaması
+        g_TexDetail = bounce == 0;
         Hit hit = hitInfo(ti, o, d, t, bc);
         Mat m = hit.M;
         vec3 p = hit.P;
@@ -281,7 +283,7 @@ void main()
                 return false;
 
             // Sahne değişince BVH yeniden kurulur ve birikim baştan başlar
-            const RayTracingScene::Stats& stats = RayTracingScene::Update(scene, true);
+            const RayTracingScene::Stats& stats = RayTracingScene::Update(scene, true, true);
             if (stats.GeometryVersion != s.GeometryVersion)
             {
                 s.GeometryVersion = stats.GeometryVersion;
@@ -319,6 +321,8 @@ void main()
             const glm::mat4 inv = glm::inverse(vp);
             glUniformMatrix4fv(U("u_InvViewProj"), 1, GL_FALSE, &inv[0][0]);
             glUniform2i(U("u_Size"), tw, th);
+            // Piksel başına açı (doku mip seviyesi): dikey görüş açısı / yükseklik
+            glUniform1f(U("u_PixelAngle"), 2.0f / (std::max(std::abs(cam.Projection[1][1]), 1e-6f) * (float)std::max(th, 1)));
             glUniform1i(U("u_MaxBounces"), std::clamp(s_Settings.MaxBounces, 0, 32));
             glUniform1f(U("u_MaxPathIntensity"), std::max(s_Settings.MaxPathIntensity, 0.01f));
             glBindImageTexture(0, s.Accum, 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA32F);

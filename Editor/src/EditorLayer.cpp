@@ -133,6 +133,7 @@
 #include <sstream>
 #include "Renderer/AntiAliasing.h"
 #include "Renderer/GraphicsAPIs/GLEmu/GLEmuCommon.h"
+#include "Renderer/RayTracing/RayTracingScene.h"
 #include "Renderer/UpscalerSelfTest.h"
 #include "Renderer/Upscalers/VkGLInterop.h"
 #include "Renderer/Upscalers/DLSSUpscaler.h"
@@ -4824,6 +4825,17 @@ namespace Conqueror::Editor
             if (a.size() < 2) { err = "pathtracer expect_samples|reset|bounces|max|spp"; return false; }
             auto& st = PathTracer::GetSettings();
             if (a[1] == "reset") { PathTracer::Reset(); return true; }
+            if (a[1] == "expect_texture_layers" && a.size() > 2)
+            {
+                // 315: birincil isabette örneklenen renk dokusu sayısı (">N" / "<N" / "N")
+                const int n = RayTracingScene::GetTextureLayerCount();
+                Automation::Report("PATHTRACER texture layers = " + std::to_string(n));
+                const std::string& c = a[2];
+                const int v = std::atoi(c.c_str() + ((c[0] == '>' || c[0] == '<') ? 1 : 0));
+                const bool ok = c[0] == '>' ? n > v : c[0] == '<' ? n < v : n == v;
+                if (!ok) { err = "texture layers " + std::to_string(n); return false; }
+                return true;
+            }
             if (a.size() < 3) { err = "missing value"; return false; }
             if (a[1] == "bounces") { st.MaxBounces = std::stoi(a[2]); return true; }
             if (a[1] == "max") { st.MaxSamples = std::stoi(a[2]); return true; }
@@ -6768,8 +6780,9 @@ namespace Conqueror::Editor
             return true;
         });
         auto regionProbe = [](const std::shared_ptr<Framebuffer>& fb, const Args& a, std::string& err) -> bool {
-            // game_region <u0> <v0> <u1> <v1> [<kanal> <min|max|mean> <v | >v | <v>]...: Game görünümünde bölge istatistiği
+            // game_region <u0> <v0> <u1> <v1> [<kanal> <min|max|mean|detail> <v | >v | <v>]...: Game görünümünde bölge istatistiği
             // (u, v 0..1, sol alt köşe 0,0). Kanal: r g b a lum, red/green/blue = o kanalın diğerlerinden baskınlığı (r - max(g, b)).
+            // detail: yatay komşu piksel farkının ortalaması (doku / bulut ayrıntısı; düz renk geçişinde ~0)
             if (a.size() < 5 || !fb) { err = "region u0 v0 u1 v1 [channel stat cond]..."; return false; }
             const auto& spec = fb->GetSpecification();
             auto toPx = [](const std::string& v, uint32_t size) { return std::clamp((int)(std::stof(v) * (float)size), 0, (int)size - 1); };
@@ -6795,7 +6808,7 @@ namespace Conqueror::Editor
                 const std::string& ch = a[k];
                 const std::string& stat = a[k + 1];
                 const std::string& cond = a[k + 2];
-                float mn = 1e9f, mx = -1e9f, sum = 0.0f;
+                float mn = 1e9f, mx = -1e9f, sum = 0.0f, diff = 0.0f;
                 const size_t n = (size_t)w * h;
                 for (size_t i = 0; i < n; ++i)
                 {
@@ -6803,8 +6816,11 @@ namespace Conqueror::Editor
                     mn = std::min(mn, v);
                     mx = std::max(mx, v);
                     sum += v;
+                    if ((int)(i % (size_t)w) + 1 < w)
+                        diff += std::abs(value(i + 1, ch) - v);
                 }
-                const float have = stat == "min" ? mn : stat == "max" ? mx : sum / (float)n;
+                const float have = stat == "min" ? mn : stat == "max" ? mx : stat == "detail" ? diff / (float)std::max<size_t>(1, n - (size_t)h)
+                                 : sum / (float)n;
                 report += " " + ch + "." + stat + "=" + std::to_string((int)std::lround(have));
                 bool ok;
                 if (cond[0] == '>') ok = have > std::stof(cond.substr(1));
