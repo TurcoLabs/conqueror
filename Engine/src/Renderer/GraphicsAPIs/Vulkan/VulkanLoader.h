@@ -135,7 +135,13 @@
     X(vkResetFences) \
     X(vkResetQueryPoolEXT) \
     X(vkUpdateDescriptorSets) \
-    X(vkWaitForFences)
+    X(vkWaitForFences) \
+    X(vkGetBufferDeviceAddress) \
+    X(vkGetAccelerationStructureBuildSizesKHR) \
+    X(vkCreateAccelerationStructureKHR) \
+    X(vkDestroyAccelerationStructureKHR) \
+    X(vkCmdBuildAccelerationStructuresKHR) \
+    X(vkGetAccelerationStructureDeviceAddressKHR)
 
 // Göstericiler "cq_" önekli: Vulkan API adlarıyla aynı adlı sembol tanımlanırsa ELF sembol araya girmesi
 // (interposition) yükleyicinin kendi iç çağrılarını bu değişkenlere bağlar ve çöker. Motor kodu makrolarla
@@ -266,6 +272,12 @@ CQ_VK_DEVICE_FUNCTIONS(CQ_VK_DECLARE)
 #define vkResetQueryPoolEXT cq_vkResetQueryPoolEXT
 #define vkUpdateDescriptorSets cq_vkUpdateDescriptorSets
 #define vkWaitForFences cq_vkWaitForFences
+#define vkGetBufferDeviceAddress cq_vkGetBufferDeviceAddress
+#define vkGetAccelerationStructureBuildSizesKHR cq_vkGetAccelerationStructureBuildSizesKHR
+#define vkCreateAccelerationStructureKHR cq_vkCreateAccelerationStructureKHR
+#define vkDestroyAccelerationStructureKHR cq_vkDestroyAccelerationStructureKHR
+#define vkCmdBuildAccelerationStructuresKHR cq_vkCmdBuildAccelerationStructuresKHR
+#define vkGetAccelerationStructureDeviceAddressKHR cq_vkGetAccelerationStructureDeviceAddressKHR
 
 namespace Conqueror::VK
 {

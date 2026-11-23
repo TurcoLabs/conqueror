@@ -283,6 +283,7 @@ namespace Conqueror::VkGL
             return false;
         }
         CQ_CORE_INFO("[VkGL] GL 4.6 translation layer ready on {0} ({1} unimplemented entry points stubbed)", core.DeviceName(), g_StubCount);
+        InstallRayQuery();   // 316: donanım ışın sorgusu (destekleniyorsa)
         return true;
     }
 
@@ -295,6 +296,7 @@ namespace Conqueror::VkGL
         EndRendering();
         core.FlushAndWait();
         vkDeviceWaitIdle(core.Device());
+        ShutdownRayQuery();
         c.Live = false;
         VkDevice dev = core.Device();
         for (auto& [n, t] : c.Textures) DestroyTextureNow(*t);

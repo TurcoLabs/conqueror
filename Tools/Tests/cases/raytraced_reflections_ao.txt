@@ -1,10 +1,11 @@
 # template: fps
+# env: CQ_RAY_QUERY=0
 # matrix: CQ_RENDERER=opengl vulkan
 # 316: ışın izlemeli yansıma ve AO (Unity HDRP Ray-Traced Reflections / Ambient Occlusion, Unreal'ın ışın izlemeli yansıma ve AO'su).
 # Path Tracing ile Ray Traced GI'nin sahne BVH'si son işlemede de izlenir. Yansıma: piramidin önünde ayna gibi bir zemin (metal, pürüz
 # 0.02), kameranın görüş alanının üstünde (ekranda yok) kırmızı bir kutu. Ekran uzayı yansıma (SSR) ekranda olmayanı yansıtamaz: aynanın
 # o bölgesi koyu lacivert (kırmızı baskınlık -51); Ray Traced açılınca kutu aynada kırmızı görünür (+67). AO görünümü: piramidin
-# tabanı boyunca zemin, SSAO'da neredeyse beyaz (239), ışın izlemeli AO'da temas gölgesi (195); açık zemin ikisinde de beyaz (255)
+# tabanı boyunca zemin, SSAO'da neredeyse beyaz (239), ışın izlemeli AO'da temas gölgesi (195); açık zemin ikisinde de beyaz (255). CQ_RAY_QUERY=0: yazılım BVH'si (donanım ışın sorgusu: raytraced_hardware)
 wait_until 3000 layout_settled
 wait 10
 focus Viewport

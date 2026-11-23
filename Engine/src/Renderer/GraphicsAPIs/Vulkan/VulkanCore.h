@@ -118,6 +118,9 @@ namespace Conqueror::VK
         bool HasDebugUtils() const { return m_DebugUtils; }
         bool IsInFrame() const { return m_InFrame; }
         bool IsPortability() const { return m_Portability; }
+        // 316: donanım ışın sorgusu (VK_KHR_acceleration_structure + VK_KHR_ray_query, arabellek aygıt adresi). CQ_RAY_QUERY=0 kapatır
+        bool HasRayQuery() const { return m_RayQuery && vkCreateAccelerationStructureKHR && vkCmdBuildAccelerationStructuresKHR && vkGetBufferDeviceAddress; }
+        bool RayQueryEnabled() const { return m_RayQuery; }
 
 
     private:
@@ -138,6 +141,7 @@ namespace Conqueror::VK
         VkPhysicalDeviceMemoryProperties m_MemProps{};
         VkPhysicalDeviceFeatures m_EnabledFeatures{};
         bool m_DrawIndirectCount = false;
+        bool m_RayQuery = false;
         bool m_DebugUtils = false;
         VkFormat m_DepthStencilFormat = VK_FORMAT_D32_SFLOAT_S8_UINT;
         uint32_t m_ApiVersion = 0;

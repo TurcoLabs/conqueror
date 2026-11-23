@@ -28,8 +28,11 @@ namespace Conqueror::VkGL
             std::string s = src;
             // #version satırı (yorum ve boşlukları atlayarak ilk yönerge)
             std::regex versionRe(R"(#version[^\n]*)");
+            std::smatch vm;
+            // 4.60 korunur (316: GL_EXT_ray_query 4.60 ister), diğerleri 4.50
+            const bool v460 = std::regex_search(s, vm, versionRe) && vm.str().find("460") != std::string::npos;
             if (std::regex_search(s, versionRe))
-                s = std::regex_replace(s, versionRe, "#version 450", std::regex_constants::format_first_only);
+                s = std::regex_replace(s, versionRe, v460 ? "#version 460" : "#version 450", std::regex_constants::format_first_only);
             else
                 s = "#version 450\n" + s;
             s = std::regex_replace(s, std::regex(R"(\bgl_VertexID\b)"), "gl_VertexIndex");
@@ -308,6 +311,7 @@ namespace Conqueror::VkGL
         p.Inputs.clear();
         p.Images.clear();
         p.StorageBlocks.clear();
+        p.AccelStructBindings.clear();
         p.IsCompute = false;
         p.LocalSize[0] = p.LocalSize[1] = p.LocalSize[2] = 1;
         p.GlobalsBinding = -1;
@@ -373,7 +377,7 @@ namespace Conqueror::VkGL
         struct Pending
         {
             std::string Name;
-            enum Kind { Block, Globals, Sampler, Image, SamplerOnly, StorageImage, StorageBuffer } K = Block;
+            enum Kind { Block, Globals, Sampler, Image, SamplerOnly, StorageImage, StorageBuffer, AccelStruct } K = Block;
             uint32_t OrigBinding = 0;
             uint32_t Size = 0;
             uint32_t Count = 1;
@@ -510,6 +514,21 @@ namespace Conqueror::VkGL
                 }
                 stageIdToRes[stage][sb.id] = idx;
             }
+            // 316: donanım ışın sorgusunun hızlandırma yapısı (GL_EXT_ray_query; TLAS'ı VkGLRayQuery kurar)
+            for (const auto& as : activeRes.acceleration_structures)
+            {
+                int idx = findRes(as.name);
+                if (idx < 0)
+                {
+                    Pending r;
+                    r.Name = as.name;
+                    r.K = Pending::AccelStruct;
+                    r.OrigBinding = comp.get_decoration(as.id, spv::DecorationBinding);
+                    resources.push_back(r);
+                    idx = (int)resources.size() - 1;
+                }
+                stageIdToRes[stage][as.id] = idx;
+            }
             if (stage == ShaderStage::Compute)
                 for (uint32_t k = 0; k < 3; ++k)
                     p.LocalSize[k] = std::max(1u, comp.get_execution_mode_argument(spv::ExecutionModeLocalSize, k));
@@ -568,14 +587,14 @@ namespace Conqueror::VkGL
         std::vector<uint32_t> finalBinding(resources.size(), 0);
         // Ortak örnekleyiciler önce numaralanır: doku dizisi kaydı kendi örnekleyicisinin bağlamasını bilmeli
         std::map<std::string, uint32_t> sharedSamplerBinding;
-        for (int pass = 0; pass < 6; ++pass)
+        for (int pass = 0; pass < 7; ++pass)
         {
             for (size_t i = 0; i < resources.size(); ++i)
             {
                 const auto& r = resources[i];
                 const bool match = (pass == 0 && r.K == Pending::Block) || (pass == 1 && r.K == Pending::Globals) || (pass == 2 && r.K == Pending::SamplerOnly) ||
                                    (pass == 3 && (r.K == Pending::Sampler || r.K == Pending::Image)) || (pass == 4 && r.K == Pending::StorageImage) ||
-                                   (pass == 5 && r.K == Pending::StorageBuffer);
+                                   (pass == 5 && r.K == Pending::StorageBuffer) || (pass == 6 && r.K == Pending::AccelStruct);
                 if (!match)
                     continue;
                 finalBinding[i] = next;
@@ -583,7 +602,8 @@ namespace Conqueror::VkGL
                 lb.binding = next;
                 lb.descriptorType = r.K == Pending::Sampler ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : r.K == Pending::Image ? VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE :
                                     r.K == Pending::SamplerOnly ? VK_DESCRIPTOR_TYPE_SAMPLER : r.K == Pending::StorageImage ? VK_DESCRIPTOR_TYPE_STORAGE_IMAGE :
-                                    r.K == Pending::StorageBuffer ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER : VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+                                    r.K == Pending::StorageBuffer ? VK_DESCRIPTOR_TYPE_STORAGE_BUFFER :
+                                    r.K == Pending::AccelStruct ? VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR : VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
                 lb.descriptorCount = r.Count;
                 lb.stageFlags = compute ? VK_SHADER_STAGE_COMPUTE_BIT : (VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
                 layoutBindings.push_back(lb);
@@ -612,6 +632,8 @@ namespace Conqueror::VkGL
                     sb.Writable = r.Writable;
                     p.StorageBlocks.push_back(sb);
                 }
+                else if (r.K == Pending::AccelStruct)
+                    p.AccelStructBindings.push_back(next);
                 else if (r.K == Pending::Block)
                     p.Blocks.push_back({ r.Name, next, r.OrigBinding, r.Size });
                 else if (r.K == Pending::Globals)
