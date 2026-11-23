@@ -46,6 +46,8 @@ namespace Conqueror
     };
 
     static DebugDrawData* s_Data = nullptr;
+    static bool s_Deferred = false;
+    static glm::mat4 s_DeferredViewProj(1.0f);
 
     void DebugDraw::Init()
     {
@@ -70,6 +72,7 @@ namespace Conqueror
             layout(location = 1) in vec4 a_Color;
             
             uniform mat4 u_ViewProjection;
+            uniform float u_DepthBias;   // ertelenen çizim: sahne derinliği iç çözünürlükten büyütülmüş kopya, yüzeydeki çizgi öne çekilir
             
             out vec4 v_Color;
             out vec3 v_Position;
@@ -79,6 +82,7 @@ namespace Conqueror
                 v_Color = a_Color;
                 v_Position = a_Position;
                 gl_Position = u_ViewProjection * vec4(a_Position, 1.0);
+                gl_Position.z -= u_DepthBias * gl_Position.w;
             }
         )";
         
@@ -492,6 +496,41 @@ namespace Conqueror
         DebugMetrics::RecordSolidDraw(DebugSolidDraw::GetTriangleCount(), DebugSolidDraw::GetVertexCount());
         DebugMetrics::RecordTextDraw(DebugTextDraw::GetEntryCount());
         DebugMetrics::RecordTimedEntry(DebugTimer::GetActiveCount());
+    }
+
+    void DebugDraw::Defer(const glm::mat4& viewProjection)
+    {
+        s_Deferred = true;
+        s_DeferredViewProj = viewProjection;
+    }
+
+    bool DebugDraw::HasDeferred() { return s_Deferred; }
+
+    void DebugDraw::DropDeferred()
+    {
+        if (!s_Deferred)
+            return;
+        s_Deferred = false;
+        Clear();
+    }
+
+    void DebugDraw::RenderDeferred()
+    {
+        if (!s_Deferred)
+            return;
+        s_Deferred = false;
+        if (s_Data && s_Data->LineShader)
+        {
+            s_Data->LineShader->Bind();
+            s_Data->LineShader->SetFloat("u_DepthBias", 2.0e-4f);
+        }
+        Render(s_DeferredViewProj);
+        if (s_Data && s_Data->LineShader)
+        {
+            s_Data->LineShader->Bind();
+            s_Data->LineShader->SetFloat("u_DepthBias", 0.0f);
+        }
+        Clear();
     }
 
     void DebugDraw::Clear()

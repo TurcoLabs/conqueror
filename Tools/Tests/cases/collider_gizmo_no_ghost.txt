@@ -1,0 +1,22 @@
+# template: fps
+# matrix: UP=0 3
+# 331 (kullanıcının 593-595'i, bütün AA'larda): seçili nesnenin çarpıştırıcı çerçevesi (yeşil tel çerçeve, Colliders görünüm seçeneği)
+# sahneye kenar yumuşatmadan önce çiziliyordu; seçim kalkınca ya da nesne silinince TAA'nın (tek kare yöntemlerde Temporal Stability'nin)
+# geçmişinde 20 kare kadar soluk yeşil hayalet olarak kalıyordu (silmede duvarın üstünde ince çerçeve, 592). Editör çizgileri artık zamansal
+# yöntemde son görüntünün üstüne çizilir (Unity gizmo'ları / Unreal editör ilkelleri gibi). Küre çarpıştırıcılı nesne seçilip seçim
+# kaldırılır: 2 kare sonra küre bölgesinde yeşil baskınlığı eski 25 (1464 piksel 10'un üstünde), şimdi 0; seçiliyken halkalar çizilir (170)
+wait_until 3000 layout_settled
+wait 10
+focus Viewport
+cvar r.AntiAliasing 3
+cvar r.Upscaler {matrix}
+create_primitive sphere Probe 27.0 2.0 0 static
+camera 7 35 -90 30.0 4.0 0
+wait 60
+select Probe
+wait 90
+viewport_region 0.40 0.38 0.60 0.66 green max >100
+select --none
+wait 2
+viewport_region 0.40 0.38 0.60 0.66 green max <8
+quit

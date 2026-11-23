@@ -2758,6 +2758,7 @@ namespace Conqueror
         Renderer2D::BeginScene(camera, true);
         TextRenderer::BeginScene(camera, true);
 
+        DebugDraw::DropDeferred();   // geçen kare ertelenip Viewport'ta çizilmeyen çizimler birikmesin
         DebugDraw::SetCameraPosition(camera.GetPosition());
         DebugDraw::Update(ts);
 
@@ -2843,7 +2844,14 @@ namespace Conqueror
             NavAgents::DrawDebug(m_NavMesh, camera.GetViewProjection());
         {
             CQ_PROFILE_SAMPLE("Render.DebugDraw", Rendering);
-            DebugDraw::Render(camera.GetViewProjection());
+            // 291 / 331: zamansal kenar yumuşatmalı 3D görünümde çarpıştırıcı / ışık / gezinme gizmo'ları ve hata ayıklama çizgileri son
+            // görüntünün üstüne (Viewport, ızgara ile aynı yer): TAA'ya girince seçim kalkınca / nesne silinince yeşil hayalet bırakıyordu
+            const uint32_t dvW = viewportBounds ? (uint32_t)std::max(1.0f, viewportBounds[1].x - viewportBounds[0].x) : std::max(m_ViewportWidth, 1u);
+            const uint32_t dvH = viewportBounds ? (uint32_t)std::max(1.0f, viewportBounds[1].y - viewportBounds[0].y) : std::max(m_ViewportHeight, 1u);
+            if (!camera.Is2D() && !RenderCamera::FromEditorCamera(camera, dvW, dvH).Orthographic && PostProcessStack::WantsMotionData())
+                DebugDraw::Defer(camera.GetViewProjection());
+            else
+                DebugDraw::Render(camera.GetViewProjection());
         }
         {
             CQ_PROFILE_SAMPLE("Render.2DText", Rendering);
@@ -2851,7 +2859,8 @@ namespace Conqueror
             TextRenderer::EndScene();
         }
         DebugMetrics::SyncToRendererStats(Renderer::GetStats());
-        DebugDraw::Clear();
+        if (!DebugDraw::HasDeferred())
+            DebugDraw::Clear();
     }
 
     // ===================================================================== 3D render

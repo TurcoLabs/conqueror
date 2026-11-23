@@ -81,6 +81,15 @@ namespace Conqueror
         // ── Lifecycle ──
         static void Update(float deltaTime); // Automatically removes expired debug items
         static void Render(const glm::mat4& viewProjection);
+        // 291 / 331: editörün zamansal kenar yumuşatmalı 3D görünümü: bu karenin çizimleri sahneye çizilmez, kenar yumuşatma ve ton
+        // eşlemeden sonra son görüntünün üstüne çizilir (Unity gizmo'ları / Unreal editör ilkelleri gibi). Sahneye çizilince TAA geçmişine
+        // giriyor, seçim kalkınca ya da nesne silinince seçili nesnenin çarpıştırıcı çerçevesi soluk yeşil bir hayalet olarak kalıyordu.
+        // Defer: çizimleri ve matrisi saklar (Clear bu karede çizimleri silmez); RenderDeferred: bağlı hedefe (derinliği sahne derinliğinin
+        // kopyası) çizer ve temizler
+        static void Defer(const glm::mat4& viewProjection);
+        static bool HasDeferred();
+        static void RenderDeferred();
+        static void DropDeferred();   // ertelenip çizilmeyen (görünüm bu karede son görüntüyü çizmedi) çizimler atılır
         static void Clear(); // Clears all current items instantly
         static void ClearTimed();
         static void ClearAll();

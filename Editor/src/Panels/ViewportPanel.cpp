@@ -9,6 +9,8 @@
 #include "Renderer/PostProcess.h"
 #include "Renderer/PathTracer.h"
 #include "Renderer/EditorGrid.h"
+#include "Core/Debug/DebugDraw.h"
+#include <glad/glad.h>
 #include "Renderer/Utilities/Renderer3D/Renderer3D.h"
 #include "Core/Audio/AudioEngine.h"
 #include "Core/Time/TimeManager.h"
@@ -377,6 +379,23 @@ namespace Conqueror::Editor
             const auto& spec = m_Framebuffer->GetSpecification();
             EditorGrid::RenderDeferred(m_Framebuffer->GetColorAttachmentRendererID(0), std::min(width, spec.Width), std::min(height, spec.Height),
                                        m_PostStack.GetSceneDepthTexture(), m_PostStack.GetObjectVelocityTexture());
+        }
+
+        // 4a. Ertelenen editör çizgileri (291 / 331): çarpıştırıcı / ışık / gezinme gizmo'ları ve hata ayıklama çizgileri kenar yumuşatma ve
+        // ton eşlemeden sonra (Unity gizmo'ları gibi); sahne derinliği bu tampona kopyalanır, nesnelerin arkasındaki çizgi gizlenir
+        if (m_Context && DebugDraw::HasDeferred())
+        {
+            const auto& spec = m_Framebuffer->GetSpecification();
+            const uint32_t w = std::min(width, spec.Width), h = std::min(height, spec.Height);
+            m_PostStack.CopySceneDepthTo(m_Framebuffer->GetRendererID(), w, h);
+            m_Framebuffer->Bind();
+            RenderCommand::SetViewport(0, 0, w, h);
+            glEnable(GL_DEPTH_TEST);
+            glDepthFunc(GL_LEQUAL);
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            DebugDraw::RenderDeferred();
+            glDepthFunc(GL_LESS);
         }
 
         // 4b. Screen UI in Scene (274 / 294): kenar yumuşatma ve ton eşlemeden sonra (Game görünümündeki gibi); sahne derinliği bu tampona
