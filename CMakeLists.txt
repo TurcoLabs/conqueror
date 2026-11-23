@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(ConquerorEngine VERSION 0.577.3 LANGUAGES C CXX)
+project(ConquerorEngine VERSION 0.579.3 LANGUAGES C CXX)
 # Sürüm iki yerde: burada ve Engine/src/Core/Base/Version.h'de (editör --version, Hub, sürüm paketleri oradan okur). 0.575.3'te yalnız
 # burası güncellenmiş, editör ve paketler kendini 0.573.3 sanıyordu: farklıysa yapılandırma durur
 file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/Engine/src/Core/Base/Version.h" CQ_VERSION_LINE REGEX "^#define CQ_ENGINE_VERSION \"")
