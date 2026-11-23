@@ -1,0 +1,29 @@
+# template: fps
+# 328: TAA + NIS'te oyun başlarken ve Stop'tan sonra piramidin küplerinin arası hafif yanıp sönüyordu. Başlangıçta oyuncu yerine
+# otururken ve Stop'ta kamera piksel altı oynuyor, zamansal yöntemler bunu hareket sayıp dururken birikimi ve titreme tutucuyu
+# kapatıyordu (327'deki gibi; ekranda 0.05 pikselden az kayan kamera artık duruyor sayılır), NIS de kenarları keskinleştirip oynatıyordu
+# (330). Piramit bölgesinde 8 seviyeden fazla değişen piksel (main -> bu dal): ilk başlangıcın 30-70. kareleri 1.25 % -> 0.21 %, Stop'tan
+# sonra 0.69 % -> 0 %, ikinci başlangıç 0.68 % -> 0 %; ilk 25 karede 16 seviyeden fazla değişen 1.16 % -> 0.03 % (kalan 8-16 seviyelik
+# değişim TAAU'nun boş geçmişten ilk titreşim döngüsünde oturması)
+timeout 400
+wait 60
+focus Game
+cvar r.AntiAliasing 3
+cvar r.Upscaler 3
+wait 30
+play
+wait 2
+game_flicker 25 0.395 0.415 0.495 0.627 max% 0.3
+wait 30
+game_flicker 40 0.395 0.415 0.495 0.627 max8% 0.6
+wait 44
+stop
+wait 2
+game_flicker 25 0.395 0.415 0.495 0.627 max8% 0.2
+wait 30
+play
+wait 2
+game_flicker 25 0.395 0.415 0.495 0.627 max8% 0.2
+wait 30
+stop
+quit
