@@ -63,9 +63,10 @@ uniform sampler2D u_CoverageHistory;    // önceki karenin birikmiş örtme pay�
 uniform int u_CoverageHistoryValid = 0;
 uniform mat4 u_PrevViewProjection;      // önceki karenin titreşimsiz görüş-izdüşümü
 uniform float u_CoverageFeedback = 0.9;
+uniform int u_CoverageStill = 0;        // 1: kamera duruyor (geçmiş yalnız yukarıdan kırpılır, birikim uzun)
 uniform sampler2D u_ObjectVelocity;     // nesne hareket vektörleri (sahnenin iç çözünürlüğünde; w: 0 durağan, 1 hareket eden nesne,
 uniform int u_HasObjectVelocity = 0;    // 2 nesnenin önceki karedeki yeri, 3 yeni beliren sprite)
-layout(location = 1) out float CoverageOut;   // composite: bu karenin birikmiş örtme payı (sahneye çizerken bu ek maskelenir)
+layout(location = 1) out vec2 CoverageOut;   // composite: bu karenin birikmiş örtme payı (sahneye çizerken bu ek maskelenir)
 
 // Ben Golus "pristine grid" uyarlaması: AA'lı, moiré'siz, SABİT piksel kalınlığında çizgiler.
 // (Hücre oranlı kalınlık üst LOD seviyelerinde çizgileri metrelerce kalınlaştırırdı.)
@@ -127,7 +128,8 @@ float SceneCoverageAt(vec2 fragCoord, float pull)
 // parıltı olurdu. Pay, ızgara düzlemindeki noktanın önceki karedeki yerinden (düzlem bilindiği için kesin) geri izdüşülüp
 // biriktirilir; artı biçimli komşuluğun en küçük / en büyük değerine kırpılır (hareket eden nesnenin kenarında iz kalmaz,
 // tamamen açık / kapalı yerde pay tam 1 / 0'dır). Çizgilerin kendisi her karede yeniden hesaplanır, birikmez
-float TemporalCoverage(vec3 world, float pull)
+// Dönen: x pay, y geçmişteki örnek sayısı (kamera dururken pikselin kümülatif ortalaması: n. örneğin payı 1 / n)
+vec2 TemporalCoverage(vec3 world, float pull)
 {
     vec2 px = gl_FragCoord.xy;
     float c = SceneCoverageAt(px, pull);
@@ -140,7 +142,7 @@ float TemporalCoverage(vec3 world, float pull)
         hi = max(hi, v);
     }
     if (u_CoverageHistoryValid == 0)
-        return c;
+        return vec2(c, 1.0);
     // Nesne bu pikselde ya da 3x3 komşusunda hareket etti, belirdi ya da buradan ayrıldı (silindi / gizlendi / sürüklendi): geçmişteki
     // pay o nesneye aittir, bu karenin payı kullanılır (291 / 292). Komşuluk kırpması yalnız hareket eden kenarı düzeltiyordu; duvarın
     // dibi gibi durağan bir örtme kenarında (artı komşulukta hem 0 hem 1) silinen ya da duvarın üstünden sürüklenen küpün bıraktığı
@@ -151,16 +153,28 @@ float TemporalCoverage(vec3 world, float pull)
         ivec2 vc = clamp(ivec2(px / u_OutputSize * vec2(vsz)), ivec2(0), vsz - 1);
         for (int k = 0; k < 9; ++k)
             if (texelFetch(u_ObjectVelocity, clamp(vc + ivec2(k % 3 - 1, k / 3 - 1), ivec2(0), vsz - 1), 0).w > 0.5)
-                return c;
+                return vec2(c, 1.0);
     }
     vec4 prev = u_PrevViewProjection * vec4(world, 1.0);
     if (prev.w <= 0.0)
-        return c;
+        return vec2(c, 1.0);
     vec2 puv = prev.xy / prev.w * 0.5 + 0.5;
     if (any(lessThan(puv, vec2(0.0))) || any(greaterThan(puv, vec2(1.0))))
-        return c;
-    float h = clamp(texture(u_CoverageHistory, puv).r, lo, hi);
-    return mix(c, h, u_CoverageFeedback);
+        return vec2(c, 1.0);
+    vec2 hist = texture(u_CoverageHistory, puv).rg;
+    float h = hist.x;
+    // Kamera dururken geçmiş yalnız yukarıdan kırpılır (yeni beliren nesnenin arkasında ızgara hemen gizlenir). İnce nesne (hedef
+    // tahtasının direği) iç çözünürlükte pikselden incedir: titreşimin bazı karelerinde hiçbir derinlik örneğine düşmez, artı komşuluk
+    // tamamen "açık" görünür ve aşağıdan kırpma birikmiş payı 1'e atıyordu; direğin arkasından geçen eksen çizgisi kare kare görünüp
+    // kayboluyordu (TAA + NIS). Hareket eden / silinen / gizlenen nesne yukarıda hız tamponuyla zaten bu karenin payını alır
+    h = u_CoverageStill == 1 ? min(h, hi) : clamp(h, lo, hi);
+    // Dururken sıfırlanan (açılan / silinen nesnenin yeri) piksel önce kendi örneklerinin eşit ağırlıklı ortalamasıyla oturur, sonra %93
+    // geçmişle sürer. Daha uzun birikim (%98'e kadar) silinen küpün yerinde duvarın dibindeki çizgiyi bir saniye noktalı bırakıyordu;
+    // direğin titremesini gideren yukarıdaki tek yönlü kırpma. Hareket ederken sabit ağırlık (u_CoverageFeedback)
+    float n = max(hist.y, 1.0);
+    if (u_CoverageStill == 1)
+        return vec2(mix(c, h, min(n / (n + 1.0), 0.93)), min(n + 1.0, 64.0));
+    return vec2(mix(c, h, u_CoverageFeedback), min(n + 1.0, 1.0 / (1.0 - u_CoverageFeedback)));
 }
 
 // Tek bir eksen çizgisi (piksel genişliği sabit). Piksel alanı kadar örtme (kutu süzgeci): çizgiye ekran uzayı uzaklık (türev vektörünün
@@ -279,8 +293,9 @@ void main()
     if (u_Composite == 1)
     {
         // Örtme payı düzlemin görünen her pikselinde yazılır (çizgi o piksele kayınca geçmişi hazır olsun)
-        float cover = TemporalCoverage(world, pull);
-        CoverageOut = cover;
+        vec2 coverage = TemporalCoverage(world, pull);
+        float cover = coverage.x;
+        CoverageOut = coverage;
         vec4 below = texelFetch(u_Below, ivec2(gl_FragCoord.xy), 0);
         float a = alpha * cover;
         FragColor = a < 0.002 ? below : vec4(LinearToSRGB(mix(SRGBToLinear(below.rgb), SRGBToLinear(color), a)), below.a);

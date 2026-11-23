@@ -1,0 +1,19 @@
+# template: fps
+# matrix: UP=0 3
+# Kamera dururken ince nesnelerin (hedef tahtalarının direkleri ve ayakları) çevresi titremez. Titreyen, editör ızgarasıydı: direğin
+# arkasından geçen mavi eksen çizgisi ve ayakların yanındaki zemin çizgileri. Izgara son görüntünün üstüne çizilir, sahnenin önünde kalan
+# payını titreşimli derinlikten biriktirir ve geçmişi bu karenin artı komşuluğuna kırpardı; direk iç çözünürlükte pikselden ince olduğu
+# için titreşimin bazı karelerinde hiçbir derinlik örneğine düşmüyor, komşuluk tamamen "açık" görünüp birikmiş pay 1'e atılıyordu: çizgi
+# direğin üstünde kare kare görünüp kayboluyordu. Kamera dururken geçmiş artık yalnız yukarıdan kırpılır. 40 karede 16 seviyeden fazla
+# değişen piksel: TAA + NIS 0.029 % -> 0.000 %, yerel TAA 0.011 % -> 0.000 %
+wait_until 3000 layout_settled
+wait 10
+cvar r.TemporalStability 1
+cvar r.AntiAliasing 3
+cvar r.Upscaler {matrix}
+camera 14 18 180 0 4 -25
+focus Viewport
+wait 200
+viewport_flicker 40 max% 0.005
+wait 46
+quit

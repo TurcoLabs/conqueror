@@ -222,7 +222,8 @@ namespace Conqueror
             const GLenum buffers[2] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1 };
             for (int i = 0; i < 2; ++i)
             {
-                glTextureStorage2D(h.Texture[i], 1, GL_R16F, (GLsizei)width, (GLsizei)height);
+                // r: birikmiş örtme payı, g: pikselin geçmişindeki örnek sayısı (kamera dururken kümülatif ortalama)
+                glTextureStorage2D(h.Texture[i], 1, GL_RG16F, (GLsizei)width, (GLsizei)height);
                 glTextureParameteri(h.Texture[i], GL_TEXTURE_MIN_FILTER, GL_LINEAR);
                 glTextureParameteri(h.Texture[i], GL_TEXTURE_MAG_FILTER, GL_LINEAR);
                 glTextureParameteri(h.Texture[i], GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -238,8 +239,8 @@ namespace Conqueror
         // oluşturulabiliyor, eski bağ silinen dokuda kalıyor ve ızgara görünmeyen bir dokuya çiziliyordu
         glNamedFramebufferTexture(h.Framebuffer[h.Write], GL_COLOR_ATTACHMENT0, colorTexture, 0);
         const int write = h.Write, read = 1 - h.Write;
-        const float one = 1.0f;
-        glClearTexImage(h.Texture[write], 0, GL_RED, GL_FLOAT, &one);
+        const float cleared[2] = { 1.0f, 0.0f };
+        glClearTexImage(h.Texture[write], 0, GL_RG, GL_FLOAT, cleared);
 
         const RenderCamera& camera = s_Deferred.Camera;
         const glm::mat4 viewProj = camera.Projection * camera.View;
@@ -276,7 +277,10 @@ namespace Conqueror
         s_GridShader->SetFloat2("u_OutputSize", glm::vec2((float)width, (float)height));
         s_GridShader->SetMat4("u_PrevViewProjection", h.PrevViewProj);
         s_GridShader->SetInt("u_CoverageHistoryValid", h.Valid ? 1 : 0);
-        s_GridShader->SetFloat("u_CoverageFeedback", still ? 0.93f : 0.85f);
+        // Dururken geçmiş yalnız yukarıdan kırpılır, sıfırlanan piksel kendi örneklerinin ortalamasıyla oturur (Grid.cqsh; örnek sayısı
+        // dokunun g kanalında)
+        s_GridShader->SetInt("u_CoverageStill", still ? 1 : 0);
+        s_GridShader->SetFloat("u_CoverageFeedback", 0.85f);
         glBindTextureUnit(0, sceneDepth);
         glBindTextureUnit(1, s_BelowTexture);
         glBindTextureUnit(2, h.Texture[read]);
