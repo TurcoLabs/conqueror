@@ -15,6 +15,7 @@ namespace Conqueror
         const char* kPathTraceMain = R"(
 layout(rgba32f, binding = 0) uniform image2D u_Accum;
 layout(rgba16f, binding = 1) uniform writeonly image2D u_Target;
+layout(rgba32f, binding = 2) uniform image2D u_AlbedoAccum;   // birincil isabetin albedosu (gürültü giderici aydınlatmayı ondan ayırır)
 uniform mat4 u_InvViewProj;
 uniform ivec2 u_Size;
 uniform uint u_Frame;
@@ -40,6 +41,7 @@ void main()
     vec3 d = normalize(b.xyz / b.w - o);
     // primary: kameradan görülen (gökyüzü, ışıma, ilk yüzeyin doğrudan ışığı); radiance: dolaylı (Max Path Intensity ile sınırlanır)
     vec3 primary = vec3(0.0), radiance = vec3(0.0), throughput = vec3(1.0);
+    vec3 albedo0 = vec3(1.0);   // gökyüzü: 1 (ayırma etkisiz)
     for (int bounce = 0; bounce <= u_MaxBounces; ++bounce)
     {
         float t; vec2 bc;
@@ -61,6 +63,7 @@ void main()
         vec3 v = -d;
         vec3 po = p + ng * 1e-3;
         vec3 here = throughput * (m.Emission.rgb + directLight(p, po, n, v, m));
+        if (bounce == 0) albedo0 = max(m.Albedo.rgb, vec3(0.03));
         if (bounce == 0) primary += here;
         else radiance += here;
         if (bounce == u_MaxBounces) break;
@@ -109,6 +112,8 @@ void main()
     vec4 acc = (u_Frame == 0u) ? vec4(0.0) : imageLoad(u_Accum, px);
     acc += vec4(primary + radiance, 1.0);
     imageStore(u_Accum, px, acc);
+    vec4 albAcc = (u_Frame == 0u) ? vec4(0.0) : imageLoad(u_AlbedoAccum, px);
+    imageStore(u_AlbedoAccum, px, albAcc + vec4(albedo0, 1.0));
     imageStore(u_Target, px, vec4(acc.rgb / acc.w, 1.0));
 }
 )";
@@ -120,6 +125,7 @@ void main()
         const char* kDenoiseMain = R"(
 layout(rgba16f, binding = 0) uniform readonly image2D u_DnIn;
 layout(rgba16f, binding = 1) uniform writeonly image2D u_DnOut;
+layout(rgba32f, binding = 2) uniform readonly image2D u_DnAlbedo;   // birincil isabetin birikmiş albedosu (a: örnek sayısı)
 uniform sampler2D u_DnDepth;
 uniform ivec2 u_DnSize;
 uniform int u_DnStep;
@@ -134,11 +140,21 @@ float DnLinear(ivec2 p)
     return 2.0 * u_DnNear * u_DnFar / max(u_DnFar + u_DnNear - z * (u_DnFar - u_DnNear), 1e-6);
 }
 float DnLum(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+// 315: albedo ayırma (SVGF, OIDN'nin albedo kılavuzu, Unreal'ın gürültü gidericileri gibi): yalnız aydınlatma (renk / albedo) süzülür,
+// son geçişte pikselin kendi albedosuyla çarpılır. Eskiden renk dokusuyla birlikte süzülüyordu: az örnekte (hareket ederken) zemin
+// ve duvar karoları silinip görüntü lekeli görünüyordu
+vec3 DnAlb(ivec2 q)
+{
+    vec4 a = imageLoad(u_DnAlbedo, clamp(q, ivec2(0), u_DnSize - 1));
+    return a.w > 0.5 ? max(a.rgb / a.w, vec3(0.03)) : vec3(1.0);
+}
 void main()
 {
     ivec2 p = ivec2(gl_GlobalInvocationID.xy);
     if (p.x >= u_DnSize.x || p.y >= u_DnSize.y) return;
     vec4 cp = imageLoad(u_DnIn, p);
+    if (u_DnMode == 0)
+        cp.rgb /= DnAlb(p);
     float zp = DnLinear(p);
     float gx = 0.5 * (DnLinear(p + ivec2(1, 0)) - DnLinear(p - ivec2(1, 0)));
     float gy = 0.5 * (DnLinear(p + ivec2(0, 1)) - DnLinear(p - ivec2(0, 1)));
@@ -154,7 +170,7 @@ void main()
                 ivec2 q = clamp(p + ivec2(x, y), ivec2(0), u_DnSize - 1);
                 float expected = zp + gx * float(x) + gy * float(y);
                 float w = abs(DnLinear(q) - expected) < 0.02 * zp + 1e-3 ? 1.0 : 0.0;
-                float l = DnLum(imageLoad(u_DnIn, q).rgb);
+                float l = DnLum(imageLoad(u_DnIn, q).rgb / DnAlb(q));
                 m1 += l * w; m2 += l * l * w; ws += w;
             }
         m1 /= max(ws, 1.0); m2 /= max(ws, 1.0);
@@ -179,7 +195,10 @@ void main()
             wsum += w;
         }
     wsum = max(wsum, 1e-6);
-    imageStore(u_DnOut, p, vec4(sum / wsum, u_DnLast == 1 ? 1.0 : vsum / (wsum * wsum)));
+    vec3 outc = sum / wsum;
+    if (u_DnLast == 1)
+        outc *= DnAlb(p);
+    imageStore(u_DnOut, p, vec4(outc, u_DnLast == 1 ? 1.0 : vsum / (wsum * wsum)));
 }
 )";
 
@@ -188,6 +207,7 @@ void main()
             GLuint Program = 0;
             bool ProgramTried = false;
             GLuint Accum = 0;
+            GLuint AlbedoAccum = 0;     // 315: birincil isabetin albedosu (gürültü gidericinin albedo ayırması)
             GLuint DenoiseProgram = 0;
             bool DenoiseTried = false;
             GLuint DenoiseTemp[2] = { 0, 0 };
@@ -243,6 +263,7 @@ void main()
             glUniform1f(U("u_DnFar"), cam.FarClip);
             glUniform1i(U("u_DnDepth"), 0);
             glBindTextureUnit(0, depth);
+            glBindImageTexture(2, s.AlbedoAccum, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA32F);
             const GLuint groupsX = ((uint32_t)tw + 7) / 8, groupsY = ((uint32_t)th + 7) / 8;
             // Varyans ön geçişi (hedef -> geçici 0), sonra süzgeç geçişleri geçici tamponlar arasında (varyans da süzülür, SVGF gibi)
             uint32_t src = target;
@@ -262,6 +283,7 @@ void main()
             glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT | GL_FRAMEBUFFER_BARRIER_BIT);
             glBindImageTexture(0, 0, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA16F);
             glBindImageTexture(1, 0, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA16F);
+            glBindImageTexture(2, 0, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA32F);
             glBindTextureUnit(0, 0);
         }
 
@@ -292,8 +314,11 @@ void main()
             if (!s.Accum || s.AccumW != tw || s.AccumH != th)
             {
                 if (s.Accum) glDeleteTextures(1, &s.Accum);
+                if (s.AlbedoAccum) glDeleteTextures(1, &s.AlbedoAccum);
                 glCreateTextures(GL_TEXTURE_2D, 1, &s.Accum);
                 glTextureStorage2D(s.Accum, 1, GL_RGBA32F, tw, th);
+                glCreateTextures(GL_TEXTURE_2D, 1, &s.AlbedoAccum);
+                glTextureStorage2D(s.AlbedoAccum, 1, GL_RGBA32F, tw, th);
                 s.AccumW = tw;
                 s.AccumH = th;
                 s.Frame = 0;
@@ -327,6 +352,7 @@ void main()
             glUniform1f(U("u_MaxPathIntensity"), std::max(s_Settings.MaxPathIntensity, 0.01f));
             glBindImageTexture(0, s.Accum, 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA32F);
             glBindImageTexture(1, target, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA16F);
+            glBindImageTexture(2, s.AlbedoAccum, 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA32F);
             const GLuint groupsX = ((uint32_t)tw + 7) / 8, groupsY = ((uint32_t)th + 7) / 8;
             const int maxSamples = std::max(1, s_Settings.MaxSamples);
             if ((int)s.Frame >= maxSamples)
@@ -350,6 +376,7 @@ void main()
             glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT | GL_FRAMEBUFFER_BARRIER_BIT | GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
             glBindImageTexture(0, 0, 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA32F);
             glBindImageTexture(1, 0, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA16F);
+            glBindImageTexture(2, 0, 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA32F);
             Denoise(target, depth, tw, th, cam);
             glUseProgram(0);
             return true;

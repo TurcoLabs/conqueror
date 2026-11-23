@@ -1,0 +1,18 @@
+# template: fps
+# 315: Path Tracing görünümü hareket ederken (az örnek: kullanıcının 576'sı 21 örnekte) lekeli ve bulanıktı. Az örnekli sonucun gürültü
+# gidericisi (à-trous) renk dokusuyla birlikte süzüyordu: zemin ve duvar karoları siliniyordu. Artık albedo ayrılır (SVGF / OIDN'nin
+# albedo kılavuzu / Unreal'ın gürültü gidericileri gibi): yalnız aydınlatma süzülür, pikselin albedosuyla geri çarpılır. Zemin bölgesinin
+# ayrıntısı 21 örnekte 0.72 -> 1.08 (ekran görüntüsünde 1.37 -> 1.72, 500 örnek 1.78; 500 örneğe göre ortalama fark 1.60 -> 1.04)
+wait_until 3000 layout_settled
+wait 10
+focus Viewport
+camera 16 10 0 -1.5 1.5 2
+shading pathtracing
+pathtracer spp 1
+pathtracer max 4000
+wait 30
+pathtracer reset
+wait 21
+viewport_region 0.0 0.0 1.0 0.49 lum detail >0.9
+shading shaded
+quit
