@@ -4,7 +4,7 @@
 # titreme tutması ve geniş kutusu (güvenilir yol) orada geçmişi kırpmadan tutuyordu. Artık yerel TAA'daki gibi: 3x3'teki en yakın ve en
 # uzak yüzeyin hareketi ayrışırsa tutma kapanır (iki yanı aynı uzaklıktaki ön yüzlerle çevrili ince aralık hariç), geçmişin geldiği yerin
 # önceki kare derinliği tutmazsa geçmişe güvenilmez. Aynı zıplama sabit adımla iki kez kaydedilir: SSAA (referans) ve TAA + NIS; havadaki
-# karelerde ufkun altındaki düz bölgelerde referanstan belirgin sapan piksel, kare başına: eski TAAU 18.3, şimdi 0
+# karelerde ufkun altındaki düz bölgelerde referanstan belirgin sapan piksel, kare başına (rampa tarafı): eski TAAU 33.6, şimdi 0
 timeout 400
 wait 60
 focus Game
@@ -38,7 +38,9 @@ wait 10
 key Space
 wait 70
 record_stop
-image_seq_trail {work}/jump334_ref {work}/jump334_nis 24 46 330 272 760 420 max 5
+# Kapı aralığındaki hedef tahtaları kendiliğinden sallanıp iki kayıtta farklı durabildiği için ölçülmez: piramidin solu ve rampa tarafı
+image_seq_trail {work}/jump334_ref {work}/jump334_nis 24 46 330 272 480 420 max 5
+image_seq_trail {work}/jump334_ref {work}/jump334_nis 24 46 590 272 760 420 max 5
 stop
 wait 5
 quit

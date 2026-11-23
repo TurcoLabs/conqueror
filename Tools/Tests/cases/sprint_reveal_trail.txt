@@ -1,0 +1,53 @@
+# template: fps
+# 335: TAA + NIS'te hızlı yana koşarken (Shift + D) piramidin arkasında açılan duvarda iz kalıyordu (kullanıcının 634'ü): eski kenarından
+# mavi dikey çizgiler ve piramidin eski silüeti açık renkli bir alan olarak. Açılan piksel sonraki karelerde 3x3'ünde hâlâ piramidin kenarı
+# olduğu için geçmişini piramidin hareketiyle, yani piramidin eski yerinden (mavi) alıyordu; titreme tutması da bu maviyi kaçırılmış ince
+# ayrıntı sanıp koruyordu. Artık ön yüzün kenarındaki arka plan pikseli, iki hareket en az 1 iç piksel ayrışınca geçmişini kendi
+# yüzeyinin hareketiyle alır (açılma testi gibi) ve tonu komşuluğa yabancı geçmiş tutulmaz. Aynı koşu sabit adımla SSAA (referans) ve
+# TAA + NIS ile kaydedilir; piramidin sağında açılan duvarda referanstan belirgin sapan piksel, kare başına: 23.2 (hareket
+# düzeltmelerinden önce), 12.6 (334 / 329 düzeltmesinden sonra), şimdi 1.8
+timeout 400
+wait 60
+focus Game
+play
+wait 30
+cvar r.TemporalStability 1
+cvar r.AntiAliasing 7
+cvar r.Upscaler 0
+wait 120
+entity move Player -6 0.9 8
+wait 4
+script set Player@FirstPersonShooter yaw float 0
+script set Player@FirstPersonShooter pitch float 0
+wait 40
+record_start png fixed fps=60 out={work}/sprint335_ref
+wait 6
+key_down LeftShift
+key_down D
+wait 50
+key_up D
+key_up LeftShift
+wait 20
+record_stop
+wait 30
+cvar r.AntiAliasing 3
+cvar r.Upscaler 3
+wait 120
+entity move Player -6 0.9 8
+wait 4
+script set Player@FirstPersonShooter yaw float 0
+script set Player@FirstPersonShooter pitch float 0
+wait 40
+record_start png fixed fps=60 out={work}/sprint335_nis
+wait 6
+key_down LeftShift
+key_down D
+wait 50
+key_up D
+key_up LeftShift
+wait 20
+record_stop
+image_seq_trail {work}/sprint335_ref {work}/sprint335_nis 20 40 760 245 900 335 max 6
+stop
+wait 5
+quit
