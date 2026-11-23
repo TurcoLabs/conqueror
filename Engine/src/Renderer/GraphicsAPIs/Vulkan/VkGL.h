@@ -188,6 +188,7 @@ namespace Conqueror::VkGL
         uint32_t LocalSize[3] = { 1, 1, 1 };
         std::vector<GLEmu::ImageBinding> Images;
         std::vector<GLEmu::StorageBlockBinding> StorageBlocks;
+        std::vector<uint32_t> AccelStructBindings;   // 316: accelerationStructureEXT (donanım ışın sorgusu TLAS'ı)
         bool Linked = false;
         std::string Log;
         VkShaderModule Vert = VK_NULL_HANDLE, Frag = VK_NULL_HANDLE;
@@ -391,6 +392,10 @@ namespace Conqueror::VkGL
     void EndRendering();
     bool EnsureRendering();
     VkCommandBuffer TransferCmd();          // render geçişini bitirir ve bariyer koyar
+    // 316: donanım ışın sorgusu (VkGLRayQuery.cpp): kurulum / kapatma ve hesaplama dispatch'inin bağladığı TLAS
+    void InstallRayQuery();
+    void ShutdownRayQuery();
+    VkAccelerationStructureKHR CurrentTLAS();
     void Draw(GLenum mode, GLint first, GLsizei count, GLsizei instances, bool indexed, GLenum indexType, const void* indices, GLint baseVertex);
     void ClearCurrent(GLbitfield mask);
 

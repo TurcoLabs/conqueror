@@ -108,6 +108,11 @@ namespace Conqueror::VK
         VkMemoryAllocateInfo ai{ VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
         ai.allocationSize = req.size;
         ai.memoryTypeIndex = FindMemoryType(req.memoryTypeBits, props);
+        // 316: aygıt adresi istenen arabellek (hızlandırma yapısı girdileri / depolaması)
+        VkMemoryAllocateFlagsInfo fi{ VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO };
+        fi.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
+        if (usage & VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT)
+            ai.pNext = &fi;
         if (ai.memoryTypeIndex == UINT32_MAX || vkAllocateMemory(m_Device, &ai, nullptr, &memory) != VK_SUCCESS)
         {
             vkDestroyBuffer(m_Device, buffer, nullptr);
@@ -321,17 +326,50 @@ namespace Conqueror::VK
         f12.hostQueryReset = VK_TRUE;   // zaman damgası sorguları (profilleyici) ana bilgisayardan sıfırlanır
         // Dolaylı çizim sayısı (glMultiDrawElementsIndirectCount) ve gl_DrawID / gl_BaseInstance (307)
         VkPhysicalDeviceVulkan11Features f11{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES };
+        // 316: donanım ışın sorgusu (Ray Traced yansıma / AO / GI, Path Tracing: yazılım BVH'si yerine)
+        VkPhysicalDeviceAccelerationStructureFeaturesKHR fas{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR };
+        VkPhysicalDeviceRayQueryFeaturesKHR frq{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR };
+        bool rayQuery = false;
+        {
+            const char* env = std::getenv("CQ_RAY_QUERY");
+            rayQuery = !(env && env[0] == '0') && m_ApiVersion >= VK_API_VERSION_1_2 && !m_Portability &&
+                       HasDeviceExtension(m_Physical, VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME) &&
+                       HasDeviceExtension(m_Physical, VK_KHR_RAY_QUERY_EXTENSION_NAME) &&
+                       HasDeviceExtension(m_Physical, VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
+        }
         if (vkGetPhysicalDeviceFeatures2 && m_ApiVersion >= VK_API_VERSION_1_2)
         {
             VkPhysicalDeviceVulkan11Features q11{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES };
             VkPhysicalDeviceVulkan12Features q12{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES };
+            VkPhysicalDeviceAccelerationStructureFeaturesKHR qas{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR };
+            VkPhysicalDeviceRayQueryFeaturesKHR qrq{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR };
             q12.pNext = &q11;
+            if (rayQuery)
+            {
+                q11.pNext = &qas;
+                qas.pNext = &qrq;
+            }
             VkPhysicalDeviceFeatures2 q{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
             q.pNext = &q12;
             vkGetPhysicalDeviceFeatures2(m_Physical, &q);
             f12.drawIndirectCount = q12.drawIndirectCount;
             f11.shaderDrawParameters = q11.shaderDrawParameters;
             m_DrawIndirectCount = q12.drawIndirectCount == VK_TRUE;
+            if (rayQuery && !(q12.bufferDeviceAddress && qas.accelerationStructure && qrq.rayQuery))
+                CQ_CORE_INFO("[Vulkan] Ray query extensions present but features missing (buffer device address {0}, acceleration structure {1}, ray query {2})",
+                             (bool)q12.bufferDeviceAddress, (bool)qas.accelerationStructure, (bool)qrq.rayQuery);
+            rayQuery = rayQuery && q12.bufferDeviceAddress && qas.accelerationStructure && qrq.rayQuery;
+        }
+        else
+            rayQuery = false;
+        if (rayQuery)
+        {
+            devExts.push_back(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME);
+            devExts.push_back(VK_KHR_RAY_QUERY_EXTENSION_NAME);
+            devExts.push_back(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
+            f12.bufferDeviceAddress = VK_TRUE;
+            fas.accelerationStructure = VK_TRUE;
+            frq.rayQuery = VK_TRUE;
         }
         bool dynamicDepthBias = core13;
         if (core13)
@@ -357,6 +395,12 @@ namespace Conqueror::VK
             f11.pNext = f2.pNext;
             f2.pNext = &f11;
         }
+        if (rayQuery)
+        {
+            frq.pNext = f2.pNext;
+            fas.pNext = &frq;
+            f2.pNext = &fas;
+        }
 
         const float priority = 1.0f;
         VkDeviceQueueCreateInfo qci{ VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO };
@@ -376,6 +420,7 @@ namespace Conqueror::VK
         }
         LoadDeviceFunctions(m_Device);
         vkGetDeviceQueue(m_Device, m_QueueFamily, 0, &m_Queue);
+        m_RayQuery = rayQuery;
 
         // 1.3 çekirdek adı, yoksa uzantı adı
         auto load = [&](const char* coreName, const char* extName) -> PFN_vkVoidFunction {

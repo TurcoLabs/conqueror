@@ -14,6 +14,7 @@
 #include "Renderer/Utilities/Renderer3D/ModelLoader.h"
 #include "Core/Utils/ThreadPool.h"
 #include "Core/Logging/Log.h"
+#include "Renderer/GraphicsAPIs/GLEmu/GLEmuCommon.h"
 
 #include <glad/glad.h>
 #include <glm/gtc/matrix_inverse.hpp>
@@ -22,6 +23,7 @@
 #include <cfloat>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <future>
 #include <numeric>
@@ -126,6 +128,7 @@ bool coverageHit(int tri, vec3 pObj, float coverage)
 
 vec3 safeInv(vec3 d) { return vec3(1.0) / vec3(abs(d.x) > 1e-12 ? d.x : 1e-12, abs(d.y) > 1e-12 ? d.y : 1e-12, abs(d.z) > 1e-12 ? d.z : 1e-12); }
 
+#ifndef CQ_RAY_QUERY
 // Dolaşma yığını LDS'de (paylaşılan bellek): iş parçacığı başına RT_STACK girdi; özel dizi yavaş belleğe (scratch) taşar.
 // TLAS ve BLAS aynı dilimi paylaşır (BLAS, TLAS'ın o anki derinliğinin üstünden başlar). Yerel boyut en çok 64 iş parçacığı
 #define RT_STACK 40
@@ -248,6 +251,40 @@ int trace(vec3 o, vec3 d, float tMax, out float tHit, out vec2 bary, bool any)
     }
     return best;
 }
+#else
+// 316: donanım ışın sorgusu (GL_EXT_ray_query; çeviri katmanı TLAS'ı kurar). Örneğin özel dizini insts[] sırası, Info.w üçgen tabanı:
+// döndürülen üçgen dizini ve barisentrik yazılım izleyicisiyle aynı. Opak olmayan örneklerde (Cutout / saydam) aday kesişim aynı
+// konuma bağlı kapsama testiyle onaylanır
+layout(binding = 9) uniform accelerationStructureEXT u_TLAS;
+int trace(vec3 o, vec3 d, float tMax, out float tHit, out vec2 bary, bool any)
+{
+    tHit = tMax;
+    bary = vec2(0.0);
+    g_HitInst = -1;
+    if (u_NodeCount <= 0) return -1;
+    rayQueryEXT q;
+    rayQueryInitializeEXT(q, u_TLAS, any ? gl_RayFlagsTerminateOnFirstHitEXT : gl_RayFlagsNoneEXT, 0xFF, o, 1e-4, d, tMax);
+    while (rayQueryProceedEXT(q))
+    {
+        if (rayQueryGetIntersectionTypeEXT(q, false) != gl_RayQueryCandidateIntersectionTriangleEXT)
+            continue;
+        int k = rayQueryGetIntersectionInstanceCustomIndexEXT(q, false);
+        int ti = insts[k].Info.w + rayQueryGetIntersectionPrimitiveIndexEXT(q, false);
+        vec4 mp = mats[insts[k].Info.y].Params;
+        float coverage = clamp(mats[insts[k].Info.y].Albedo.a * texAvg(mp.w).a, 0.0, 1.0);
+        float t = rayQueryGetIntersectionTEXT(q, false);
+        vec3 pObj = rayQueryGetIntersectionObjectRayOriginEXT(q, false) + rayQueryGetIntersectionObjectRayDirectionEXT(q, false) * t;
+        if (coverage >= 0.999 || coverageHit(ti, pObj, coverage))
+            rayQueryConfirmIntersectionEXT(q);
+    }
+    if (rayQueryGetIntersectionTypeEXT(q, true) != gl_RayQueryCommittedIntersectionTriangleEXT)
+        return -1;
+    tHit = rayQueryGetIntersectionTEXT(q, true);
+    bary = rayQueryGetIntersectionBarycentricsEXT(q, true);
+    g_HitInst = rayQueryGetIntersectionInstanceCustomIndexEXT(q, true);
+    return insts[g_HitInst].Info.w + rayQueryGetIntersectionPrimitiveIndexEXT(q, true);
+}
+#endif
 
 bool occluded(vec3 o, vec3 d, float dist) { float t; vec2 b; return trace(o, d, dist, t, b, true) >= 0; }
 
@@ -866,6 +903,8 @@ void main()
             uint32_t NodeBase = 0, TriBase = 0;   // birleşik tamponlarda
             uint32_t NodeCount = 0, TriCount = 0;
             uint64_t LastUsed = 0;
+            uint32_t RQBlas = 0;                    // 316: donanım ışın sorgusu BLAS'ı (0 yok)
+            std::weak_ptr<BlasData> RQData;         // RQBlas'ın kurulduğu veri (mesh güncellenince yeniden kurulur)
         };
 
         // Birleşik GPU dizisi (BLAS'lar sona eklenir, büyüdükçe kopyalanarak genişler)
@@ -954,6 +993,20 @@ void main()
         State& S() { static auto& s = *new State(); return s; }
 
         ThreadPool& Pool() { static auto& p = *new ThreadPool(2); return p; }
+
+        // 316: donanım ışın sorgusu kullanılır mı (ilk derlemede karar verilir, programlar buna göre derlenir). CQ_RAY_QUERY=0 kapatır
+        GLEmu::RayQueryBackend* RayQuery()
+        {
+            static GLEmu::RayQueryBackend* s_Backend = [] {
+                const char* env = std::getenv("CQ_RAY_QUERY");
+                GLEmu::RayQueryBackend* b = (env && env[0] == '0') ? nullptr : GLEmu::GetRayQueryBackend();
+                if (b)
+                    CQ_CORE_INFO("[Ray Tracing] hardware ray queries: {0}", b->Name());
+                return b;
+            }();
+            return s_Backend;
+        }
+        bool UsingRayQuery() { return RayQuery() != nullptr; }
 
         constexpr int kAvgSlots = 4096;
         constexpr int kAtlasTiles = 64;       // 8 x 8 döşeme x 256 x 256 RGBA16F (2048 x 2048 + mip: ~43 MB)
@@ -1210,6 +1263,28 @@ void main()
             e.NodeCount = (uint32_t)nodes.size();
             e.Uploaded = true;
             s.LayoutChanged = true;
+            // 316: donanım BLAS'ı aynı (BVH sırasına dizilmiş) üçgenlerden: ilkel dizini = e.TriBase'e göre üçgen dizini
+            if (GLEmu::RayQueryBackend* rq = RayQuery(); rq && (e.RQBlas == 0 || e.RQData.lock() != e.Data))
+            {
+                if (e.RQBlas)
+                    rq->DestroyBLAS(e.RQBlas);
+                std::vector<float> pos(d.Tris.size() * 9);
+                for (size_t i = 0; i < d.Tris.size(); ++i)
+                {
+                    const Tri& t = d.Tris[i];
+                    const glm::vec4* v[3] = { &t.V0, &t.V1, &t.V2 };
+                    for (int k = 0; k < 3; ++k)
+                    {
+                        pos[i * 9 + k * 3 + 0] = v[k]->x;
+                        pos[i * 9 + k * 3 + 1] = v[k]->y;
+                        pos[i * 9 + k * 3 + 2] = v[k]->z;
+                    }
+                }
+                e.RQBlas = d.Tris.empty() ? 0u : rq->CreateBLAS(pos.data(), (uint32_t)d.Tris.size());
+                e.RQData = e.Data;
+                if (!e.RQBlas && !d.Tris.empty())
+                    CQ_CORE_WARN("[Ray Tracing] hardware BLAS build failed ({0} triangles): the mesh is missing from ray traced effects", d.Tris.size());
+            }
         }
 
         // Ölü / kullanılmayan BLAS'lar silinir; boşa giden yer çoksa birleşik tamponlar baştan kurulur
@@ -1221,6 +1296,9 @@ void main()
                 const bool busy = e.Job.valid() && e.Job.wait_for(std::chrono::seconds(0)) != std::future_status::ready;
                 if (!busy && s.Frame - e.LastUsed > 600)
                 {
+                    if (e.RQBlas)
+                        if (GLEmu::RayQueryBackend* rq = RayQuery())
+                            rq->DestroyBLAS(e.RQBlas);
                     if (e.Uploaded)
                         s.WastedBytes += (size_t)e.TriCount * sizeof(Tri) + (size_t)e.NodeCount * sizeof(Node);
                     it = s.Blas.erase(it);
@@ -1249,13 +1327,17 @@ void main()
     namespace RayTracingScene
     {
         const char* CommonGLSL() { return kCommonGLSL; }
+        const char* GetHardwareBackend() { return RayQuery() ? RayQuery()->Name() : nullptr; }
         const Stats& GetStats() { return S().Info; }
 
         uint32_t CompileCompute(const std::string& name, const std::string& localSize, const std::string& body)
         {
             if (!GLProfile::RawComputeShaders())
                 return 0;
-            const std::string source = "#version 450 core\n" + localSize + "\n" + kCommonGLSL + body;
+            // 316: çeviri katmanı donanım ışın sorgusunu destekliyorsa izleme GL_EXT_ray_query ile (yazılım BVH'si yerine)
+            const bool rayQuery = UsingRayQuery();
+            const std::string source = std::string(rayQuery ? "#version 460 core\n#extension GL_EXT_ray_query : require\n#define CQ_RAY_QUERY 1\n" : "#version 450 core\n")
+                                     + localSize + "\n" + kCommonGLSL + body;
             const char* text = source.c_str();
             GLuint sh = glCreateShader(GL_COMPUTE_SHADER);
             glShaderSource(sh, 1, &text, nullptr);
@@ -1478,6 +1560,7 @@ void main()
             // TLAS: örneklerin dünya kutuları
             std::vector<Inst> insts;
             std::vector<Prim> prims;
+            std::vector<uint32_t> instRQ;     // 316: örneğin donanım BLAS'ı
             insts.reserve(descs.size());
             prims.reserve(descs.size());
             int triangles = 0;
@@ -1492,7 +1575,7 @@ void main()
                 const glm::mat4 wt = glm::transpose(d.World), it4 = glm::transpose(inv);
                 in.W0 = wt[0]; in.W1 = wt[1]; in.W2 = wt[2];
                 in.I0 = it4[0]; in.I1 = it4[1]; in.I2 = it4[2];
-                in.Info = glm::ivec4((int)e.NodeBase, d.Mat, (int)e.TriCount, 0);
+                in.Info = glm::ivec4((int)e.NodeBase, d.Mat, (int)e.TriCount, (int)e.TriBase);   // w: üçgen tabanı (ışın sorgusu)
                 glm::vec3 mn(FLT_MAX), mx(-FLT_MAX);
                 for (int c = 0; c < 8; ++c)
                 {
@@ -1502,6 +1585,7 @@ void main()
                     mx = glm::max(mx, wp);
                 }
                 insts.push_back(in);
+                instRQ.push_back(e.RQBlas);
                 prims.push_back({ mn, mx });
                 triangles += (int)e.TriCount;
             }
@@ -1513,6 +1597,30 @@ void main()
                 sorted[i] = insts[order[i]];
             UploadSmall(s.TNodeBuf, tnodes.data(), tnodes.size() * sizeof(Node));
             UploadSmall(s.InstBuf, sorted.data(), sorted.size() * sizeof(Inst));
+            // 316: donanım TLAS'ı (özel dizin = insts[] sırası; Cutout / saydam malzemeli örnek opak değil)
+            if (GLEmu::RayQueryBackend* rq = RayQuery())
+            {
+                std::vector<GLEmu::RayQueryInstance> rqi;
+                rqi.reserve(sorted.size());
+                for (size_t i = 0; i < order.size(); ++i)
+                {
+                    const uint32_t blas = instRQ[order[i]];
+                    if (!blas)
+                        continue;
+                    const Inst& in = sorted[i];
+                    GLEmu::RayQueryInstance r;
+                    std::memcpy(r.Transform + 0, &in.W0.x, 16);
+                    std::memcpy(r.Transform + 4, &in.W1.x, 16);
+                    std::memcpy(r.Transform + 8, &in.W2.x, 16);
+                    r.CustomIndex = (uint32_t)i;
+                    r.Blas = blas;
+                    const int mat = in.Info.y;
+                    r.Opaque = mat < 0 || mat >= (int)mats.size() || ((int)(mats[(size_t)mat].Params.z + 0.5f) & 2) == 0;
+                    rqi.push_back(r);
+                }
+                if (!rq->BuildTLAS(rqi.data(), (uint32_t)rqi.size()))
+                    CQ_CORE_WARN("[Ray Tracing] hardware TLAS build failed ({0} instances)", rqi.size());
+            }
             UploadSmall(s.MatBuf, mats.data(), mats.size() * sizeof(Mat));
             int unique = 0;
             for (auto& [key, e] : s.Blas)

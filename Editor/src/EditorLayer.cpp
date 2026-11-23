@@ -6839,7 +6839,15 @@ namespace Conqueror::Editor
         };
         // raytraced_effects <reflections|ao> <cond>: son karede ışın izlemeli yansıma / AO'nun izlediği piksel sayısı (316; ">0" çalışıyor)
         Automation::RegisterCommand("raytraced_effects", [](const Args& a, std::string& err) {
-            if (a.size() < 3) { err = "raytraced_effects <reflections|ao> <N|>N|<N>"; return false; }
+            if (a.size() < 3) { err = "raytraced_effects <reflections|ao> <N|>N|<N> | raytraced_effects backend <hardware|software>"; return false; }
+            if (a[1] == "backend")
+            {
+                // 316: ışınları izleyen yol (donanım ışın sorgusu ya da compute BVH)
+                const char* hw = RayTracingScene::GetHardwareBackend();
+                Automation::Report(std::string("RAYTRACED backend = ") + (hw ? hw : "software BVH"));
+                if ((a[2] == "hardware") != (hw != nullptr)) { err = std::string("backend is ") + (hw ? hw : "software BVH"); return false; }
+                return true;
+            }
             uint32_t refl = 0, ao = 0;
             RayTracedEffects::GetLastCounts(refl, ao);
             const int n = (int)(a[1] == "ao" ? ao : refl);

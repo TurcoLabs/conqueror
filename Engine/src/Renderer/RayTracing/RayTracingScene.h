@@ -33,6 +33,8 @@ namespace Conqueror
         };
 
         CQ_API const char* CommonGLSL();
+        // 316: ışınları izleyen donanım yolu ("Vulkan ray query"); nullptr: yazılım BVH'si (compute shader, her GPU)
+        CQ_API const char* GetHardwareBackend();
         // "#version 450 core" + yerel boyut + CommonGLSL + body ile compute programı (0: derlenemedi, hata günlükte)
         CQ_API uint32_t CompileCompute(const std::string& name, const std::string& localSize, const std::string& body);
         // Sahneyi günceller: değişen örnekler için TLAS, yeni / değişen meshler için BLAS. wait: bekleyen BLAS yapımları bitene dek

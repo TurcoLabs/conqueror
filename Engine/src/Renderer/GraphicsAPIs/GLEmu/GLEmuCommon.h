@@ -13,6 +13,31 @@ namespace Conqueror::GLEmu
     CQ_API void NoteUnimplementedCall(const char* name);
     CQ_API int UnimplementedCallCount();
     CQ_API std::string UnimplementedCallNames();
+
+    // 316: donanım ışın sorgusu (Vulkan VK_KHR_ray_query + VK_KHR_acceleration_structure; ileride DXR / Metal RT aynı arayüzle).
+    // Destekleyen çeviri katmanı başlangıçta kaydeder; motorun ışın izleyicisi (RayTracingScene) BLAS / TLAS'ı burada kurar ve
+    // compute gölgelendiricileri GL_EXT_ray_query ile "u_TLAS" adlı hızlandırma yapısını izler (yazılım BVH'si yerine)
+    struct RayQueryInstance
+    {
+        float Transform[12];          // dünya matrisinin ilk üç satırı (3 x 4, satır sıralı)
+        uint32_t CustomIndex = 0;     // gölgelendiricide rayQueryGetIntersectionInstanceCustomIndexEXT (24 bit)
+        uint32_t Blas = 0;            // CreateBLAS kimliği
+        bool Opaque = true;           // false: aday kesişimler gölgelendiricide (Cutout / saydam kapsaması) onaylanır
+    };
+
+    class RayQueryBackend
+    {
+    public:
+        virtual ~RayQueryBackend() = default;
+        virtual const char* Name() const = 0;
+        // positions: triCount x 3 köşe (xyz, sıkışık); üçgen sırası gölgelendiricideki ilkel dizinidir. 0: kurulamadı
+        virtual uint32_t CreateBLAS(const float* positions, uint32_t triCount) = 0;
+        virtual void DestroyBLAS(uint32_t id) = 0;
+        // Örnekler değişince yeniden kurulur (komut akışına sırayla kaydedilir: önceki dispatch'ler eski yapıyı görür)
+        virtual bool BuildTLAS(const RayQueryInstance* instances, uint32_t count) = 0;
+    };
+    CQ_API void SetRayQueryBackend(RayQueryBackend* backend);
+    CQ_API RayQueryBackend* GetRayQueryBackend();
     struct Limits
     {
         int32_t MaxTextureSize = 16384;

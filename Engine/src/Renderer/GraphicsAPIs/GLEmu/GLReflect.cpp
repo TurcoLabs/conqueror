@@ -47,6 +47,10 @@ namespace Conqueror::GLEmu
         return g_UnimplementedNames;
     }
 
+    namespace { RayQueryBackend* g_RayQuery = nullptr; }
+    void SetRayQueryBackend(RayQueryBackend* backend) { g_RayQuery = backend; }
+    RayQueryBackend* GetRayQueryBackend() { return g_RayQuery; }
+
     namespace
     {
         // Aşama başına 16 örnekleyici: büyük örnekleyici dizileri ayrı doku dizisi + tek örnekleyiciye çevrilir

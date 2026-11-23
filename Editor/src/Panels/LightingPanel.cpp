@@ -1,6 +1,7 @@
 #include "Renderer/AntiAliasing.h"
 #include "Renderer/RayTracing/RayTracedGI.h"
 #include "Renderer/RayTracing/RayTracedEffects.h"
+#include "Renderer/RayTracing/RayTracingScene.h"
 #include "Scene/MeshRendererMaterial.h"
 #include "Renderer/Utilities/Renderer3D/Material.h"
 #include "ObjectPicker.h"
@@ -1000,6 +1001,7 @@ namespace Conqueror::Editor
                 {
                     ImGui::TextDisabled("%d probes (%dx%dx%d), %d updated this frame", st.Probes, st.Counts.x, st.Counts.y, st.Counts.z, st.ProbesUpdated);
                     ImGui::TextDisabled("Scene: %d triangles, %d instances%s", st.Triangles, st.Instances, st.PendingBuilds > 0 ? " (preparing meshes...)" : "");
+                    ImGui::TextDisabled("Tracing: %s", RayTracingScene::GetHardwareBackend() ? "hardware ray queries (Vulkan)" : "compute BVH (software, any GPU)");
                 }
             }
             UI::EndSection();
@@ -1035,6 +1037,8 @@ namespace Conqueror::Editor
                                                                          "and Unreal's ray traced reflections; runs on the GPU with compute shaders on any graphics card.");
                 if (p.RayTracedReflections && !RayTracedEffects::Supported())
                     ImGui::TextDisabled("Not supported here (needs compute shaders): screen traces are used.");
+                else if (p.RayTracedReflections)
+                    ImGui::TextDisabled("Tracing: %s", RayTracingScene::GetHardwareBackend() ? "hardware ray queries (Vulkan)" : "compute BVH (software, any GPU)");
             }
             UI::EndSection();
         }
@@ -1127,6 +1131,8 @@ namespace Conqueror::Editor
                     UI::SliderInt("Rays per Pixel##rtao", p.RTAORays, 1, 16, "More rays give smoother occlusion and cost more");
                     if (!RayTracedEffects::Supported())
                         ImGui::TextDisabled("Not supported here (needs compute shaders): SSAO is used.");
+                    else
+                        ImGui::TextDisabled("Tracing: %s", RayTracingScene::GetHardwareBackend() ? "hardware ray queries (Vulkan)" : "compute BVH (software, any GPU)");
                 }
             }
             UI::EndSection();

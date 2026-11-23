@@ -195,10 +195,11 @@ namespace Conqueror::VkGL
                 {
                     VkDescriptorPoolSize sizes[] = { { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 8192 }, { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 32768 },
                                                      { VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 16384 }, { VK_DESCRIPTOR_TYPE_SAMPLER, 4096 },
-                                                     { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2048 }, { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2048 } };
+                                                     { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2048 }, { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2048 },
+                                                     { VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 512 } };
                     VkDescriptorPoolCreateInfo pi{ VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
                     pi.maxSets = 4096;
-                    pi.poolSizeCount = 6;
+                    pi.poolSizeCount = Core::Get().HasRayQuery() ? 7 : 6;   // 316: hızlandırma yapısı türü yalnız uzantı açıkken
                     pi.pPoolSizes = sizes;
                     VkDescriptorPool pool = VK_NULL_HANDLE;
                     if (vkCreateDescriptorPool(dev, &pi, nullptr, &pool) != VK_SUCCESS)
@@ -1205,6 +1206,26 @@ namespace Conqueror::VkGL
             refs.push_back({ sb.Binding, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, bufferInfos.size() });
             bufferInfos.push_back(bi);
         }
+        // 316: donanım ışın sorgusu TLAS'ı (yoksa dispatch atlanır: tanımlayıcı geçersiz olurdu)
+        std::vector<VkWriteDescriptorSetAccelerationStructureKHR> asInfos;
+        std::vector<VkAccelerationStructureKHR> asHandles;
+        asInfos.reserve(p->AccelStructBindings.size());
+        asHandles.reserve(p->AccelStructBindings.size());
+        for (uint32_t binding : p->AccelStructBindings)
+        {
+            VkAccelerationStructureKHR tlas = CurrentTLAS();
+            if (!tlas)
+            {
+                CQ_CORE_WARN("[VkGL] Compute dispatch skipped: no ray query acceleration structure built yet");
+                return;
+            }
+            asHandles.push_back(tlas);
+            VkWriteDescriptorSetAccelerationStructureKHR ai{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR };
+            ai.accelerationStructureCount = 1;
+            ai.pAccelerationStructures = &asHandles.back();
+            refs.push_back({ binding, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1, asInfos.size() });
+            asInfos.push_back(ai);
+        }
         VkBuffer indirectVk = VK_NULL_HANDLE;
         VkDeviceSize indirectOff = 0;
         if (indirect)
@@ -1232,6 +1253,8 @@ namespace Conqueror::VkGL
                 w.descriptorType = r.Type;
                 if (r.Type == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER || r.Type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)
                     w.pBufferInfo = &bufferInfos[r.First];
+                else if (r.Type == VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR)
+                    w.pNext = &asInfos[r.First];
                 else
                     w.pImageInfo = &imageInfos[r.First];
                 writes.push_back(w);
