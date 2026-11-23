@@ -1,0 +1,29 @@
+# template: fps
+# 329: TAA + NIS'te yana yürürken (A / D) mavi küplerin arkasında gökyüzünde dikey tarak deseni kalıyordu. Küpün kenarı geçerken gökyüzü
+# pikseline bulaşan renk, küp uzaklaşınca TAAU'nun geniş kutusu ve %96 geçmiş ağırlığıyla (güvenilir yol) yavaşça sönüyordu. Gökyüzü artık
+# güvenilir yola girmez (yerel TAA gibi; geniş kutu yalnız pikselin kendi yüzeyi 3x3'ün en yakın yüzeyiyse). Ölçü TAAU'nun hata ayıklama
+# görünümü (r.TAADebug): yürürken gökyüzü pikselleri güvenilir yolun mavisiyle değil, gökyüzü komşusunun eflatunuyla boyanmalı (eskiden
+# mavi baskınlığı 64, şimdi 0)
+timeout 400
+wait 60
+focus Game
+play
+wait 30
+cvar r.TemporalStability 1
+cvar r.AntiAliasing 3
+cvar r.Upscaler 3
+entity move Player 0 0.9 14
+wait 4
+script set Player@FirstPersonShooter yaw float 0
+script set Player@FirstPersonShooter pitch float 0
+wait 120
+cvar r.TAADebug 1
+key_down D
+wait 20
+game_region 0.05 0.75 0.35 0.92 blue mean <40
+key_up D
+wait 10
+cvar r.TAADebug 0
+stop
+wait 5
+quit

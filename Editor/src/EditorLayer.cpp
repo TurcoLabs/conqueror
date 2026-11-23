@@ -7198,7 +7198,7 @@ namespace Conqueror::Editor
         // seviyeden çok sapan piksel = hareket eden nesnenin bıraktığı iz / gölgedeki lekeler (kenarlar sayılmaz: kenar yumuşatma onları
         // zaten değiştirir). Kare başına ortalama ve en çok sayı raporlanır; max verilirse ortalama onu aşınca FAIL
         Automation::RegisterCommand("image_seq_trail", [](const Args& a, std::string& err) {
-            if (a.size() < 9) { err = "image_seq_trail <ref dir> <test dir> <first> <last> x0 y0 x1 y1 [max n]"; return false; }
+            if (a.size() < 9) { err = "image_seq_trail <ref dir> <test dir> <first> <last> x0 y0 x1 y1 [max n] [diff n]"; return false; }
             // record_start çıktı klasörünün içinde Recording_<zaman> alt klasörü açar
             auto frameDir = [](const std::string& dir) {
                 std::error_code ec;
@@ -7213,8 +7213,12 @@ namespace Conqueror::Editor
             const int first = std::atoi(a[3].c_str()), last = std::atoi(a[4].c_str());
             const int x0 = std::atoi(a[5].c_str()), y0 = std::atoi(a[6].c_str()), x1 = std::atoi(a[7].c_str()), y1 = std::atoi(a[8].c_str());
             float limit = -1.0f;
-            if (a.size() > 10 && a[9] == "max")
-                limit = (float)std::atof(a[10].c_str());
+            int diffLimit = 28;   // diff n: referanstan bu kadar seviye sapan piksel sayılır (düşük kontrastlı iz, 329: gökyüzündeki tarak)
+            for (size_t k = 9; k + 1 < a.size(); k += 2)
+            {
+                if (a[k] == "max") limit = (float)std::atof(a[k + 1].c_str());
+                else if (a[k] == "diff") diffLimit = std::max(1, std::atoi(a[k + 1].c_str()));
+            }
             auto load = [](const std::filesystem::path& p, int& w, int& h) {
                 int n = 0;
                 unsigned char* d = stbi_load(p.string().c_str(), &w, &h, &n, 1);
@@ -7247,7 +7251,7 @@ namespace Conqueror::Editor
                                 lo = std::min(lo, v);
                                 hi = std::max(hi, v);
                             }
-                        if (hi - lo < 16 && std::abs(t[(size_t)y * wr + x] - r[(size_t)y * wr + x]) > 28)
+                        if (hi - lo < 16 && std::abs(t[(size_t)y * wr + x] - r[(size_t)y * wr + x]) > diffLimit)
                             ++count;
                     }
                 sum += count;

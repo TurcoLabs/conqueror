@@ -14,6 +14,7 @@
 #include "Renderer/Utilities/Renderer3D/Renderer3D.h"
 #include "Renderer/AntiAliasing.h"
 #include "Renderer/RayTracing/RayTracedEffects.h"
+#include "Core/Console/ConsoleVariables.h"
 #include "Renderer/FSR2/FSR2Upscaler.h"
 #include "Renderer/Upscalers/DLSSUpscaler.h"
 #include "Renderer/Upscalers/XeSSUpscaler.h"
@@ -2511,7 +2512,23 @@ namespace Conqueror
             BindTexture(2, GetSceneDepthTexture());
             BindTexture(3, normals);
             BindTexture(4, m_FinalHasVelocity ? m_Velocity.Texture : 0);
+            // r.TAADebug: pikselin geçmiş yolu ikinci hedefe (TAA'daki gibi), yalnız gösterilir
+            const bool taauDebug = ConsoleSystem::Overrides().TAADebug == 1;
+            taau->SetInt("u_Debug", taauDebug ? 1 : 0);
+            if (taauDebug)
+            {
+                EnsureTarget(m_TAADebug, outW, outH, GL_RGBA16F);
+                glNamedFramebufferTexture(m_TAAUHistory[ni].Framebuffer, GL_COLOR_ATTACHMENT1, m_TAADebug.Texture, 0);
+                const GLenum buffers[2] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1 };
+                glNamedFramebufferDrawBuffers(m_TAAUHistory[ni].Framebuffer, 2, buffers);
+            }
             PostProcess::DrawFullscreenQuad();
+            if (taauDebug)
+            {
+                const GLenum buffers[1] = { GL_COLOR_ATTACHMENT0 };
+                glNamedFramebufferDrawBuffers(m_TAAUHistory[ni].Framebuffer, 1, buffers);
+                glNamedFramebufferTexture(m_TAAUHistory[ni].Framebuffer, GL_COLOR_ATTACHMENT1, 0, 0);
+            }
             glTextureParameteri(cur, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
             m_TAAUIndex = ni;
             m_TAAUValid = true;
@@ -2522,7 +2539,9 @@ namespace Conqueror
             // kamera tutucusu (owner 4), sonra keskinleştirici
             uint32_t taauResult = m_TAAUHistory[ni].Texture;
             uint32_t unsharpened = 0;
-            if (spatialSharpen)
+            if (taauDebug)
+                taauResult = m_TAADebug.Texture;
+            else if (spatialSharpen)
             {
                 taauResult = RunStillHold(4, taauResult, outW, outH, m_ReactiveUsed ? m_Reactive.Texture : 0, 0, m_CameraStill, !historyValid);
                 unsharpened = taauResult;
