@@ -390,12 +390,24 @@ namespace Conqueror::Editor
             m_PostStack.CopySceneDepthTo(m_Framebuffer->GetRendererID(), w, h);
             m_Framebuffer->Bind();
             RenderCommand::SetViewport(0, 0, w, h);
+            // GL durumu geri yüklenir: karışım açık kalınca sonraki karenin son işleme geçişleri (SSR / ışın izlemeli yansımanın birikim
+            // ve birleştirme geçişleri) karışımla çiziliyor, Viewport'ta yansımalar tamamen kayboluyordu
+            const GLboolean depthTest = glIsEnabled(GL_DEPTH_TEST), blend = glIsEnabled(GL_BLEND);
+            GLint depthFunc = GL_LESS, blendSrc = GL_ONE, blendDst = GL_ZERO, blendSrcA = GL_ONE, blendDstA = GL_ZERO;
+            glGetIntegerv(GL_DEPTH_FUNC, &depthFunc);
+            glGetIntegerv(GL_BLEND_SRC_RGB, &blendSrc);
+            glGetIntegerv(GL_BLEND_DST_RGB, &blendDst);
+            glGetIntegerv(GL_BLEND_SRC_ALPHA, &blendSrcA);
+            glGetIntegerv(GL_BLEND_DST_ALPHA, &blendDstA);
             glEnable(GL_DEPTH_TEST);
             glDepthFunc(GL_LEQUAL);
             glEnable(GL_BLEND);
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
             DebugDraw::RenderDeferred();
-            glDepthFunc(GL_LESS);
+            glDepthFunc((GLenum)depthFunc);
+            glBlendFuncSeparate((GLenum)blendSrc, (GLenum)blendDst, (GLenum)blendSrcA, (GLenum)blendDstA);
+            if (depthTest) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
+            if (blend) glEnable(GL_BLEND); else glDisable(GL_BLEND);
         }
 
         // 4b. Screen UI in Scene (274 / 294): kenar yumuşatma ve ton eşlemeden sonra (Game görünümündeki gibi); sahne derinliği bu tampona
