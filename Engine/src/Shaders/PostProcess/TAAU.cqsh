@@ -312,7 +312,11 @@ void main()
     // yanıp sönüyordu); bir kez değişen ya da hep dışarıda kalan geçmiş kırpılır
     bool outsideNow = any(lessThan(historyY, lo - vec3(0.01))) || any(greaterThan(historyY, hi + vec3(0.01)));
     // Gökyüzüne bakan siluette tutulmaz: kenar kayarken geçmiş tutulunca uzak duvarın üstü basamaklı kalıyordu
-    float flicker = (moving || reactive || skyNear || vacated || movingShadow) ? 0.0 : clamp(flickerBefore - 1.0 + ((outsideNow != outsideBefore) ? 6.0 : 0.0), 0.0, 16.0);
+    // Gölge hacminde yalnız ışığı gerçekten değişen piksel (geçmişi bu karenin aralığının dışında: silinen küpün gölgesi kalkan zemin)
+    // hızlı güncellenir. Eskiden hacimdeki her piksel 8 kare zayıf birikimle çiziliyordu: hacim güneş yönüne uzanıp duvarı kapladığı
+    // için silmeden sonra duvarın karo çizgileri ve üst kenarı titreyip beyaz çizgiler olarak görünüyordu (291)
+    bool shadowChanged = movingShadow && outsideNow;
+    float flicker = (moving || reactive || skyNear || vacated || shadowChanged) ? 0.0 : clamp(flickerBefore - 1.0 + ((outsideNow != outsideBefore) ? 6.0 : 0.0), 0.0, 16.0);
     // Yalnız ince çizgi tutulur: bu karenin 3x3'ü düzgün (ayrıntı bu karede ıskalandı) ya da geçmiş kutunun aralığından çok
     // dışarıda. İki büyük yüzeyin kenarında (duvarın zemine değdiği yer) 3x3 iki rengi de içerir; orada basamak deseni kayarken
     // tutulunca kenar basamaklı kalıyordu
@@ -325,10 +329,10 @@ void main()
     // Yavaş kayan güvenilir yüzey (ileri geri yürürken küplerin arası, TAA'daki güvenilir yol): kırpma kutusu geniş, geçmişin ağırlığı
     // yüksek; dar kutu ıskalanan karelerde ince aralığı kırpıp geri yürürken yanıp söndürüyordu
     float speedPx = length(velocity * inSize);
-    float slowTrust = (moving || reactive || objectVelocity || movingShadow || u_CameraStill == 1 || young) ? 0.0 : (1.0 - smoothstep(1.5, 3.0, speedPx)) * (1.0 - smoothstep(0.003, 0.006, viewTurn));
+    float slowTrust = (moving || reactive || objectVelocity || shadowChanged || u_CameraStill == 1 || young) ? 0.0 : (1.0 - smoothstep(1.5, 3.0, speedPx)) * (1.0 - smoothstep(0.003, 0.006, viewTurn));
     // Kamera duruyorken: geçmiş her karede bu düşük çözünürlüklü 3x3'ün aralığına kırpılınca çıktı çözünürlüğünde biriken ayrıntı
     // siliniyordu (yükseltme bulanık kalıyordu). Kutu küçük bir payla genişler (büyük değişim, namlu alevi ışığı yine kırpılır)
-    bool settle = u_CameraStill == 1 && !moving && !reactive && !movingShadow;
+    bool settle = u_CameraStill == 1 && !moving && !reactive && !shadowChanged;
     if (!hold)
     {
         vec3 pad = settle ? vec3(0.06, 0.03, 0.03) : vec3(0.0);
@@ -366,7 +370,11 @@ void main()
         alpha = max(alpha, wmax / (accBefore + wmax));
         acc = min(accBefore + wmax, 4.0);
     }
-    if (movingShadow && !vacated)
+    // Hacimde ışığı az değişen piksel (eski gölgenin sınırı, kırpma kutusunun içinde kalan fark): titreme koruması ve dar süzgeç
+    // korunur, yalnız birikim biraz hızlanır (yoksa sınır 20 kare koyu kalıyordu)
+    if (movingShadow && !shadowChanged && !vacated)
+        alpha = max(alpha, 0.2);
+    if (shadowChanged && !vacated)
     {
         // 291: hareket eden / silinen nesnenin gölge hacmi: hacim sürdükçe (silinen düşürücüde 8 kare) bu kare en az yarı ağırlıkla
         // girer, kalıntı birkaç karede silinir. Yalnız kırpma sıkılaşınca kenar pikselinde (duvar üstü ile ötedeki gölgeli zemin) silinen

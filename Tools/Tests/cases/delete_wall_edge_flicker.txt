@@ -1,0 +1,25 @@
+# template: fps
+# matrix: UP=0 3
+# 291 (kullanıcının 585-588, 592-593'ü): duvarın üst kenarındaki küp seçilip Delete ile silinir, kamera duvara içeriden yukarıdan bakar.
+# TAA + NIS'te (TAAU) silmeden sonra duvarın üst ön kenarı ve karo çizgileri titreyip beyaz çizgiler halinde görünüyordu: silinen küpün
+# gölge hacmi (güneş yönüne uzanıp duvarı kaplar) 8 kare boyunca içindeki her pikselde birikimi zayıflatıyor, titreme koruması kalkıyordu;
+# titreme tutucu da hacmi ve silinen nesnenin yerini 48 kare ham (keskinleştirilmiş titreşimli) bırakıyordu. Şimdi hacimde yalnız ışığı
+# değişen piksel hızlı güncellenir, silinen nesnenin yeri / gölge değişimi 12 kare bekler. Duvar şeridinde 10 karede 16 seviyeden fazla
+# değişen piksel: silmeden sonraki ilk 10 kare eski 1.275 %, şimdi 0.477 % (kalanı gölgenin kalkması; yerel TAA 0.146 %), sonraki 10 kare
+# eski 0.212 %, şimdi 0 % (yerel TAA 0 %). UP=0: yerel TAA, UP=3: TAA + NIS
+wait_until 3000 layout_settled
+wait 10
+focus Viewport
+cvar r.AntiAliasing 3
+cvar r.Upscaler {matrix}
+create_primitive cube Probe 30.0 4.6 0
+camera 7 35 -90 30.0 4.0 0
+wait 60
+select Probe
+wait 90
+key Delete
+viewport_flicker 10 0.30 0.25 0.98 0.52 max% 0.8
+wait 14
+viewport_flicker 10 0.30 0.25 0.98 0.52 max% 0.05
+wait 14
+quit
