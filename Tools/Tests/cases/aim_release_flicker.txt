@@ -1,0 +1,28 @@
+# template: fps
+# 327: TAA + NIS'te hiç hareket etmeden nişan alıp bırakınca piramidin küplerinin arası birkaç saniye hafif yanıp sönüyordu. FPS betiği
+# nişan geçişini üstel yaklaşımla yapar (aim01 hedefe asimptotik): FOV 50+ kare boyunca piksel altı değişiyor, kamera 1e-6'lık matris
+# karşılaştırmasıyla "hareketli" sayılıyor, zamansal yöntemler bu sürede hareket yoluyla çiziyor (TAAU'nun dururken birikimi ve titreme
+# tutucu kapalı). Kamera artık ekrandaki kayma 0.05 pikselin altındaysa duruyor sayılır. Nişan bırakıldıktan 60-120 kare sonra piramitte
+# 8 seviyeden fazla değişen piksel: eski 1.45 %, şimdi 0.39 % (nişandan önce 0.007 %; yerel TAA 0.15 %)
+timeout 400
+wait 60
+focus Game
+play
+wait 30
+entity move Player 0 0.9 9
+wait 4
+script set Player@FirstPersonShooter yaw float 0
+script set Player@FirstPersonShooter pitch float -3
+cvar r.AntiAliasing 3
+cvar r.Upscaler 3
+wait 400
+game_flicker 60 0.30 0.30 0.56 0.74 max8% 0.05
+wait 64
+script set Player@FirstPersonShooter aimInput bool true
+wait 110
+script set Player@FirstPersonShooter aimInput bool false
+wait 60
+game_flicker 60 0.30 0.30 0.56 0.74 max8% 0.8
+wait 64
+stop
+quit

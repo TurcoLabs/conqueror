@@ -757,6 +757,40 @@ namespace Conqueror
         return (uint32_t)drawFBO == s_Current->m_SceneFramebuffer->GetRendererID();
     }
 
+    bool PostProcessStack::IsCameraStill(const glm::mat4& now) const
+    {
+        if (!m_HasPrevViewProj)
+            return false;
+        bool same = true;
+        for (int c = 0; c < 4 && same; ++c)
+            for (int r = 0; r < 4; ++r)
+                if (std::abs(now[c][r] - m_PrevViewProj[c][r]) > 1e-6f * std::max(1.0f, std::abs(now[c][r])))
+                {
+                    same = false;
+                    break;
+                }
+        if (same)
+            return true;
+        const glm::mat4 inv = glm::inverse(now);
+        const glm::vec2 half(0.5f * (float)std::max(m_Width, 1u), 0.5f * (float)std::max(m_Height, 1u));
+        const float kStillPx = 0.05f;
+        for (const float z : { 0.9f, 0.99f, 0.9999f })
+            for (const glm::vec2 c : { glm::vec2(-1.0f, -1.0f), glm::vec2(1.0f, -1.0f), glm::vec2(-1.0f, 1.0f), glm::vec2(1.0f, 1.0f), glm::vec2(0.0f) })
+            {
+                glm::vec4 w = inv * glm::vec4(c, z, 1.0f);
+                if (std::abs(w.w) < 1e-12f)
+                    return false;
+                w /= w.w;
+                const glm::vec4 p = m_PrevViewProj * w;
+                if (p.w <= 1e-6f)
+                    return false;
+                const glm::vec2 shift = (glm::vec2(p) / p.w - c) * half;
+                if (std::abs(shift.x) > kStillPx || std::abs(shift.y) > kStillPx)
+                    return false;
+            }
+        return true;
+    }
+
     uint32_t PostProcessStack::RunStillHold(int owner, uint32_t source, uint32_t w, uint32_t h, uint32_t reactive, uint32_t motion, bool still, bool reset)
     {
         // Kamera dururken derinlik kenarlarında (ince boşluk, merdiven) zamansal yükselticinin çıktısının yavaş ortalaması ve kenar
@@ -2750,15 +2784,8 @@ namespace Conqueror
             m_FinalHasVelocity = RenderObjectVelocity(camera);
             m_FinalInvViewProj = glm::inverse(JitteredProjection(camera) * camera.View);
             m_FinalViewProj = camera.Projection * camera.View;
-            bool still = m_HasPrevViewProj;
             const glm::mat4 now = camera.Projection * camera.View;
-            for (int c = 0; c < 4 && still; ++c)
-                for (int r = 0; r < 4; ++r)
-                    if (std::abs(now[c][r] - m_PrevViewProj[c][r]) > 1e-6f * std::max(1.0f, std::abs(now[c][r])))
-                    {
-                        still = false;
-                        break;
-                    }
+            const bool still = IsCameraStill(now);
             m_CameraStill = still;
             // Görüntü köşeleri ve ortası uzak düzlemde: bu ve önceki karenin matrisiyle ekrandaki kayma (piksel)
             {
@@ -2818,15 +2845,8 @@ namespace Conqueror
             if (!t2xPrepared)
                 m_FinalHasVelocity = RenderObjectVelocity(camera);
             m_StabInvViewProj = glm::inverse(camera.Projection * camera.View);
-            bool still = m_HasPrevViewProj;
             const glm::mat4 now = camera.Projection * camera.View;
-            for (int c = 0; c < 4 && still; ++c)
-                for (int r = 0; r < 4; ++r)
-                    if (std::abs(now[c][r] - m_PrevViewProj[c][r]) > 1e-6f * std::max(1.0f, std::abs(now[c][r])))
-                    {
-                        still = false;
-                        break;
-                    }
+            const bool still = IsCameraStill(now);
             m_CameraStill = still;
         }
         else

@@ -156,17 +156,7 @@ namespace Conqueror
         // Işın gürültüsü (SSGI, SSR) her karede değişir (TAA ve kendi birikimleri ortalar). TAA olmayan kipte (FXAA, SMAA,
         // MSAA ...) bu değişim ortalanmıyordu: kamera dururken bile küplerin arası ve köşeler (dolaylı ışığın en etkili olduğu
         // yerler) kare kare yanıp sönüyordu. Titreşimsiz kipte kamera dururken desen sabit: görüntü kare kare aynı
-        bool cameraStill = m_HasPrevViewProj;
-        {
-            const glm::mat4 now = camera.Projection * camera.View;
-            for (int c = 0; c < 4 && cameraStill; ++c)
-                for (int r = 0; r < 4; ++r)
-                    if (std::abs(now[c][r] - m_PrevViewProj[c][r]) > 1e-6f * std::max(1.0f, std::abs(now[c][r])))
-                    {
-                        cameraStill = false;
-                        break;
-                    }
-        }
+        const bool cameraStill = IsCameraStill(camera.Projection * camera.View);
         const bool fixedNoise = !m_JitterActive && cameraStill;
         if (gi)
         {
@@ -647,17 +637,7 @@ namespace Conqueror
         // Kamera kıpırdamıyor (titreşimsiz görüş-izdüşüm önceki kareyle aynı): sabit yüzeylerin hareketi tam sıfır. Derinlikten
         // yeniden izdüşüm uzak yüzeylerde kayan nokta hatasıyla piksel altı "hareket" üretiyor, piksel durağan sayılmıyor,
         // geçmiş birikmiyor ve uzak kenarlar (duvar üstü, küplerin arası) titreşim döngüsüyle yanıp sönüyordu
-        bool cameraStill = m_HasPrevViewProj;
-        {
-            const glm::mat4 now = camera.Projection * camera.View;
-            for (int c = 0; c < 4 && cameraStill; ++c)
-                for (int r = 0; r < 4; ++r)
-                    if (std::abs(now[c][r] - m_PrevViewProj[c][r]) > 1e-6f * std::max(1.0f, std::abs(now[c][r])))
-                    {
-                        cameraStill = false;
-                        break;
-                    }
-        }
+        const bool cameraStill = IsCameraStill(camera.Projection * camera.View);
         m_CameraStill = cameraStill;
         shader->SetInt("u_CameraStill", cameraStill ? 1 : 0);
         // Kameranın bu ve önceki karedeki konumu: TAA yüzey noktasının bakış yönünün karede ne kadar döndüğüne bakar (kamera bir

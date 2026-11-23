@@ -179,6 +179,10 @@ namespace Conqueror
         bool RunFullScreenPass(const struct FullScreenPassEntry& pass, uint32_t source, RenderTarget& target, float time);
         RenderTarget m_AfterPass[2];
         glm::mat4 JitteredProjection(const RenderCamera& camera) const;
+        // Kamera bu karede duruyor mu: görüş-izdüşüm önceki kareyle aynı ya da ekrandaki kayma (köşeler ve merkez, ~2 m / ~20 m / uzak
+        // düzlemde) 0.05 pikselin altında (327 / 328: nişan / göz yüksekliği gibi üstel yaklaşan değerler kamerayı 50+ kare boyunca
+        // piksel altı oynatıyor, zamansal yöntemler bu sürede hareket yoluyla çizip küplerin arasını titretiyordu)
+        bool IsCameraStill(const glm::mat4& viewProj) const;
         void ReleaseEffectTargets();
 
         std::shared_ptr<Framebuffer> m_SceneFramebuffer;     // MSAA olabilir
