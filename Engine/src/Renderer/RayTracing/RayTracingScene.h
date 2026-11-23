@@ -37,10 +37,13 @@ namespace Conqueror
         CQ_API uint32_t CompileCompute(const std::string& name, const std::string& localSize, const std::string& body);
         // Sahneyi günceller: değişen örnekler için TLAS, yeni / değişen meshler için BLAS. wait: bekleyen BLAS yapımları bitene dek
         // bekler (Path Tracer eksik geometriyle örnek biriktirmesin); false: hazır olmayan mesh bu karede yok sayılır (Ray Traced GI)
-        CQ_API const Stats& Update(Scene& scene, bool wait = true);
+        // textures: malzeme renk dokuları atlasa kopyalanır (Path Tracer birincil isabette örnekler; Ray Traced GI ortalamayı kullanır)
+        CQ_API const Stats& Update(Scene& scene, bool wait = true, bool textures = false);
         CQ_API const Stats& GetStats();
         // Programa sahne + ışık + gökyüzü bağlar (SSBO 0-7; küpler bgUnit / lightUnit, doku ortalamaları avgUnit);
         // dönüş: ışık / ortam özeti (değişim algılama)
         CQ_API uint64_t Bind(uint32_t program, int bgUnit = 0, int lightUnit = 1, int avgUnit = 2);
+        // 315: path tracer'ın birincil isabette örneklediği renk dokusu sayısı (atlastaki dolu döşeme; 0: desteklenmiyor / yok)
+        CQ_API int GetTextureLayerCount();
     }
 }

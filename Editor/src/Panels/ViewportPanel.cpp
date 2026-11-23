@@ -319,7 +319,9 @@ namespace Conqueror::Editor
         {
             // 315: Path Tracing, Unreal'daki gibi sahnenin pozlaması, ton eşleyicisi, renk derecelendirmesi ve bloom'uyla gösterilir;
             // eskiden son işleme tamamen kapalıydı, HDR görüntü ton eşlemesiz kırpılıp soluk ve aşırı parlak çıkıyordu. Işın izlemenin
-            // zaten hesapladığı ekran uzayı efektleri (AO, yansıma, GI) ve kendi birikimiyle çakışan zamansal AA / yükseltme kapalı
+            // zaten hesapladığı ekran uzayı efektleri (AO, yansıma, GI) ve kendi birikimiyle çakışan zamansal AA / yükseltme kapalı.
+            // Hacimsel bulutlar açık kalır: yalnız gökyüzü piksellerine (raster derinliği uzak düzlemde) çizilir, path tracer'ın arka planı
+            // bulutsuz gökyüzü küpüdür (Unreal'ın path tracer'ı da bulutları gösterir)
             post.AntiAliasing = AntiAliasingMode::None;
             post.Upscaler = UpscalerMode::None;
             post.TemporalStability = false;
@@ -328,7 +330,6 @@ namespace Conqueror::Editor
             post.ScreenSpaceGI = false;
             post.RayTracedGI = false;
             post.VolumetricFog = false;
-            post.VolumetricClouds = false;
             post.MotionBlur = false;
         }
         // 317: Ambient Occlusion görünümü malzeme AO'su x ekran uzayı AO (SSAO) gösterir; eskiden yalnız malzeme AO dokusu çıkıyordu

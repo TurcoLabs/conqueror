@@ -2,15 +2,20 @@
 # 315: Path Tracing görünümü son işlemeyi tamamen kapatıyordu: HDR görüntü ton eşlemesiz kırpılıyor, sahnenin pozlaması uygulanmıyor,
 # görüntü soluk ve aşırı parlak çıkıyordu (ortalama parlaklık 200, normal görünüm 159). Şimdi Unreal'daki gibi pozlama / ton eşleme /
 # renk derecelendirmesi uygulanır (ortalama 172; ışın izlemenin hesapladığı AO / yansıma / GI ve zamansal AA kapalı). Pozlama -2 EV
-# yapılınca görüntü belirgin kararmalı (eskiden hiç değişmiyordu)
+# yapılınca görüntü belirgin kararmalı (eskiden hiç değişmiyordu). Birincil isabette malzeme dokuları örneklenir (eskiden yalnız dokunun
+# ortalama rengi: zemin düz beyazdı; dokular 2D atlasta, çeviri katmanlarında da): atlas dolu, görüntü siyah değil. Gökyüzünde
+# hacimsel bulutlar görünür (eskiden Path Tracing görünümünde bulutsuz düz renk geçişi: ayrıntı ~0.15, bulutlu ~0.6)
 wait_until 3000 layout_settled
 wait 10
 focus Viewport
 camera 16 10 0 -1.5 1.5 2
 shading pathtracing
-pathtracer spp 4
-wait 150
+pathtracer spp 8
+wait 250
 viewport_region 0.1 0.1 0.9 0.6 lum mean <185
+viewport_region 0.1 0.1 0.9 0.6 lum mean >120
+pathtracer expect_texture_layers >0
+viewport_region 0.2 0.88 0.85 0.99 lum detail >0.4
 cvar r.Exposure -2
 pathtracer reset
 wait 150

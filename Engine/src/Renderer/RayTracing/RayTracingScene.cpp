@@ -39,7 +39,14 @@ namespace Conqueror
         struct Node { glm::vec4 Min, Max; };
         // Albedo: rgb doğrusal renk, a temel kapsama (saydamlık); Emission: rgb ışıma, w ışıma dokusu ortalama yuvası (-1 yok);
         // Params: x metal, y pürüz, z bayraklar (1 iki yüzlü, 2 Cutout / saydam), w renk dokusu ortalama yuvası (-1 yok)
-        struct Mat { glm::vec4 Albedo, Emission, Params; };
+        // UV: xy Tiling, zw Offset; Tex: x renk dokusunun atlastaki döşemesi (-1 yok; 315: birincil isabette doku örneklenir)
+        // Params.z bayrakları ayrıca 4 dünya hizalı UV, 8 nesne uzayında hizalı UV
+        struct Mat
+        {
+            glm::vec4 Albedo{ 1.0f }, Emission{ 0.0f, 0.0f, 0.0f, -1.0f }, Params{ 0.0f, 0.5f, 0.0f, -1.0f };
+            glm::vec4 UV{ 1.0f, 1.0f, 0.0f, 0.0f }, Tex{ -1.0f, 0.0f, 0.0f, 0.0f };
+        };
+        static_assert(sizeof(Mat) == 80, "Mat must match std430");
         // Örnek: dünya ve ters dünya matrisinin satırları (3x4); Info: x BLAS kök düğümü, y malzeme, z üçgen sayısı
         struct Inst { glm::vec4 W0, W1, W2; glm::vec4 I0, I1, I2; glm::ivec4 Info; };
         static_assert(sizeof(Inst) == 112, "Inst must match std430");
@@ -48,7 +55,7 @@ namespace Conqueror
         const char* kCommonGLSL = R"(
 struct Tri { vec4 V0, V1, V2, N0, N1, N2; };
 struct Node { vec4 Min, Max; };
-struct Mat { vec4 Albedo, Emission, Params; };
+struct Mat { vec4 Albedo, Emission, Params, UV, Tex; };
 struct Inst { vec4 W0, W1, W2, I0, I1, I2; ivec4 Info; };
 struct PointL { vec4 PositionRange, ColorIntensity, Attenuation, Profile0, Profile1; };
 struct SpotL { vec4 PositionRange, ColorIntensity, DirectionCosOuter, AttenuationCosInner, Profile0, Profile1; };
@@ -69,6 +76,9 @@ uniform ivec3 u_LightCounts;    // nokta, spot, alan
 uniform samplerCube u_BgCube;
 uniform samplerCube u_LightCube;
 uniform sampler2D u_TexAvg;     // malzeme dokularının ortalaması (x: yuva), doğrusal renk + alfa
+uniform sampler2D u_TexAtlas;   // 315: renk dokularının 256 x 256 kopyaları, 8 x 8 döşemeli atlas (doğrusal, mipmap'li; döşeme Mat.Tex.x)
+uniform float u_PixelAngle;     // piksel başına açı (radyan): doku mip seviyesi için ışın konisi
+bool g_TexDetail = false;       // 315: birincil isabette dokunun kendisi örneklenir (sekmelerde ortalaması)
 uniform ivec4 u_SkyFlags;       // x arka plan küpü var, y aydınlatma küpü var, z ortam kaynağı (0 gökyüzü, 1 renk, 2 gradyan), w gökyüzü çizilir
 uniform vec4 u_BgTintExposure;
 uniform vec2 u_SkyRot;          // cos, sin (skybox dönüşü)
@@ -84,6 +94,16 @@ float rnd() { s_Seed ^= s_Seed << 13; s_Seed ^= s_Seed >> 17; s_Seed ^= s_Seed <
 int g_HitInst = -1;             // son trace isabetinin örneği
 
 vec4 texAvg(float slot) { return slot >= 0.0 ? texelFetch(u_TexAvg, ivec2(int(slot), 0), 0) : vec4(1.0); }
+// Atlas döşemesinden tekrarlı (REPEAT) örnek: döşeme içi konum, kullanılan en kaba mip seviyesinin yarım texel'i kadar içeride
+// tutulur (komşu döşeme sızmaz). Dizi doku yerine atlas: GL çeviri katmanları (Vulkan / D3D / Metal / WebGPU) 2D dokuyu destekler
+vec3 atlasTex(float tile, vec2 uv, float lod)
+{
+    lod = clamp(lod, 0.0, 7.0);
+    vec2 cell = vec2(mod(tile, 8.0), floor(tile / 8.0));
+    float texels = 256.0 / exp2(ceil(lod));
+    vec2 f = clamp(fract(uv), vec2(0.5 / texels), vec2(1.0 - 0.5 / texels));
+    return textureLod(u_TexAtlas, (cell + f) / 8.0, lod).rgb;
+}
 
 // Kutuya giriş uzaklığı (ıskalarsa 1e30)
 float boxEntry(vec3 o, vec3 inv, vec3 mn, vec3 mx, float tMax)
@@ -251,10 +271,52 @@ Hit hitInfo(int ti, vec3 o, vec3 d, float t, vec2 bc)
     h.Back = dot(h.Ng, d) > 0.0;
     if (h.Back) h.Ng = -h.Ng;
     if (dot(h.N, h.Ng) < 0.0) h.N = -h.N;
-    m.Albedo.rgb *= texAvg(m.Params.w).rgb;
+    h.P = o + d * t;
+    vec3 albedoTex = texAvg(m.Params.w).rgb;
+    if (g_TexDetail && m.Tex.x >= 0.0)
+    {
+        // 315: ham görüntüdeki gibi UV (Tiling / Offset), dünya / nesne hizalı malzemede üç eksenli izdüşüm. Mip seviyesi ışın konisinden:
+        // isabetteki piksel boyu (t x piksel açısı) x metre başına texel
+        int flags = int(m.Params.z + 0.5);
+        float footprint = t * u_PixelAngle;
+        if ((flags & 12) != 0)
+        {
+            vec3 pos = h.P, nrm = h.N;
+            if ((flags & 8) != 0)
+            {
+                // Nesne uzayı: üçgenin yerel konumu, ölçek korunur (dönüşsüz)
+                vec3 lp = tr.V0.xyz * (1.0 - bc.x - bc.y) + tr.V1.xyz * bc.x + tr.V2.xyz * bc.y;
+                vec3 sc = vec3(1.0 / max(length(I0.xyz), 1e-6), 1.0 / max(length(I1.xyz), 1e-6), 1.0 / max(length(I2.xyz), 1e-6));
+                pos = lp * sc;
+                nrm = normalize(n);
+            }
+            vec3 w = pow(abs(nrm), vec3(8.0));
+            w /= max(w.x + w.y + w.z, 1e-5);
+            vec3 pp = pos * vec3(m.UV.x, m.UV.y, m.UV.x);
+            float lod = log2(max(footprint * 256.0 * max(m.UV.x, m.UV.y), 1.0));
+            vec3 c = atlasTex(m.Tex.x, pp.zy + m.UV.zw, lod) * w.x
+                   + atlasTex(m.Tex.x, pp.xz + m.UV.zw, lod) * w.y
+                   + atlasTex(m.Tex.x, pp.xy + m.UV.zw, lod) * w.z;
+            albedoTex = c;
+        }
+        else
+        {
+            vec2 uv0 = vec2(tr.V0.w, tr.N0.w), uv1 = vec2(tr.V1.w, tr.N1.w), uv2 = vec2(tr.V2.w, tr.N2.w);
+            vec2 uv = (uv0 * (1.0 - bc.x - bc.y) + uv1 * bc.x + uv2 * bc.y) * m.UV.xy + m.UV.zw;
+            // Metre başına UV: üçgenin UV alanı / dünya alanı (örneğin ölçeği ters matrisin satırlarından)
+            vec3 e1 = tr.V1.xyz - tr.V0.xyz, e2 = tr.V2.xyz - tr.V0.xyz;
+            float scale = 3.0 / max(1.0 / max(length(I0.xyz), 1e-6) + 1.0 / max(length(I1.xyz), 1e-6) + 1.0 / max(length(I2.xyz), 1e-6), 1e-6);
+            float worldArea = length(cross(e1, e2)) / max(scale * scale, 1e-12);
+            vec2 f1 = (uv1 - uv0) * m.UV.xy, f2 = (uv2 - uv0) * m.UV.xy;
+            float uvArea = abs(f1.x * f2.y - f1.y * f2.x);
+            float uvPerMeter = sqrt(uvArea / max(worldArea, 1e-12));
+            float lod = log2(max(footprint * 256.0 * uvPerMeter, 1.0));
+            albedoTex = atlasTex(m.Tex.x, uv, lod);
+        }
+    }
+    m.Albedo.rgb *= albedoTex;
     m.Emission.rgb *= texAvg(m.Emission.w).rgb;
     h.M = m;
-    h.P = o + d * t;
     return h;
 }
 
@@ -538,6 +600,22 @@ void main()
 }
 )";
 
+        // 315: renk dokusunu atlasın bir döşemesine 256 x 256 yeniden örnekler (örnekleyici sRGB'yi açar: doğrusal)
+        const char* kTexResampleGLSL = R"(#version 450 core
+layout(local_size_x = 8, local_size_y = 8) in;
+uniform sampler2D u_Tex;
+uniform float u_Lod;
+uniform ivec2 u_Base;
+layout(rgba16f, binding = 0) uniform writeonly image2D u_Out;
+void main()
+{
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (p.x >= 256 || p.y >= 256)
+        return;
+    imageStore(u_Out, u_Base + p, textureLod(u_Tex, (vec2(p) + 0.5) / 256.0, u_Lod));
+}
+)";
+
         // Motorun malzeme renkleri sRGB (shader SRGBToLinear ile açar)
         float SRGB(float c) { c = std::max(c, 0.0f); return c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f); }
         glm::vec3 SRGB(const glm::vec3& c) { return { SRGB(c.x), SRGB(c.y), SRGB(c.z) }; }
@@ -693,6 +771,7 @@ void main()
         {
             std::vector<glm::vec3> Positions;
             std::vector<glm::vec3> Normals;
+            std::vector<glm::vec2> UVs;      // 315: birincil isabette doku örneklemesi (üçgenin V*.w / N*.w alanlarında)
             std::vector<uint32_t> Indices;
         };
 
@@ -717,9 +796,11 @@ void main()
                     const glm::vec3 n = k < in.Normals.size() ? in.Normals[k] : fn;
                     return glm::dot(n, n) > 1e-12f ? glm::normalize(n) : fn;
                 };
+                auto uvOf = [&](uint32_t k) { return k < in.UVs.size() ? in.UVs[k] : glm::vec2(0.0f); };
+                const glm::vec2 u0 = uvOf(a), u1 = uvOf(b), u2 = uvOf(c);
                 Tri t;
-                t.V0 = glm::vec4(p0, 0.0f); t.V1 = glm::vec4(p1, 0.0f); t.V2 = glm::vec4(p2, 0.0f);
-                t.N0 = glm::vec4(nrm(a), 0.0f); t.N1 = glm::vec4(nrm(b), 0.0f); t.N2 = glm::vec4(nrm(c), 0.0f);
+                t.V0 = glm::vec4(p0, u0.x); t.V1 = glm::vec4(p1, u1.x); t.V2 = glm::vec4(p2, u2.x);
+                t.N0 = glm::vec4(nrm(a), u0.y); t.N1 = glm::vec4(nrm(b), u1.y); t.N2 = glm::vec4(nrm(c), u2.y);
                 out->Tris.push_back(t);
                 prims.push_back({ glm::min(p0, glm::min(p1, p2)), glm::max(p0, glm::max(p1, p2)) });
             }
@@ -746,7 +827,8 @@ void main()
             {
                 in.Positions.resize(vs.size());
                 in.Normals.resize(vs.size());
-                for (size_t i = 0; i < vs.size(); ++i) { in.Positions[i] = vs[i].Position; in.Normals[i] = vs[i].Normal; }
+                in.UVs.resize(vs.size());
+                for (size_t i = 0; i < vs.size(); ++i) { in.Positions[i] = vs[i].Position; in.Normals[i] = vs[i].Normal; in.UVs[i] = vs[i].TexCoords; }
                 in.Indices = is;
                 return in;
             }
@@ -765,6 +847,7 @@ void main()
                 {
                     in.Positions.push_back(glm::vec3(m * glm::vec4(v.Position, 1.0f)));
                     in.Normals.push_back(nm * v.Normal);
+                    in.UVs.push_back(v.TexCoords);
                 }
                 for (uint32_t idx : is)
                     in.Indices.push_back(base + idx);
@@ -862,12 +945,18 @@ void main()
             bool AvgTried = false;
             std::unordered_map<const Texture2D*, TexAvgEntry> Averages;
             int NextSlot = 0;
+            // 315: renk dokularının atlası (birincil isabette örneklenir; Path Tracer istediğinde kurulur, Ray Traced GI ortalamayla yetinir)
+            GLuint TexAtlas = 0, ResampleProgram = 0;
+            bool AtlasTried = false, AtlasDirty = false, WantTextures = false;
+            std::unordered_map<const Texture2D*, TexAvgEntry> AtlasTiles;
+            int NextTile = 0;
         };
         State& S() { static auto& s = *new State(); return s; }
 
         ThreadPool& Pool() { static auto& p = *new ThreadPool(2); return p; }
 
         constexpr int kAvgSlots = 4096;
+        constexpr int kAtlasTiles = 64;       // 8 x 8 döşeme x 256 x 256 RGBA16F (2048 x 2048 + mip: ~43 MB)
         constexpr uint32_t kSyncTriangles = 4096;        // bundan küçük BLAS ana iş parçacığında hemen dizilir
         constexpr size_t kMultiMeshMaxTriangles = 2000000;
 
@@ -971,6 +1060,95 @@ void main()
             return (float)slot;
         }
 
+        // 315: renk dokusunun atlastaki döşemesi (-1: doku yok / yer kalmadı / desteklenmiyor). Yeni dokuda GPU'da yeniden örneklenir
+        float AtlasTile(const std::shared_ptr<Texture2D>& tex)
+        {
+            State& s = S();
+            if (!s.WantTextures || !tex || !tex->GetRendererID())
+                return -1.0f;
+            auto it = s.AtlasTiles.find(tex.get());
+            if (it != s.AtlasTiles.end() && !it->second.Source.expired() && it->second.Id == tex->GetRendererID())
+                return (float)it->second.Slot;
+            if (!s.AtlasTried)
+            {
+                s.AtlasTried = true;
+                GLuint sh = GLProfile::RawComputeShaders() ? glCreateShader(GL_COMPUTE_SHADER) : 0;
+                GLint ok = 0;
+                if (sh)
+                {
+                    glShaderSource(sh, 1, &kTexResampleGLSL, nullptr);
+                    glCompileShader(sh);
+                    glGetShaderiv(sh, GL_COMPILE_STATUS, &ok);
+                }
+                if (ok)
+                {
+                    s.ResampleProgram = glCreateProgram();
+                    glAttachShader(s.ResampleProgram, sh);
+                    glLinkProgram(s.ResampleProgram);
+                    glGetProgramiv(s.ResampleProgram, GL_LINK_STATUS, &ok);
+                    if (!ok) { glDeleteProgram(s.ResampleProgram); s.ResampleProgram = 0; }
+                }
+                if (sh)
+                    glDeleteShader(sh);
+                if (s.ResampleProgram)
+                {
+                    glCreateTextures(GL_TEXTURE_2D, 1, &s.TexAtlas);
+                    glTextureStorage2D(s.TexAtlas, 9, GL_RGBA16F, 2048, 2048);
+                    glTextureParameteri(s.TexAtlas, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+                    glTextureParameteri(s.TexAtlas, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                    glTextureParameteri(s.TexAtlas, GL_TEXTURE_WRAP_S, GL_REPEAT);
+                    glTextureParameteri(s.TexAtlas, GL_TEXTURE_WRAP_T, GL_REPEAT);
+                }
+                else
+                    CQ_CORE_WARN("[Ray Tracing] texture resample shader failed: path tracing uses average material colours");
+            }
+            if (!s.ResampleProgram || !s.TexAtlas)
+                return -1.0f;
+            int layer = -1;
+            if (it != s.AtlasTiles.end())
+                layer = it->second.Slot;
+            else if (s.NextTile < kAtlasTiles)
+                layer = s.NextTile++;
+            else
+            {
+                for (auto e = s.AtlasTiles.begin(); e != s.AtlasTiles.end();)
+                {
+                    if (e->second.Source.expired()) { layer = e->second.Slot; e = s.AtlasTiles.erase(e); break; }
+                    ++e;
+                }
+                if (layer < 0)
+                    return -1.0f;
+            }
+            const GLuint id = tex->GetRendererID();
+            GLint w = 0, h = 0, w1 = 0;
+            glGetTextureLevelParameteriv(id, 0, GL_TEXTURE_WIDTH, &w);
+            glGetTextureLevelParameteriv(id, 0, GL_TEXTURE_HEIGHT, &h);
+            glGetTextureLevelParameteriv(id, 1, GL_TEXTURE_WIDTH, &w1);
+            const bool mips = w1 > 0;
+            const float lod = mips ? std::max(0.0f, std::log2((float)std::max(std::max(w, h), 1) / 256.0f)) : 0.0f;
+            EnsureAverages(s);   // örnekleyiciler
+            glUseProgram(s.ResampleProgram);
+            glUniform1i(glGetUniformLocation(s.ResampleProgram, "u_Tex"), 0);
+            glUniform1f(glGetUniformLocation(s.ResampleProgram, "u_Lod"), lod);
+            glUniform2i(glGetUniformLocation(s.ResampleProgram, "u_Base"), (layer % 8) * 256, (layer / 8) * 256);
+            GLint prevUnit = 0;
+            glGetIntegerv(GL_ACTIVE_TEXTURE, &prevUnit);
+            glBindTextureUnit(0, id);
+            glBindSampler(0, mips ? s.AvgSampler : s.AvgSamplerNoMip);
+            glBindImageTexture(0, s.TexAtlas, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA16F);
+            glDispatchCompute(32, 32, 1);
+            glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT | GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+            glBindSampler(0, 0);
+            glBindImageTexture(0, 0, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA16F);
+            glActiveTexture((GLenum)prevUnit);
+            s.AtlasDirty = true;   // mip zinciri bir sonraki bağlamada yenilenir
+            TexAvgEntry& e = s.AtlasTiles[tex.get()];
+            e.Source = tex;
+            e.Id = id;
+            e.Slot = layer;
+            return (float)layer;
+        }
+
         Mat MakeMat(const Material& m)
         {
             Mat out;
@@ -993,7 +1171,12 @@ void main()
                 out.Emission = glm::vec4(glm::vec3(out.Albedo) + glm::vec3(out.Emission), AverageSlot(m.AlbedoMap));
                 out.Albedo = glm::vec4(0.0f, 0.0f, 0.0f, out.Albedo.a);
             }
+            if (m.WorldAligned)
+                flags |= m.AlignToObject ? 8 : 4;
             out.Params = glm::vec4(std::clamp(m.Metallic, 0.0f, 1.0f), std::clamp(m.Roughness, 0.02f, 1.0f), (float)flags, AverageSlot(m.AlbedoMap));
+            out.UV = glm::vec4(m.Tiling, m.Offset);
+            if (m.Shading != Material::ShadingModel::Unlit)
+                out.Tex = glm::vec4(AtlasTile(m.AlbedoMap), 0.0f, 0.0f, 0.0f);
             return out;
         }
 
@@ -1103,10 +1286,11 @@ void main()
             return prog;
         }
 
-        const Stats& Update(Scene& scene, bool wait)
+        const Stats& Update(Scene& scene, bool wait, bool textures)
         {
             State& s = S();
             ++s.Frame;
+            s.WantTextures |= textures;   // bir kez istenince açık kalır (Path Tracer ile Ray Traced GI aynı karede malzemeyi değiştirmesin)
             auto& reg = scene.m_Registry;
 
             // Bu karenin örnekleri: (BLAS anahtarı, dünya matrisi, malzeme)
@@ -1345,6 +1529,14 @@ void main()
             return s.Info;
         }
 
+        int GetTextureLayerCount()
+        {
+            int n = 0;
+            for (const auto& [tex, e] : S().AtlasTiles)
+                n += e.Source.expired() ? 0 : 1;
+            return S().TexAtlas ? n : 0;
+        }
+
         uint64_t Bind(uint32_t program, int bgUnit, int lightUnit, int avgUnit)
         {
             State& s = S();
@@ -1428,6 +1620,16 @@ void main()
             glUniform1i(U("u_BgCube"), bgUnit);
             glUniform1i(U("u_LightCube"), lightUnit);
             glUniform1i(U("u_TexAvg"), avgUnit);
+            if (s.TexAtlas && U("u_TexAtlas") >= 0)
+            {
+                if (s.AtlasDirty)
+                {
+                    glGenerateTextureMipmap(s.TexAtlas);
+                    s.AtlasDirty = false;
+                }
+                glUniform1i(U("u_TexAtlas"), avgUnit + 1);
+                glBindTextureUnit((GLuint)(avgUnit + 1), s.TexAtlas);
+            }
             glBindTextureUnit((GLuint)bgUnit, bgCube);
             glBindTextureUnit((GLuint)lightUnit, lightCube);
             glBindTextureUnit((GLuint)avgUnit, s.AvgTexture);
