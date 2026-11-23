@@ -4,6 +4,8 @@
 #include "Scene/Foliage.h"
 #include "Scene/AnimationAssets.h"
 #include "Renderer/RayTracing/RayTracedGI.h"
+#include "Renderer/RayTracing/RayTracedEffects.h"
+#include "Renderer/RayTracing/RayTracingScene.h"
 #include "Scene/FogVolume.h"
 #include "AISystem/Navigation/Navigation2D.h"
 #include "Renderer/Utilities/Renderer3D/ClusterRenderer.h"
@@ -3353,6 +3355,15 @@ namespace Conqueror
         const bool giView = !m_CapturingProbes && !m_RenderingPlanar;
         if (giView)
             RayTracedGI::Update(*this, camera, env.Settings.Post, s_GISecondaryView ? 1u : (editorView ? 0u : 1u), !s_GISecondaryView);
+        // 316: ışın izlemeli yansıma / AO bu görünümün son işlemesinde sahne BVH'sini izler (hazır olmayan büyük meshler beklenmez;
+        // yansımada isabetin dokusu örneklenir)
+        {
+            const PostProcessSettings& pp = env.Settings.Post;
+            const bool rtReflections = pp.Enabled && pp.ScreenSpaceReflections && pp.RayTracedReflections;
+            const bool rtAO = pp.Enabled && pp.AmbientOcclusion && pp.RayTracedAO;
+            if (giView && (rtReflections || rtAO) && RayTracedEffects::Supported())
+                RayTracingScene::Update(*this, false, rtReflections);
+        }
         // Fog Volume: bu görünümün hacimsel sis geçişi (son işlem) yerel yoğunlukları okur
         if (giView)
             FogVolumes::Collect(*this);

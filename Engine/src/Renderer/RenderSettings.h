@@ -174,6 +174,11 @@ namespace Conqueror
         float AORadius = 0.6f;
         float AOIntensity = 1.0f;
         float AOPower = 1.5f;
+        // Ray Traced Ambient Occlusion (316; Unity HDRP Ray-Traced Ambient Occlusion, Unreal ray traced AO): AO rays traced against
+        // the scene BVH instead of the depth buffer (no screen edge loss, occluders outside the view count). Same radius / intensity /
+        // power as SSAO; needs compute shaders
+        bool RayTracedAO = false;
+        int RTAORays = 4;                 // rays per pixel (half resolution, then the SSAO blur)
 
         bool ColorGrading = true;
         float Contrast = 1.0f;
@@ -219,6 +224,11 @@ namespace Conqueror
         float SSRMaxDistance = 40.0f;     // world units
         float SSRThickness = 0.5f;        // surface thickness tolerance
         float SSRMaxRoughness = 0.6f;     // rougher surfaces do not reflect
+        // Ray Traced Reflections (316; Unity HDRP Ray-Traced Reflections, Unreal ray traced reflections): reflection rays are traced
+        // against the scene BVH (Renderer/RayTracing/RayTracedEffects.h) instead of the screen, so objects outside the view or behind
+        // others reflect too. Hits that are visible on screen use the lit scene colour (Unity HDRP "Mixed" tracing). Uses the SSR
+        // intensity / distance / roughness settings and replaces the screen traces; needs compute shaders
+        bool RayTracedReflections = false;
 
         // Ray Traced GI (Lumen-style dynamic global illumination; Renderer/RayTracing/RayTracedGI.h): light probes around
         // the camera trace rays into the scene (sky, direct light, emissive surfaces, multi-bounce); replaces ambient light

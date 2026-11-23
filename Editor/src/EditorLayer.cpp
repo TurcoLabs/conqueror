@@ -134,6 +134,7 @@
 #include "Renderer/AntiAliasing.h"
 #include "Renderer/GraphicsAPIs/GLEmu/GLEmuCommon.h"
 #include "Renderer/RayTracing/RayTracingScene.h"
+#include "Renderer/RayTracing/RayTracedEffects.h"
 #include "Renderer/UpscalerSelfTest.h"
 #include "Renderer/Upscalers/VkGLInterop.h"
 #include "Renderer/Upscalers/DLSSUpscaler.h"
@@ -6836,6 +6837,19 @@ namespace Conqueror::Editor
             Automation::Report(report);
             return true;
         };
+        // raytraced_effects <reflections|ao> <cond>: son karede ışın izlemeli yansıma / AO'nun izlediği piksel sayısı (316; ">0" çalışıyor)
+        Automation::RegisterCommand("raytraced_effects", [](const Args& a, std::string& err) {
+            if (a.size() < 3) { err = "raytraced_effects <reflections|ao> <N|>N|<N>"; return false; }
+            uint32_t refl = 0, ao = 0;
+            RayTracedEffects::GetLastCounts(refl, ao);
+            const int n = (int)(a[1] == "ao" ? ao : refl);
+            Automation::Report("RAYTRACED " + a[1] + " pixels = " + std::to_string(n));
+            const std::string& c = a[2];
+            const int v = std::atoi(c.c_str() + ((c[0] == '>' || c[0] == '<') ? 1 : 0));
+            const bool ok = c[0] == '>' ? n > v : c[0] == '<' ? n < v : n == v;
+            if (!ok) { err = a[1] + " pixels " + std::to_string(n); return false; }
+            return true;
+        });
         Automation::RegisterCommand("game_region", [this, regionProbe](const Args& a, std::string& err) {
             return regionProbe(m_GamePanel ? m_GamePanel->GetFramebuffer() : nullptr, a, err);
         });

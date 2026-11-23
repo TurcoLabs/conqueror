@@ -1,0 +1,40 @@
+# template: fps
+# matrix: CQ_RENDERER=opengl vulkan
+# 316: ışın izlemeli yansıma ve AO (Unity HDRP Ray-Traced Reflections / Ambient Occlusion, Unreal'ın ışın izlemeli yansıma ve AO'su).
+# Path Tracing ile Ray Traced GI'nin sahne BVH'si son işlemede de izlenir. Yansıma: piramidin önünde ayna gibi bir zemin (metal, pürüz
+# 0.02), kameranın görüş alanının üstünde (ekranda yok) kırmızı bir kutu. Ekran uzayı yansıma (SSR) ekranda olmayanı yansıtamaz: aynanın
+# o bölgesi koyu lacivert (kırmızı baskınlık -51); Ray Traced açılınca kutu aynada kırmızı görünür (+67). AO görünümü: piramidin
+# tabanı boyunca zemin, SSAO'da neredeyse beyaz (239), ışın izlemeli AO'da temas gölgesi (195); açık zemin ikisinde de beyaz (255)
+wait_until 3000 layout_settled
+wait 10
+focus Viewport
+create_primitive plane Mirror 0 0.02 0
+entity scale Mirror 6 1 6
+comp set Mirror MeshRenderer Roughness 0.02
+comp set Mirror MeshRenderer Metallic 1
+comp set Mirror MeshRenderer Color 0.9 0.9 0.9 1
+create_primitive cube RedBox 0 6 -10
+entity scale RedBox 6 3 2
+comp set RedBox MeshRenderer Color 1 0 0 1
+camera 7 45 0 0 0 0
+cvar r.SSR 1
+cvar r.AntiAliasing 1
+wait 90
+viewport_region 0.40 0.55 0.70 0.85 red mean <0
+cvar r.RTReflections 1
+wait 90
+raytraced_effects reflections >0
+viewport_region 0.40 0.55 0.70 0.85 red mean >30
+cvar r.RTReflections 0
+cvar r.SSR 0
+shading ao
+wait 60
+viewport_region 0.05 0.03 0.55 0.13 lum mean >225
+cvar r.RTAO 1
+wait 60
+raytraced_effects ao >0
+viewport_region 0.05 0.03 0.55 0.13 lum mean <215
+viewport_region 0.75 0.10 0.95 0.30 lum mean >245
+cvar r.RTAO 0
+shading shaded
+quit

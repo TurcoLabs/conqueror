@@ -991,6 +991,9 @@ namespace Conqueror
         out << YAML::Key << "SSRMaxDistance" << YAML::Value << pp.SSRMaxDistance;
         out << YAML::Key << "SSRThickness" << YAML::Value << pp.SSRThickness;
         out << YAML::Key << "SSRMaxRoughness" << YAML::Value << pp.SSRMaxRoughness;
+        out << YAML::Key << "RayTracedReflections" << YAML::Value << pp.RayTracedReflections;
+        out << YAML::Key << "RayTracedAO" << YAML::Value << pp.RayTracedAO;
+        out << YAML::Key << "RTAORays" << YAML::Value << pp.RTAORays;
         out << YAML::Key << "RayTracedGI" << YAML::Value << pp.RayTracedGI;
         out << YAML::Key << "RTGIIntensity" << YAML::Value << pp.RTGIIntensity;
         out << YAML::Key << "RTGIProbeSpacing" << YAML::Value << pp.RTGIProbeSpacing;
@@ -1218,6 +1221,9 @@ namespace Conqueror
             ReadIf(pp, "SSRMaxDistance", p.SSRMaxDistance);
             ReadIf(pp, "SSRThickness", p.SSRThickness);
             ReadIf(pp, "SSRMaxRoughness", p.SSRMaxRoughness);
+            ReadIf(pp, "RayTracedReflections", p.RayTracedReflections);
+            ReadIf(pp, "RayTracedAO", p.RayTracedAO);
+            ReadIf(pp, "RTAORays", p.RTAORays);
             ReadIf(pp, "RayTracedGI", p.RayTracedGI);
             ReadIf(pp, "RTGIIntensity", p.RTGIIntensity);
             ReadIf(pp, "RTGIProbeSpacing", p.RTGIProbeSpacing);
