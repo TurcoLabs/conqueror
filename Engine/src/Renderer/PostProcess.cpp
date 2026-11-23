@@ -226,6 +226,7 @@ namespace Conqueror
     PostProcessStack::~PostProcessStack()
     {
         DestroyTarget(m_AO);
+        DestroyTarget(m_AOFull);
         DestroyTarget(m_AfterPass[0]);
         DestroyTarget(m_AfterPass[1]);
         DestroyTarget(m_AOBlur);
@@ -388,8 +389,13 @@ namespace Conqueror
 
         const uint32_t halfW = std::max(width / 2, 1u);
         const uint32_t halfH = std::max(height / 2, 1u);
+        // 326: SSAO tam çözünürlükte (Godot'nun / HDRP'nin "Full Resolution" seçeneği, Unreal'ın tam çözünürlükte birleştirmesi gibi).
+        // Yarım çözünürlükte gürültünün deseni ekranda iki kat büyüyor, onu silen bulanıklaştırma ~10 piksele yayılıyordu: AO görünümünde
+        // uzaktaki küplerin ve merdivenin çevresi bulanık ve gri haleliydi. Işın izlemeli AO (ışın başına pahalı) yarım çözünürlükte kalır;
+        // ikisi de derinliğe duyarlı büyütülür (Include/AOUpsample.glsl)
         CreateTarget(m_AO, halfW, halfH, GL_R8);
-        CreateTarget(m_AOBlur, halfW, halfH, GL_R8);
+        CreateTarget(m_AOFull, width, height, GL_R8);
+        CreateTarget(m_AOBlur, width, height, GL_R8);
 
         for (auto& rt : m_BloomMips) DestroyTarget(rt);
         for (auto& rt : m_BloomUp) DestroyTarget(rt);
@@ -1531,8 +1537,9 @@ namespace Conqueror
             ain.Frame = m_JitterActive ? m_FrameIndex : 0u;
             traced = RayTracedEffects::TraceAO(ain, m_AO.Texture);
         }
-        glBindFramebuffer(GL_FRAMEBUFFER, m_AO.Framebuffer);
-        glViewport(0, 0, m_AO.Width, m_AO.Height);
+        const RenderTarget& aoSource = traced ? m_AO : m_AOFull;
+        glBindFramebuffer(GL_FRAMEBUFFER, aoSource.Framebuffer);
+        glViewport(0, 0, aoSource.Width, aoSource.Height);
         if (!traced)
         {
             ssao->Bind();
@@ -1548,12 +1555,20 @@ namespace Conqueror
             PostProcess::DrawFullscreenQuad();
         }
 
+        EnsureTarget(m_AOBlur, aoSource.Width, aoSource.Height, GL_R8);
         glBindFramebuffer(GL_FRAMEBUFFER, m_AOBlur.Framebuffer);
+        glViewport(0, 0, m_AOBlur.Width, m_AOBlur.Height);
+        {
+            // 326: AO bulanıklaştırması ve büyütmesi görüş uzaklığıyla karşılaştırır (OpenGL perspektif matrisinden yakın / uzak düzlem)
+            const glm::mat4& P = camera.Projection;
+            m_AONearFar = glm::vec2(P[3][2] / (P[2][2] - 1.0f), P[3][2] / (P[2][2] + 1.0f));
+        }
         blur->Bind();
         blur->SetInt("u_AO", 0);
         blur->SetInt("u_Depth", 1);
-        blur->SetFloat2("u_TexelSize", glm::vec2(1.0f / m_AO.Width, 1.0f / m_AO.Height));
-        BindTexture(0, m_AO.Texture);
+        blur->SetFloat2("u_NearFar", m_AONearFar);
+        blur->SetFloat2("u_TexelSize", glm::vec2(1.0f / aoSource.Width, 1.0f / aoSource.Height));
+        BindTexture(0, aoSource.Texture);
         BindTexture(1, GetSceneDepthTexture());
         PostProcess::DrawFullscreenQuad();
         Renderer::GetStats().PostProcessPasses += 2;
@@ -1632,6 +1647,7 @@ namespace Conqueror
         composite->SetInt("u_Bloom", 1);
         composite->SetInt("u_AO", 2);
         composite->SetInt("u_Depth", 3);
+        composite->SetFloat2("u_AONearFar", m_AONearFar);
         composite->SetInt("u_LitScene", m_LitScene ? 1 : 0);
         composite->SetInt("u_UseBloom", (on && settings.Bloom && m_BloomResult) ? 1 : 0);
         // AO yalnızca bu karede hesaplandıysa (ortografik kamerada atlanır; eski sonuç kullanılmaz)

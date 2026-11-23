@@ -445,6 +445,7 @@ namespace Conqueror
         combine->SetInt("u_UseGI", giDone ? 1 : 0);
         combine->SetFloat("u_GIIntensity", std::max(settings.SSGIIntensity, 0.0f));
         combine->SetInt("u_UseAO", ao ? 1 : 0);
+        combine->SetFloat2("u_AONearFar", m_AONearFar);
         combine->SetInt("u_UseSSR", ssrDone ? 1 : 0);
         combine->SetInt("u_UseClouds", cloudsDone ? 1 : 0);
         combine->SetInt("u_UseFog", fogDone ? 1 : 0);

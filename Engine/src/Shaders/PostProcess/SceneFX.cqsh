@@ -15,12 +15,14 @@ void main()
 #version 450 core
 
 #include "Include/Common.glsl"
+#include "Include/AOUpsample.glsl"
 
 layout(location = 0) out vec4 FragColor;
 in vec2 v_UV;
 
 uniform sampler2D u_Scene;
 uniform sampler2D u_Depth;
+uniform vec2 u_AONearFar = vec2(0.1, 1000.0);   // AO büyütmesi için izdüşümün yakın / uzak düzlemi (326)
 uniform sampler2D u_AO;
 uniform sampler2D u_SSR;
 uniform sampler2D u_GNormal;
@@ -84,7 +86,7 @@ void main()
         color += albedo.rgb * indirect * u_GIIntensity * mix(1.0, albedo.a, 0.5);
     }
     if (u_UseAO == 1)
-        color *= texture(u_AO, v_UV).r;
+        color *= SampleAOUpsampled(u_AO, u_Depth, v_UV, u_AONearFar);
     if (u_UseSSR == 1)
     {
         vec4 g = texture(u_GNormal, v_UV);

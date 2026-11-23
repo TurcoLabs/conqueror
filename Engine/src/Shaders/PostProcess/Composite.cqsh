@@ -15,6 +15,7 @@ void main()
 #version 450 core
 
 #include "Include/Common.glsl"
+#include "Include/AOUpsample.glsl"
 
 layout(location = 0) out vec4 FragColor;
 in vec2 v_UV;
@@ -23,6 +24,7 @@ uniform sampler2D u_Scene;
 uniform sampler2D u_Bloom;
 uniform sampler2D u_AO;
 uniform sampler2D u_Depth;
+uniform vec2 u_AONearFar = vec2(0.1, 1000.0);   // AO büyütmesi için izdüşümün yakın / uzak düzlemi (326)
 uniform int u_UseBloom = 0;
 uniform int u_UseAO = 0;
 uniform float u_BloomIntensity = 0.6;
@@ -146,7 +148,7 @@ void main()
         color = vec3(0.0);
 
     if (u_UseAO == 1)
-        color *= texture(u_AO, uv).r;
+        color *= SampleAOUpsampled(u_AO, u_Depth, uv, u_AONearFar);
     if (u_UseBloom == 1)
         color += texture(u_Bloom, uv).rgb * u_BloomIntensity * u_BloomTint;
 

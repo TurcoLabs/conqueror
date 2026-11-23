@@ -1,5 +1,9 @@
 #language GLSL
-// Derinlik farkına duyarlı (bilateral) 4x4 bulanıklaştırma
+// Derinliğe duyarlı (bilateral) 5x5 bulanıklaştırma, yarım çözünürlükte (SSAO / ışın izlemeli AO). 326: ağırlık görüş uzaklığından ve
+// yüzeyin eğimine göre: komşunun uzaklığı, merkezin yüzey düzleminden beklenen uzaklıkla karşılaştırılır (uzaklığın %2'si + 2 cm
+// tolerans). Eskiden ham derinlik farkıyla (x 2000) ağırlık veriliyordu: derinlik uzakta sıkıştığından uzaktaki nesnenin kenarında
+// ön ve arka yüzey ayrılmıyor, örtü kenarın öbür tarafına taşıyıp AO görünümünde uzaktaki nesnelerin çevresinde gri haleler çiziyordu;
+// dokunuşlar çift doğrusal okunduğu için ağırlık kenarda zaten iki yüzeyi karıştırıyordu
 #type vertex
 #version 450 core
 layout(location = 0) in vec2 a_Position;
@@ -13,29 +17,61 @@ void main()
 
 #type fragment
 #version 450 core
+
+#include "Include/AOUpsample.glsl"
+
 layout(location = 0) out float FragAO;
 in vec2 v_UV;
-uniform sampler2D u_AO;
-uniform sampler2D u_Depth;
+uniform sampler2D u_AO;        // yarım çözünürlük
+uniform sampler2D u_Depth;     // tam çözünürlük
 uniform vec2 u_TexelSize;
+uniform vec2 u_NearFar = vec2(0.1, 1000.0);
 
-float LinearDepth(float d) { return d; }
+float DepthAt(ivec2 t, ivec2 hsz, ivec2 fsz)
+{
+    float d = texelFetch(u_Depth, AOSourceTexel(clamp(t, ivec2(0), hsz - 1), hsz, fsz), 0).r;
+    return d >= 1.0 ? -1.0 : AOViewDepth(d, u_NearFar);
+}
 
 void main()
 {
-    float centerDepth = texture(u_Depth, v_UV).r;
+    ivec2 hsz = textureSize(u_AO, 0);
+    ivec2 fsz = textureSize(u_Depth, 0);
+    ivec2 c = ivec2(gl_FragCoord.xy);
+    float zc = DepthAt(c, hsz, fsz);
+    if (zc < 0.0)
+    {
+        FragAO = 1.0;
+        return;
+    }
+    // Yüzeyin ekrandaki eğimi: iki yandan küçük farklı olanı (kenarda öbür yüzeye bakılmaz)
+    float zl = DepthAt(c - ivec2(1, 0), hsz, fsz), zr = DepthAt(c + ivec2(1, 0), hsz, fsz);
+    float zb = DepthAt(c - ivec2(0, 1), hsz, fsz), zt = DepthAt(c + ivec2(0, 1), hsz, fsz);
+    float gx = 0.0, gy = 0.0;
+    {
+        float dl = zl < 0.0 ? 1e9 : zc - zl, dr = zr < 0.0 ? 1e9 : zr - zc;
+        float db = zb < 0.0 ? 1e9 : zc - zb, dt = zt < 0.0 ? 1e9 : zt - zc;
+        gx = abs(dl) < abs(dr) ? dl : dr;
+        gy = abs(db) < abs(dt) ? db : dt;
+        if (abs(gx) > 1e8) gx = 0.0;
+        if (abs(gy) > 1e8) gy = 0.0;
+    }
+    float tol = 0.02 * zc + 0.02;
     float sum = 0.0;
     float wsum = 0.0;
-    for (int x = -2; x < 2; ++x)
+    for (int y = -2; y <= 2; ++y)
     {
-        for (int y = -2; y < 2; ++y)
+        for (int x = -2; x <= 2; ++x)
         {
-            vec2 uv = v_UV + (vec2(x, y) + 0.5) * u_TexelSize;
-            float d = texture(u_Depth, uv).r;
-            float w = 1.0 / (1e-4 + abs(d - centerDepth) * 2000.0);
-            sum += texture(u_AO, uv).r * w;
+            ivec2 t = clamp(c + ivec2(x, y), ivec2(0), hsz - 1);
+            float z = DepthAt(t, hsz, fsz);
+            if (z < 0.0)
+                continue;
+            float rel = (z - (zc + gx * float(x) + gy * float(y))) / tol;
+            float w = exp(-0.22 * float(x * x + y * y)) * exp(-rel * rel);
+            sum += texelFetch(u_AO, t, 0).r * w;
             wsum += w;
         }
     }
-    FragAO = sum / max(wsum, 1e-5);
+    FragAO = wsum > 1e-5 ? sum / wsum : texelFetch(u_AO, c, 0).r;
 }

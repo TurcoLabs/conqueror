@@ -187,8 +187,9 @@ namespace Conqueror
 
         std::shared_ptr<Framebuffer> m_SceneFramebuffer;     // MSAA olabilir
         std::shared_ptr<Framebuffer> m_ResolvedFramebuffer;  // MSAA çözülmüş (yoksa null)
-        RenderTarget m_AO;
-        RenderTarget m_AOBlur;
+        RenderTarget m_AO;        // yarım çözünürlük: ışın izlemeli AO
+        RenderTarget m_AOFull;    // tam çözünürlük: SSAO (326)
+        RenderTarget m_AOBlur;    // bulanıklaştırılmış örtü, kaynağın çözünürlüğünde
         std::vector<RenderTarget> m_BloomMips;   // aşağı örnekleme zinciri
         std::vector<RenderTarget> m_BloomUp;     // yukarı örnekleme zinciri (geri besleme döngüsü olmasın)
         RenderTarget m_LDR;
@@ -340,6 +341,7 @@ namespace Conqueror
         uint32_t m_FrameIndex = 0;
         glm::vec2 m_JitterNDC{ 0.0f };
         bool m_JitterActive = false;    // bu karede sahne titreşimli çizildi
+        glm::vec2 m_AONearFar{ 0.1f, 1000.0f };   // AO'nun hesaplandığı izdüşümün yakın / uzak düzlemi (326: derinliğe duyarlı büyütme)
         bool m_CameraStill = false;     // bu karede kamera durağan (TAA + FXAA geçişi için)
         bool m_WantTAA = false;         // sonraki karede titreşim uygula
         bool m_WantNormals = false;     // sahne hedefinde SSR normal eki
