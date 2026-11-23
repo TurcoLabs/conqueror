@@ -1,0 +1,15 @@
+# template: fps
+# 325: FSR AA + NIS'te yakından (piramit görüntüyü dolduruyor, kullanıcının 578'i) kamera dururken küplerin arası çok hafif yanıp
+# sönüyordu. 60 karede 8 seviyeden fazla değişen piksel: main 0.032 % -> bu dal 0.010 % (16 seviyeden fazla değişen yok; TAA + NIS 0.002 %).
+# Kalan: küp aralarının kenarında seyrek noktalar
+wait_until 3000 layout_settled
+wait 10
+focus Viewport
+cvar r.TemporalStability 1
+cvar r.AntiAliasing 26
+cvar r.Upscaler 3
+camera 4 8 20 -2 1.2 1
+wait 200
+viewport_flicker 60 max8% 0.02 max% 0.002
+wait 66
+quit
