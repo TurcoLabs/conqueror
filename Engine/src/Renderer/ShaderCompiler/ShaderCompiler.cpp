@@ -15,6 +15,7 @@
 #include <spirv_hlsl.hpp>
 #include <spirv_msl.hpp>
 
+#include <algorithm>
 #include <cstdlib>
 #include <fstream>
 #include <regex>
@@ -267,11 +268,34 @@ namespace Conqueror
             }
             return s_TextureBudget16 == 1;
         }
+
+        uint32_t s_Slots2D = 0;   // 0: sorgulanır
+
+        uint32_t Slots2D()
+        {
+            if (s_Slots2D == 0)
+            {
+                GLint units = 32;
+                if (glad_glGetIntegerv)
+                    glGetIntegerv(GL_MAX_TEXTURE_IMAGE_UNITS, &units);
+                s_Slots2D = (uint32_t)std::clamp<GLint>(units - 1, 1, 31);
+            }
+            return s_Slots2D;
+        }
+
+        // 31 yuvadan az ise 2B gölgelendiricisinin dizi boyutu (CQ_TEXTURE_BUDGET_16 kipinde kullanılmaz)
+        std::string Slots2DDefine()
+        {
+            const uint32_t n = Slots2D();
+            return n < 31 && !TextureBudget16() ? "#define CQ_2D_SLOTS " + std::to_string(n) + "\n" : std::string();
+        }
     }
 
     void ShaderCompiler::SetRelaxedTargetVulkan11(bool enabled) { s_RelaxedVulkan11 = enabled; }
     void ShaderCompiler::SetTextureBudget16(bool enabled) { s_TextureBudget16 = enabled ? 1 : 0; }
     bool ShaderCompiler::IsTextureBudget16() { return TextureBudget16(); }
+    void ShaderCompiler::Set2DTextureSlots(uint32_t slots) { s_Slots2D = std::clamp<uint32_t>(slots, 1u, 31u); }
+    uint32_t ShaderCompiler::Get2DTextureSlots() { return Slots2D(); }
 
     bool ShaderCompiler::CompileToSPIRV(const std::map<ShaderStage, std::string>& sources, const std::string& name,
                                         std::map<ShaderStage, std::vector<uint32_t>>& outSpirv, std::string& errors, bool vulkanRelaxed)
@@ -301,8 +325,10 @@ namespace Conqueror
                 shader->setGlobalUniformBlockName("CQ_Globals");
                 shader->setGlobalUniformSet(0);
                 shader->setGlobalUniformBinding(15);
-                if (s_TextureBudget16 == 1)
-                    shader->setPreamble("#define CQ_TEXTURE_BUDGET_16 1\n");
+                static std::string s_RelaxedPreamble;
+                s_RelaxedPreamble = (s_TextureBudget16 == 1 ? std::string("#define CQ_TEXTURE_BUDGET_16 1\n") : std::string()) + Slots2DDefine();
+                if (!s_RelaxedPreamble.empty())
+                    shader->setPreamble(s_RelaxedPreamble.c_str());
             }
             else
             {
@@ -321,6 +347,7 @@ namespace Conqueror
                     s_Preamble += "#define CQ_NO_GATHER 1\n";
                 if (TextureBudget16())
                     s_Preamble += "#define CQ_TEXTURE_BUDGET_16 1\n";
+                s_Preamble += Slots2DDefine();
                 if (!s_Preamble.empty())
                     shader->setPreamble(s_Preamble.c_str());
             }
@@ -567,7 +594,8 @@ namespace Conqueror
         // 16 doku bütçesi de (CQ_TEXTURE_BUDGET_16 ön eki): yoksa bütçesiz derlenmiş çıktı (ör. OpenGL'de) Direct3D / Metal'de yeniden kullanılıp
         // 16 örnekleyici sınırında reddediliyor, her açılışta özgün GLSL'ye geri dönülüyordu
         uint64_t h = Fnv1a("cq-spirv-gl" + std::to_string(profile.GLSLVersion) + (profile.GLSLES ? "es" : "") +
-                           (profile.UniformBindingLayouts ? "b" : "") + (TextureBudget16() ? "t16" : "") + "-v" + std::to_string(kCacheVersion));
+                           (profile.UniformBindingLayouts ? "b" : "") + (TextureBudget16() ? "t16" : "") + (Slots2D() < 31 ? "s" + std::to_string(Slots2D()) : std::string()) + "-v" +
+                           std::to_string(kCacheVersion));
         for (const auto& [stage, src] : sources)
             h = Fnv1a(std::string(StageName(stage)) + "\n" + src, h);
         char hex[32];

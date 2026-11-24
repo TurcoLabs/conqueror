@@ -737,7 +737,7 @@ float4 PSPresent(VSOut i) : SV_Target { return float4(g_Src.SampleLevel(g_Smp, i
             }
             if (s.SharedSampler && s.SamplerRegister < DX12::kMaxSamplers)
             {
-                samplers[s.SamplerRegister] = GetSampler(shared ? *shared : *c.NullTexture2D, s.Integer, s.Shadow);
+                samplers[s.SamplerRegister] = GetSampler(s.FixedSampler >= 0 ? GLEmu::FixedSamplerParams<Texture>(s.FixedSampler) : shared ? *shared : *c.NullTexture2D, s.Integer, s.Shadow);
                 smpCount = std::max(smpCount, s.SamplerRegister + 1);
             }
         }
@@ -1298,7 +1298,7 @@ float4 PSPresent(VSOut i) : SV_Target { return float4(g_Src.SampleLevel(g_Smp, i
             }
             if (s.SharedSampler && s.SamplerRegister < DX12::kMaxSamplers)
             {
-                samplers[s.SamplerRegister] = GetSampler(shared ? *shared : *c.NullTexture2D, s.Integer, s.Shadow);
+                samplers[s.SamplerRegister] = GetSampler(s.FixedSampler >= 0 ? GLEmu::FixedSamplerParams<Texture>(s.FixedSampler) : shared ? *shared : *c.NullTexture2D, s.Integer, s.Shadow);
                 smpCount = std::max(smpCount, s.SamplerRegister + 1);
             }
         }

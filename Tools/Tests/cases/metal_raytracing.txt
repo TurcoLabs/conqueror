@@ -1,0 +1,44 @@
+# template: fps
+# requires: CQ_TEST_METAL
+# env: CQ_RENDERER=metal
+# Metal (macOS CI): raytraced_hardware ile aynı sahne ve eşikler. Cihaz Metal ışın izlemeyi destekliyorsa (supportsRaytracing) ışınlar
+# MTLAccelerationStructure + intersection_query ile, değilse compute BVH ile izlenir; görüntü iki yolda da aynı olmalı (backend raporlanır)
+wait_until 30000 layout_settled
+wait 10
+focus Viewport
+create_primitive plane Mirror 0 0.02 0
+entity scale Mirror 6 1 6
+comp set Mirror MeshRenderer Roughness 0.02
+comp set Mirror MeshRenderer Metallic 1
+comp set Mirror MeshRenderer Color 0.9 0.9 0.9 1
+create_primitive cube RedBox 0 6 -10
+entity scale RedBox 6 3 2
+comp set RedBox MeshRenderer Color 1 0 0 1
+camera 7 45 0 0 0 0
+cvar r.SSR 1
+cvar r.AntiAliasing 1
+wait 90
+viewport_region 0.40 0.55 0.70 0.85 red mean <0
+cvar r.RTReflections 1
+wait 90
+raytraced_effects backend any
+raytraced_effects reflections >0
+viewport_region 0.40 0.55 0.70 0.85 red mean >30
+cvar r.RTReflections 0
+cvar r.SSR 0
+shading ao
+wait 60
+viewport_region 0.05 0.03 0.55 0.13 lum mean >225
+cvar r.RTAO 1
+wait 60
+raytraced_effects ao >0
+viewport_region 0.05 0.03 0.55 0.13 lum mean <215
+viewport_region 0.75 0.10 0.95 0.30 lum mean >245
+cvar r.RTAO 0
+shading pathtracing
+pathtracer spp 4
+wait 150
+pathtracer expect_samples >100
+viewport_region 0.1 0.1 0.9 0.6 lum mean >60
+shading shaded
+quit

@@ -1001,7 +1001,7 @@ namespace Conqueror::Editor
                 {
                     ImGui::TextDisabled("%d probes (%dx%dx%d), %d updated this frame", st.Probes, st.Counts.x, st.Counts.y, st.Counts.z, st.ProbesUpdated);
                     ImGui::TextDisabled("Scene: %d triangles, %d instances%s", st.Triangles, st.Instances, st.PendingBuilds > 0 ? " (preparing meshes...)" : "");
-                    ImGui::TextDisabled("Tracing: %s", RayTracingScene::GetHardwareBackend() ? "hardware ray queries (Vulkan)" : "compute BVH (software, any GPU)");
+                    if (const char* hwRT = RayTracingScene::GetHardwareBackend()) ImGui::TextDisabled("Tracing: %s (hardware)", hwRT); else ImGui::TextDisabled("Tracing: compute BVH (software, any GPU)");
                 }
             }
             UI::EndSection();
@@ -1038,7 +1038,7 @@ namespace Conqueror::Editor
                 if (p.RayTracedReflections && !RayTracedEffects::Supported())
                     ImGui::TextDisabled("Not supported here (needs compute shaders): screen traces are used.");
                 else if (p.RayTracedReflections)
-                    ImGui::TextDisabled("Tracing: %s", RayTracingScene::GetHardwareBackend() ? "hardware ray queries (Vulkan)" : "compute BVH (software, any GPU)");
+                    if (const char* hwRT = RayTracingScene::GetHardwareBackend()) ImGui::TextDisabled("Tracing: %s (hardware)", hwRT); else ImGui::TextDisabled("Tracing: compute BVH (software, any GPU)");
             }
             UI::EndSection();
         }
@@ -1132,7 +1132,7 @@ namespace Conqueror::Editor
                     if (!RayTracedEffects::Supported())
                         ImGui::TextDisabled("Not supported here (needs compute shaders): SSAO is used.");
                     else
-                        ImGui::TextDisabled("Tracing: %s", RayTracingScene::GetHardwareBackend() ? "hardware ray queries (Vulkan)" : "compute BVH (software, any GPU)");
+                        if (const char* hwRT = RayTracingScene::GetHardwareBackend()) ImGui::TextDisabled("Tracing: %s (hardware)", hwRT); else ImGui::TextDisabled("Tracing: compute BVH (software, any GPU)");
                 }
             }
             UI::EndSection();

@@ -69,7 +69,8 @@ namespace Conqueror::GLEmu
                 s = "#version 450\n" + s;
             s = std::regex_replace(s, std::regex(R"(\bgl_VertexID\b)"), "gl_VertexIndex");
             s = std::regex_replace(s, std::regex(R"(\bgl_InstanceID\b)"), "gl_InstanceIndex");
-            return GLEmu::SplitLargeSamplerArrays(s, kMaxCombinedArray);
+            // Motor aydınlatma dokuları sabit durumlu ortak örnekleyicilere (aşama başına 16 örnekleyici sınırı; GLShaderUtil.h)
+            return GLEmu::GroupEngineSamplers(GLEmu::SplitLargeSamplerArrays(s, kMaxCombinedArray));
         }
 
         ShaderStage StageOf(GLenum t) { return t == GL_FRAGMENT_SHADER ? ShaderStage::Fragment : t == GL_COMPUTE_SHADER ? ShaderStage::Compute : ShaderStage::Vertex; }
@@ -590,11 +591,24 @@ namespace Conqueror::GLEmu
             std::string glName = r.Name;
             if (r.K == Pending::Image)
             {
-                // "<ad>_cqtex": eşleşen "<ad>_cqsmp" örnekleyicisi
                 sb.SharedSampler = true;
-                glName = r.Name.size() > 6 ? r.Name.substr(0, r.Name.size() - 6) : r.Name;
-                const int smp = findRes(glName + "_cqsmp");
-                sb.SamplerRegister = smp >= 0 ? finalBinding[(size_t)smp] : 0;
+                std::string grouped;
+                const int kind = GLEmu::GroupedSamplerKindOf(r.Name, &grouped);
+                if (kind >= 0)
+                {
+                    // "<ad>_cqgt<k>": motor dokusu, grubun sabit durumlu örnekleyicisi "cqsmp_fixed<k>" (GroupEngineSamplers)
+                    glName = grouped;
+                    sb.FixedSampler = kind;
+                    const int smp = findRes(GLEmu::GroupedSamplerName(kind));
+                    sb.SamplerRegister = smp >= 0 ? finalBinding[(size_t)smp] : 0;
+                }
+                else
+                {
+                    // "<ad>_cqtex": eşleşen "<ad>_cqsmp" örnekleyicisi
+                    glName = r.Name.size() > 6 ? r.Name.substr(0, r.Name.size() - 6) : r.Name;
+                    const int smp = findRes(glName + "_cqsmp");
+                    sb.SamplerRegister = smp >= 0 ? finalBinding[(size_t)smp] : 0;
+                }
             }
             else
                 sb.SamplerRegister = sb.Register;

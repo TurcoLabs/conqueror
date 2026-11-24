@@ -69,6 +69,10 @@ namespace Conqueror
         // (PBR yansıtma probu / APV / dinamik GI / düzlemsel yansıma örneklemez). OpenGL'de kendiliğinden (GL_MAX_TEXTURE_IMAGE_UNITS)
         static void SetTextureBudget16(bool enabled);
         static bool IsTextureBudget16();
+        // 2B toplu çizimin doku yuvası sayısı (ışık dokusu ayrıca bir birim): aşama başına doku sınırı - 1, en çok 31. 31 değilse
+        // gölgelendiricilere CQ_2D_SLOTS tanımlanır (Metal aşama başına 31 doku: 30 yuva). OpenGL'de GL_MAX_TEXTURE_IMAGE_UNITS'ten
+        static void Set2DTextureSlots(uint32_t slots);
+        static uint32_t Get2DTextureSlots();
         static bool CompileToSPIRV(const std::map<ShaderStage, std::string>& sources, const std::string& name,
                                    std::map<ShaderStage, std::vector<uint32_t>>& outSpirv, std::string& errors, bool vulkanRelaxed = false);
         static bool CrossCompile(const std::vector<uint32_t>& spirv, const std::string& language, std::string& out, std::string& errors);

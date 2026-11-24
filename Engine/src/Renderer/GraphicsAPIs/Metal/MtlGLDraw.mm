@@ -808,7 +808,7 @@ fragment ClearOut cq_clear(VSOut i [[stage_in]], constant Params& p [[buffer(0)]
             }
             if (s.SharedSampler && s.SamplerRegister < MTL::kMaxSamplers)
             {
-                id<MTLSamplerState> smp = GetSampler(shared ? *shared : *c.NullTexture2D, s.Integer, s.Shadow);
+                id<MTLSamplerState> smp = GetSampler(s.FixedSampler >= 0 ? GLEmu::FixedSamplerParams<Texture>(s.FixedSampler) : shared ? *shared : *c.NullTexture2D, s.Integer, s.Shadow);
                 [enc setFragmentSamplerState:smp atIndex:s.SamplerRegister];
                 [enc setVertexSamplerState:smp atIndex:s.SamplerRegister];
             }
@@ -1336,7 +1336,7 @@ fragment ClearOut cq_clear(VSOut i [[stage_in]], constant Params& p [[buffer(0)]
                     [enc setSamplerState:GetSampler(*params, tex->Integer, s.Shadow) atIndex:slot];
             }
             if (s.SharedSampler && s.SamplerRegister < MTL::kMaxSamplers)
-                [enc setSamplerState:GetSampler(shared ? *shared : *c.NullTexture2D, s.Integer, s.Shadow) atIndex:s.SamplerRegister];
+                [enc setSamplerState:GetSampler(s.FixedSampler >= 0 ? GLEmu::FixedSamplerParams<Texture>(s.FixedSampler) : shared ? *shared : *c.NullTexture2D, s.Integer, s.Shadow) atIndex:s.SamplerRegister];
         }
         std::vector<std::pair<Texture*, int>> written;
         for (const auto& ib : p->Images)

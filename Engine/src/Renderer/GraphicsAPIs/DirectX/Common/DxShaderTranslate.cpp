@@ -151,6 +151,10 @@ namespace Conqueror::DXCommon
             try
             {
                 spirv_cross::CompilerHLSL hc(p.ComputeSpirv);
+                // Ortak ışın izleme başlığını içeren ama u_TLAS'ı kullanmayan program (Path Tracer'ın yeniden izdüşüm / gürültü
+                // giderme geçişleri): kullanılmayan hızlandırma yapısı bildirilmez (FXC RaytracingAccelerationStructure türünü tanımaz)
+                if (!rayQuery && !hc.get_shader_resources().acceleration_structures.empty())
+                    hc.set_enabled_interface_variables(hc.get_active_interface_variables());
                 spirv_cross::CompilerHLSL::Options ho;
                 ho.shader_model = rayQuery ? 65 : 50;
                 ho.nonwritable_uav_texture_as_srv = true;

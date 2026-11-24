@@ -19,8 +19,9 @@ uniform vec4 u_GIVolume2;
 #define CQ_GI_V2 CQ_Frame.GIVolume2
 #endif
 
-#ifdef CQ_TEXTURE_BUDGET_16
-// 16 doku sınırlı GPU'lar (WebGPU varsayılanı, WebGL 2 / mobil): dinamik GI örneklenmez (3 doku daha az)
+#if defined(CQ_TEXTURE_BUDGET_16) && !defined(CQ_GI_COMPUTE)
+// 16 doku sınırlı GPU'lar (WebGPU varsayılanı, WebGL 2 / mobil): ileri gölgelendiriciler dinamik GI örneklemez (3 doku daha az).
+// Ray Traced GI'nin hesaplama gölgelendiricileri (CQ_GI_COMPUTE) birkaç doku kullanır: onlar için tam yol (yuva / karo yardımcıları)
 vec3 CQ_GIIrradianceVis(vec3 P, vec3 N, vec3 V, out float coverage, out float skyVisibility)
 {
     coverage = 0.0;

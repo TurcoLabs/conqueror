@@ -378,6 +378,13 @@
         void APIENTRY DepthFunc(GLenum f) { Ctx().S.DepthFunc = f; }
         void APIENTRY DepthMask(GLboolean f) { Ctx().S.DepthMask = f != GL_FALSE; }
         void APIENTRY CullFace(GLenum m) { Ctx().S.CullMode = m; }
+        // Ön yüz sarımı: düzlemsel yansımanın aynalanmış çizimi GL_CW ister (arka uçlar S.FrontFace'i tarama durumuna yazar; giriş noktası
+        // yokken çağrı boş saplamaya gidiyor, aynalı geçişte ön yüzler ayıklanıyordu)
+        void APIENTRY FrontFace(GLenum m)
+        {
+            if (m == GL_CW || m == GL_CCW)
+                Ctx().S.FrontFace = m;
+        }
         void APIENTRY PolygonMode(GLenum, GLenum mode) { Ctx().S.PolygonMode = mode; }
         void APIENTRY PolygonOffset(GLfloat factor, GLfloat units) { Ctx().S.PolygonOffsetFactor = factor; Ctx().S.PolygonOffsetUnits = units; }
         void APIENTRY LineWidth(GLfloat w) { Ctx().S.LineWidth = std::max(w, 0.0f); }
@@ -2737,7 +2744,7 @@
             CQ_VKGL_FN(Clear, Clear), CQ_VKGL_FN(ClearColor, ClearColor), CQ_VKGL_FN(ClearTexImage, ClearTexImage), CQ_VKGL_FN(ClipControl, ClipControl),
             CQ_VKGL_FN(ColorMask, ColorMask), CQ_VKGL_FN(CompileShader, CompileShader), CQ_VKGL_FN(CreateBuffers, CreateBuffers),
             CQ_VKGL_FN(CreateFramebuffers, CreateFramebuffers), CQ_VKGL_FN(CreateProgram, CreateProgram), CQ_VKGL_FN(CreateShader, CreateShader),
-            CQ_VKGL_FN(CreateTextures, CreateTextures), CQ_VKGL_FN(CreateVertexArrays, CreateVertexArrays), CQ_VKGL_FN(CullFace, CullFace),
+            CQ_VKGL_FN(CreateTextures, CreateTextures), CQ_VKGL_FN(CreateVertexArrays, CreateVertexArrays), CQ_VKGL_FN(CullFace, CullFace), CQ_VKGL_FN(FrontFace, FrontFace),
             CQ_VKGL_FN(DebugMessageCallback, DebugMessageCallback), CQ_VKGL_FN(DebugMessageControl, DebugMessageControl),
             CQ_VKGL_FN(DeleteBuffers, DeleteBuffers), CQ_VKGL_FN(DeleteFramebuffers, DeleteFramebuffers), CQ_VKGL_FN(DeleteProgram, DeleteProgram),
             CQ_VKGL_FN(DeleteQueries, DeleteQueries), CQ_VKGL_FN(DeleteRenderbuffers, DeleteRenderbuffers), CQ_VKGL_FN(DeleteShader, DeleteShader),

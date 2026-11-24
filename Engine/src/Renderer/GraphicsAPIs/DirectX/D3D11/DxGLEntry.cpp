@@ -166,11 +166,11 @@ namespace Conqueror::DxGL
         s_Limits.MaxTextureSize = D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION;
         s_Limits.MaxCubeMapSize = D3D11_REQ_TEXTURECUBE_DIMENSION;
         s_Limits.MaxTextureUnits = 32;   // 16'dan büyük örnekleyici dizileri ayrık doku + ortak örnekleyiciye çevrilir
-        // D3D11 aşama başına en çok 16 örnekleyici (D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT / kök tablosu) bağlar: PBR, PBRSkinned ve
-        // Terrain 19-22 birleşik örnekleyiciyle bağlanamıyor, sahnede yalnız gökyüzü çiziliyordu (Ray Traced GI'nin üç dokusu eklendiğinden
-        // beri; Metal ve WebGPU'daki gibi 16 dokuluk bütçe: yansıtma probu gökyüzü yansımasını kullanır, APV / dinamik GI / düzlemsel
-        // yansıma örneklenmez, 2B toplu çizim 14 yuva)
-        ShaderCompiler::SetTextureBudget16(true);
+        // D3D11 aşama başına en çok 16 örnekleyici (D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT) ve 128 doku bağlar. Motorun aydınlatma dokuları
+        // (BRDF LUT, IBL / yansıtma probu küpleri, APV, düzlemsel yansıma, Ray Traced GI atlasları) sabit durumlu ortak örnekleyicileri
+        // paylaşır (GLEmu::GroupEngineSamplers, Unreal'in paylaşımlı örnekleyicileri gibi): PBR / Terrain 19 - 22 yerine 9 - 10 örnekleyici,
+        // tüm özellikler örneklenir (önceki 16 dokuluk bütçe yansıtma probu, APV, düzlemsel yansıma ve dinamik GI'yi kapatıyordu)
+        ShaderCompiler::SetTextureBudget16(false);
         s_Limits.MaxVertexAttribs = 16;
         s_Limits.MaxUniformBufferBindings = D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT;
         s_Limits.MaxUniformBlockSize = D3D11_REQ_CONSTANT_BUFFER_ELEMENT_COUNT * 16;

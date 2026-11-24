@@ -136,10 +136,12 @@ namespace Conqueror::MtlGL
         s_Limits.MaxTextureSize = 16384;
         s_Limits.MaxCubeMapSize = 16384;
         s_Limits.MaxTextureUnits = 31;
-        // Metal aşama başına en çok 16 örnekleyici bağlar (argüman arabelleksiz): PBR / Terrain / 2B toplu çizim 16'dan fazla birleşik
-        // örnekleyici istediği için bağlanamıyordu (yalnız gökyüzü çiziliyordu). WebGPU'daki gibi 16 dokuluk bütçe: yansıtma probu gökyüzü
-        // yansımasını kullanır, APV / dinamik GI / düzlemsel yansıma örneklenmez, 2B toplu çizim 14 yuva
-        ShaderCompiler::SetTextureBudget16(true);
+        // Metal aşama başına en çok 16 örnekleyici (argüman arabelleksiz) ve 31 doku bağlar. Motorun aydınlatma dokuları (BRDF LUT,
+        // IBL / yansıtma probu küpleri, APV, düzlemsel yansıma, Ray Traced GI atlasları) sabit durumlu ortak örnekleyicileri paylaşır
+        // (GLEmu::GroupEngineSamplers): PBR / Terrain 9 - 10 örnekleyiciyle tüm özellikleri örnekler (önceki 16 dokuluk bütçe yansıtma
+        // probu, APV, düzlemsel yansıma ve dinamik GI'yi kapatıyordu). 2B toplu çizim 30 yuva + ışık dokusu (31 doku)
+        ShaderCompiler::SetTextureBudget16(false);
+        ShaderCompiler::Set2DTextureSlots(30);
         s_Limits.MaxVertexAttribs = 16;
         s_Limits.MaxUniformBufferBindings = MTL::kMaxConstantBuffers;
         s_Limits.MaxUniformBlockSize = 65536;

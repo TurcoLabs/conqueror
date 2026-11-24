@@ -178,6 +178,19 @@ jobs:
           cat ~/.cache/cq-build/regression/_Reg_metal_smoke.txt.result.txt || true
           grep -E "Metal|ERROR|CRITICAL|Graphics" build/bin/Conqueror.log | tail -40 || true
           exit 1
+      - name: Metal lighting and ray tracing tests (reflection probe, planar reflection and Ray Traced GI are sampled on Metal; ray traced reflections / AO / Path Tracing with Metal ray tracing when the GPU has it, else the compute BVH)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 25
+        run: |
+          set +e
+          CQ_TEST_METAL=1 python3 Tools/Tests/regression.py metal_lighting metal_raytracing
+          status=$?
+          for t in metal_lighting metal_raytracing; do
+            echo "--- $t"
+            grep -E "RAYTRACED|REGION|SHADER|UNIMPLEMENTED|FAIL|PATHTRACER" ~/.cache/cq-build/regression/_Reg_$t.txt.result.txt || true
+          done
+          grep -E "MtlGL|ray quer|ERROR|CRITICAL" build/bin/Conqueror.log | tail -40 || true
+          exit $status
       - name: iOS Simulator test (the editor builds the 3D template for iOS without a Team ID; the player is compiled with Xcode for the simulator, installed, started and its screen checked)
         timeout-minutes: 150
         run: |

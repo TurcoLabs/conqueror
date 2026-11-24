@@ -672,7 +672,7 @@ float4 PSColorArray(VSOut i) : SV_Target { return g_SrcArr.SampleLevel(g_Smp, fl
             }
             if (s.SharedSampler && s.SamplerRegister < D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT)
             {
-                samplers[s.SamplerRegister] = GetSampler(shared ? *shared : *c.NullTexture2D, s.Integer, s.Shadow);
+                samplers[s.SamplerRegister] = GetSampler(s.FixedSampler >= 0 ? GLEmu::FixedSamplerParams<Texture>(s.FixedSampler) : shared ? *shared : *c.NullTexture2D, s.Integer, s.Shadow);
                 smpCount = std::max(smpCount, s.SamplerRegister + 1);
             }
         }
@@ -1196,7 +1196,7 @@ float4 PSColorArray(VSOut i) : SV_Target { return g_SrcArr.SampleLevel(g_Smp, fl
             }
             if (s.SharedSampler && s.SamplerRegister < D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT)
             {
-                samplers[s.SamplerRegister] = GetSampler(shared ? *shared : *c.NullTexture2D, s.Integer, s.Shadow);
+                samplers[s.SamplerRegister] = GetSampler(s.FixedSampler >= 0 ? GLEmu::FixedSamplerParams<Texture>(s.FixedSampler) : shared ? *shared : *c.NullTexture2D, s.Integer, s.Shadow);
                 smpCount = std::max(smpCount, s.SamplerRegister + 1);
             }
         }

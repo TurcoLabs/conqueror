@@ -42,7 +42,11 @@ in float v_TilingFactor;
 // yoktur; Renderer2D bu kipte u_Tex0..u_Tex13'ü kurar
 uniform sampler2D u_Tex0, u_Tex1, u_Tex2, u_Tex3, u_Tex4, u_Tex5, u_Tex6, u_Tex7, u_Tex8, u_Tex9, u_Tex10, u_Tex11, u_Tex12, u_Tex13;
 #else
-uniform sampler2D u_Textures[31];
+// Doku yuvası sayısı: 31 (+ ışık dokusu = 32 birim); aşama başına 31 doku bağlayan API'de (Metal) 30 (ShaderCompiler CQ_2D_SLOTS)
+#ifndef CQ_2D_SLOTS
+#define CQ_2D_SLOTS 31
+#endif
+uniform sampler2D u_Textures[CQ_2D_SLOTS];
 #endif
 uniform float u_AlphaClip = 0.01;   // bu alfanın altındaki pikseller atılır (Renderer2D::SetAlphaClip)
 uniform int u_OutputMode = -1;   // -1 kare ayarına göre, 0 sRGB (UI üst katmanı), 1 doğrusal
@@ -103,7 +107,9 @@ vec4 SampleTexture(int index, vec2 uv)
         case 27: return texture(u_Textures[27], uv);
         case 28: return texture(u_Textures[28], uv);
         case 29: return texture(u_Textures[29], uv);
+#if CQ_2D_SLOTS > 30
         case 30: return texture(u_Textures[30], uv);
+#endif
 #endif
     }
 #ifdef CQ_TEXTURE_BUDGET_16

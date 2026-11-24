@@ -33,6 +33,7 @@ namespace Conqueror::GLEmu
         uint32_t SamplerRegister = 0;
         uint32_t Count = 1;
         bool SharedSampler = false;                      // büyük dizi: dokular ayrı, tek örnekleyici
+        int FixedSampler = -1;                           // motor dokusu: grubun sabit durumlu örnekleyicisi (GLEmu::FixedSamplerKind)
         GLenum Target = GL_TEXTURE_2D;
         bool Shadow = false;
         bool Integer = false;
@@ -97,4 +98,24 @@ namespace Conqueror::GLEmu
     };
 
     bool ReflectProgram(const std::vector<ShaderSource>& shaders, const ResourceLimits& limits, ReflectedProgram& out, std::string& log);
+
+    // Sabit durumlu ortak örnekleyicinin GL parametreleri (katmanın doku türünde; GetSampler(params, ...) ile aynı yoldan örnekleyici olur).
+    // Durumlar motorun bu dokuları kurduğu GL parametreleriyle aynı (GLShaderUtil.h EngineGroupedSamplers)
+    template <class TextureT>
+    const TextureT& FixedSamplerParams(int kind)
+    {
+        // Yerinde kurulur (katmanların doku türleri kopyalanamayabilir); yalnız örnekleyici alanları kullanılır, GPU kaynağı yok
+        static TextureT s_Linear, s_Trilinear;
+        static const bool s_Init = [] {
+            s_Linear.MinFilter = GL_LINEAR;
+            s_Linear.MagFilter = GL_LINEAR;
+            s_Linear.WrapS = s_Linear.WrapT = s_Linear.WrapR = GL_CLAMP_TO_EDGE;
+            s_Trilinear.MinFilter = GL_LINEAR_MIPMAP_LINEAR;
+            s_Trilinear.MagFilter = GL_LINEAR;
+            s_Trilinear.WrapS = s_Trilinear.WrapT = s_Trilinear.WrapR = GL_CLAMP_TO_EDGE;
+            return true;
+        }();
+        (void)s_Init;
+        return kind == 1 ? s_Trilinear : s_Linear;
+    }
 }

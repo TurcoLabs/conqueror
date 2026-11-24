@@ -767,8 +767,11 @@ struct VO { @builtin(position) pos : vec4f, @location(0) uv : vec2f };
             bgKey.Add(((uint64_t)slot.Binding << 32) | ((uint64_t)st << 8) | (cube ? 1u : 0u) | (tex->Samples > 1 ? 2u : 0u) | ((uint64_t)slot.Visibility << 16));
             if (slot.SamplerBinding >= 0)
             {
-                const bool filtering = st == WGPUTextureSampleType_Float;
-                const bool comparison = st == WGPUTextureSampleType_Depth;
+                // Motor dokusu grubunun sabit durumlu örnekleyicisi (GLShaderUtil.h GroupEngineSamplers): hep süzen (doğrusal) örnekleyici;
+                // gruptaki süzülemeyen dokular (RGBA32F APV) yalnız texelFetch (textureLoad) ile okunur, örnekleyiciyle eşleşmez
+                const bool fixedSmp = sb.FixedSampler >= 0;
+                const bool filtering = fixedSmp || st == WGPUTextureSampleType_Float;
+                const bool comparison = !fixedSmp && st == WGPUTextureSampleType_Depth;
                 const bool alreadyAdded = std::any_of(le.begin(), le.end(), [&](const WGPUBindGroupLayoutEntry& x) { return x.binding == (uint32_t)slot.SamplerBinding; });
                 if (!alreadyAdded)
                 {
@@ -779,7 +782,7 @@ struct VO { @builtin(position) pos : vec4f, @location(0) uv : vec2f };
                     le.push_back(se);
                     WGPUBindGroupEntry sg{};
                     sg.binding = (uint32_t)slot.SamplerBinding;
-                    sg.sampler = GetSampler(*params, filtering, comparison);
+                    sg.sampler = GetSampler(fixedSmp ? GLEmu::FixedSamplerParams<Texture>(sb.FixedSampler) : *params, filtering, comparison);
                     be.push_back(sg);
                     bgKey.Add(((uint64_t)slot.SamplerBinding << 32) | 0x8000 | ((uint64_t)se.sampler.type << 4) | ((uint64_t)slot.Visibility << 16));
                 }

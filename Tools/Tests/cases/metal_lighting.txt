@@ -1,0 +1,45 @@
+# template: fps
+# requires: CQ_TEST_METAL
+# env: CQ_RENDERER=metal
+# Metal (macOS CI): lighting_features ile aynı sahne. Metal aşama başına 16 örnekleyici ve 31 doku bağlar: motorun aydınlatma dokuları
+# ortak örnekleyicileri paylaşınca yansıtma probu, düzlemsel yansıma ve Ray Traced GI Metal'de de örneklenir (önceden 16 doku bütçesi kapatıyordu)
+wait_until 30000 layout_settled
+wait 10
+focus Viewport
+cvar r.AntiAliasing 1
+cvar r.SSR 0
+create_primitive sphere Ball 0 1.6 1
+entity scale Ball 0.8 0.8 0.8
+comp set Ball MeshRenderer Metallic 1
+comp set Ball MeshRenderer Roughness 0.05
+comp set Ball MeshRenderer Color 1 1 1 1
+create_primitive cube RedWall 0 2 13
+entity scale RedWall 8 4 1
+comp set RedWall MeshRenderer Color 1 0 0 1
+camera 4 15 0 0 1.4 1
+wait 60
+viewport_region_change mark 0 0 1 1
+create_primitive cube Probe 0 1.6 1
+comp remove Probe MeshRenderer
+comp add Probe ReflectionProbeComponent
+comp set Probe ReflectionProbeComponent BlendDistance 0
+wait 90
+comp expect Probe ReflectionProbeComponent Captured true
+viewport_region_change expect 0 0 1 1 >0.7
+viewport_region_change mark 0 0 1 1
+create_primitive plane Floor2 0 0.03 1
+entity scale Floor2 8 1 8
+comp set Floor2 MeshRenderer Metallic 1
+comp set Floor2 MeshRenderer Roughness 0.02
+comp set Floor2 MeshRenderer Color 0.9 0.9 0.9 1
+comp add Floor2 PlanarReflectionComponent
+wait 60
+viewport_region_change expect 0 0 1 1 >10
+viewport_region_change mark 0 0 1 1
+cvar r.RTGI 1
+wait 240
+viewport_region_change expect 0 0 1 1 >7
+gpu expect_shaders_ok
+gpu expect_no_unimplemented
+cvar r.RTGI 0
+quit

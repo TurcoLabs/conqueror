@@ -13,6 +13,7 @@
 
 #include <glad/glad.h>
 #include <glm/gtc/matrix_transform.hpp>
+#include <algorithm>
 
 #include <array>
 #include <vector>
@@ -70,16 +71,16 @@ namespace Conqueror
     // Doku yuvası örnekleyicileri: normalde u_Textures[0..30], 16 doku sınırında ayrı u_Tex0..u_Tex13 (WGSL'de dizi yok)
     static void SetSamplerUniforms(Shader& shader)
     {
-        if (s_Data.SlotCount < Renderer2DData::MaxTextureSlots)
+        if (s_Data.SlotCount == Renderer2DData::BudgetTextureSlots)
         {
             for (uint32_t i = 0; i < s_Data.SlotCount; ++i)
                 shader.SetInt("u_Tex" + std::to_string(i), (int)i);
             return;
         }
         int32_t samplers[Renderer2DData::MaxTextureSlots];
-        for (int32_t i = 0; i < (int32_t)Renderer2DData::MaxTextureSlots; ++i)
+        for (int32_t i = 0; i < (int32_t)s_Data.SlotCount; ++i)
             samplers[i] = i;
-        shader.SetIntArray("u_Textures", samplers, Renderer2DData::MaxTextureSlots);
+        shader.SetIntArray("u_Textures", samplers, s_Data.SlotCount);
     }
 
     void Renderer2D::Init()
@@ -89,7 +90,8 @@ namespace Conqueror
         s_Data.WhiteTexture->SetData(&whiteTextureData, sizeof(uint32_t));
 
         const bool budget = ShaderCompiler::IsTextureBudget16();
-        s_Data.SlotCount = budget ? Renderer2DData::BudgetTextureSlots : Renderer2DData::MaxTextureSlots;
+        // Aşama başına doku sınırı 32'den az olan API'de (Metal 31) yuva sayısı bir eksik: ışık dokusu da sığar (Texture.cqsh CQ_2D_SLOTS)
+        s_Data.SlotCount = budget ? Renderer2DData::BudgetTextureSlots : std::min(Renderer2DData::MaxTextureSlots, ShaderCompiler::Get2DTextureSlots());
         s_Data.LightTextureSlot = s_Data.SlotCount;
         s_Data.TextureShader = Shader::Create("Engine/src/Shaders/2D/Texture.cqsh");
         s_Data.TextureShader->Bind();

@@ -28,6 +28,10 @@ namespace Conqueror::MtlGL
             try
             {
                 spirv_cross::CompilerMSL comp(std::move(words));
+                // u_TLAS'ı bildirip kullanmayan program (Path Tracer'ın yeniden izdüşüm / gürültü giderme geçişleri): kullanılmayan
+                // hızlandırma yapısı MSL'ye yazılmaz (MSL 2.3 öncesinde tür yok, dizini de depolama bloklarıyla çakışırdı)
+                if (rp.AccelStructRegister < 0 && !comp.get_shader_resources().acceleration_structures.empty())
+                    comp.set_enabled_interface_variables(comp.get_active_interface_variables());
                 spirv_cross::CompilerMSL::Options mo;
 #if defined(CQ_PLATFORM_IOS)
                 mo.platform = spirv_cross::CompilerMSL::Options::iOS;
