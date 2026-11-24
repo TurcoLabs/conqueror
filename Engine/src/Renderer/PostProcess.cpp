@@ -1575,7 +1575,8 @@ namespace Conqueror
             ain.Frame = m_JitterActive ? m_FrameIndex : 0u;
             traced = RayTracedEffects::TraceAO(ain, m_AO.Texture);
         }
-        const RenderTarget& aoSource = traced ? m_AO : m_AOFull;
+        // Full Resolution kapalıysa SSAO da yarım çözünürlükte (eski hız; bulanıklaştırma ve derinliğe duyarlı büyütme aynı)
+        const RenderTarget& aoSource = (traced || !settings.AOFullResolution) ? m_AO : m_AOFull;
         glBindFramebuffer(GL_FRAMEBUFFER, aoSource.Framebuffer);
         glViewport(0, 0, aoSource.Width, aoSource.Height);
         if (!traced)

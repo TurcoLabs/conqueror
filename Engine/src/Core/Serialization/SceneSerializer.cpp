@@ -993,6 +993,7 @@ namespace Conqueror
         out << YAML::Key << "SSRMaxRoughness" << YAML::Value << pp.SSRMaxRoughness;
         out << YAML::Key << "RayTracedReflections" << YAML::Value << pp.RayTracedReflections;
         out << YAML::Key << "RayTracedAO" << YAML::Value << pp.RayTracedAO;
+        out << YAML::Key << "AOFullResolution" << YAML::Value << pp.AOFullResolution;
         out << YAML::Key << "RTAORays" << YAML::Value << pp.RTAORays;
         out << YAML::Key << "RayTracedGI" << YAML::Value << pp.RayTracedGI;
         out << YAML::Key << "RTGIIntensity" << YAML::Value << pp.RTGIIntensity;
@@ -1223,6 +1224,7 @@ namespace Conqueror
             ReadIf(pp, "SSRMaxRoughness", p.SSRMaxRoughness);
             ReadIf(pp, "RayTracedReflections", p.RayTracedReflections);
             ReadIf(pp, "RayTracedAO", p.RayTracedAO);
+            ReadIf(pp, "AOFullResolution", p.AOFullResolution);
             ReadIf(pp, "RTAORays", p.RTAORays);
             ReadIf(pp, "RayTracedGI", p.RayTracedGI);
             ReadIf(pp, "RTGIIntensity", p.RTGIIntensity);

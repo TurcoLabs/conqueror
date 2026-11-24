@@ -52,6 +52,7 @@ namespace Conqueror
         float RTGIIntensity = NAN;
         int RTGIRays = -1;
         int RTReflections = -1, RTAO = -1;   // 316: ışın izlemeli yansıma / AO
+        int SSAOFullRes = -1;                // SSAO tam çözünürlük (Full Resolution)
         int TAADebug = -1;   // 1: TAA hata ayıklama görünümü (her pikselin geçmiş yolu renkle)
         int TemporalStability = -1;   // tek kare yöntemlerinde zamansal kararlılık (0 kapalı, 1 açık)
     };

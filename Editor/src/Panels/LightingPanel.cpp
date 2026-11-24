@@ -1123,6 +1123,10 @@ namespace Conqueror::Editor
                 UI::DragFloat("Radius", p.AORadius, 0.01f, 0.05f, 5.0f, "%.2f m");
                 UI::SliderFloat("Intensity##ao", p.AOIntensity, 0.0f, 4.0f);
                 UI::SliderFloat("Power", p.AOPower, 0.5f, 4.0f);
+                if (!p.RayTracedAO)
+                    UI::Checkbox("Full Resolution##ao", p.AOFullResolution, "Compute SSAO at full resolution: sharp occlusion with no grey halos past "
+                                                                            "object edges, about twice the cost of half resolution. Like the Full "
+                                                                            "Resolution option of Unity HDRP and Godot.");
                 UI::Checkbox("Ray Traced##ao", p.RayTracedAO, "Trace occlusion rays against the scene instead of reading the depth buffer: no darkening "
                                                                "lost at the screen edges, occluders outside the view count. Like Unity HDRP Ray-Traced "
                                                                "Ambient Occlusion and Unreal's ray traced AO; compute shaders, any graphics card.");

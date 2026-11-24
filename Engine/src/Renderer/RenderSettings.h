@@ -174,6 +174,10 @@ namespace Conqueror
         float AORadius = 0.6f;
         float AOIntensity = 1.0f;
         float AOPower = 1.5f;
+        // SSAO at full resolution (Godot / Unity HDRP "Full Resolution"): sharp occlusion without halos past edges (326), about twice
+        // the cost of half resolution (0.26 -> 0.53 ms at 1034 x 595 on an RX 580). Off: half resolution, the same depth-aware blur
+        // and upsampling. Ray Traced AO always traces at half resolution
+        bool AOFullResolution = true;
         // Ray Traced Ambient Occlusion (316; Unity HDRP Ray-Traced Ambient Occlusion, Unreal ray traced AO): AO rays traced against
         // the scene BVH instead of the depth buffer (no screen edge loss, occluders outside the view count). Same radius / intensity /
         // power as SSAO; needs compute shaders
