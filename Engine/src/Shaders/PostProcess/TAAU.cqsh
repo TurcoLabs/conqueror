@@ -153,6 +153,10 @@ void main()
     vec3 sumN = vec3(0.0);      // dar süzgeç (kamera dururken: biriken ayrıntı keskin)
     float wsumN = 0.0;
     float wmaxN = 0.0;
+    vec3 sumG = vec3(0.0);      // ince aralıkta daha dar süzgeç (yerel TAA'nın dar süzgeci kadar, 286)
+    float wsumG = 0.0;
+    float wmaxG = 0.0;
+    float wz[9];                // 3x3'ün görüş uzaklıkları (gökyüzü 1e9): ince aralık deseni
     bool skyNear = false;       // 3x3'te gökyüzü: siluet kenarı (duvar üstü / gökyüzü)
     vec3 mn = vec3(1e9), mx = vec3(-1e9), m1 = vec3(0.0), m2 = vec3(0.0);
     float closest = 1.0;
@@ -195,12 +199,20 @@ void main()
         sumN += c * wn;
         wsumN += wn;
         wmaxN = max(wmaxN, wn);
+        // Siluet olmayan yerde (yüzey içi, normal kırığı, ince aralık) yerel TAA'nın dar süzgeci (exp(-4.5 d²)): 3.2 ile uzaktaki küplerin
+        // arası gibi tek piksellik çizgi yerel TAA'dakinden soluk birikiyordu (286). Derinlik siluetinde (duvar üstü / gökyüzü, rampa
+        // kenarı) 3.2 kalır: daha dar süzgeç iç çözünürlüğün basamağını gösteriyordu (330 / 314)
+        float wg = exp(-4.5 * dot(d, d));
+        sumG += c * wg;
+        wsumG += wg;
+        wmaxG = max(wmaxG, wg);
         vec3 yc = RGBToYCoCg(c);
         mn = min(mn, yc);
         mx = max(mx, yc);
         m1 += yc;
         m2 += yc * yc;
         float dep = texelFetch(u_Depth, t, 0).r;
+        wz[(y + 1) * 3 + (x + 1)] = dep >= 1.0 ? 1e9 : ViewW((vec2(t) + 0.5) * u_InTexel, dep);
         if (dep >= 1.0)
             skyNear = true;
         if (dep < closest)
@@ -224,6 +236,29 @@ void main()
         }
     }
     vec3 current = sum / max(wsum, 1e-4);
+    // Derinlik silueti: 3x3'te gökyüzü ya da uzaklık farkı %2'den büyük. İnce aralık deseni: bir satırda / sütunda ortadaki örnek iki
+    // yanındakinden derin, iki yan aynı uzaklıkta (küplerin arası); siluet sayılmaz
+    float wNearest = 1e9, wFarthest = 0.0;
+    for (int k = 0; k < 9; ++k)
+        if (wz[k] < 1e8)
+        {
+            wNearest = min(wNearest, wz[k]);
+            wFarthest = max(wFarthest, wz[k]);
+        }
+    bool silhouette = skyNear || (wFarthest - wNearest > 0.02 * wNearest + 0.02);
+    bool thinGap = false;
+    for (int k = 0; k < 3; ++k)
+    {
+        for (int axis = 0; axis < 2; ++axis)
+        {
+            float a = axis == 0 ? wz[k * 3] : wz[k];
+            float m = axis == 0 ? wz[k * 3 + 1] : wz[3 + k];
+            float b = axis == 0 ? wz[k * 3 + 2] : wz[6 + k];
+            float nearW = max(a, b);
+            if (a < 1e8 && b < 1e8 && abs(a - b) < 0.02 * min(a, b) + 0.02 && m - nearW > 0.02 * nearW + 0.02)
+                thinGap = true;
+        }
+    }
     // 309: hareket eden nesnenin temas kenarı (zeminde sürüklenen küpün alt kenarı): 3x3'ün en yakın örneği önündeki durağan zemin, küp
     // ondan yalnız birkaç santim geride. Kenar küple birlikte kayar: kesin hızlı nesne en yakın durağan örnekten temas payı kadar
     // gerideyse (durağan bir nesnenin arkasından geçmiyorsa) kenarın geçmişi nesnenin hareketiyle alınır (yerel TAA ile aynı)
@@ -493,9 +528,11 @@ void main()
     bool settleYoung = settle && accBefore < 3.99;
     if (settle && !settleYoung)
     {
-        current = sumN / max(wsumN, 1e-4);
-        alphaSettle = wmaxN / (min(accBefore, u_AccCap) + wmaxN);
-        acc = min(accBefore + wmaxN, u_AccCap);
+        bool narrow = thinGap;
+        current = narrow ? sumG / max(wsumG, 1e-4) : sumN / max(wsumN, 1e-4);
+        float wNear = narrow ? wmaxG : wmaxN;
+        alphaSettle = wNear / (min(accBefore, u_AccCap) + wNear);
+        acc = min(accBefore + wNear, u_AccCap);
     }
     else if (settleYoung)
     {

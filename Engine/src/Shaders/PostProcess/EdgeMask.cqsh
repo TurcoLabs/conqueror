@@ -16,7 +16,9 @@ void main()
 
 #type fragment
 #version 450 core
-layout(location = 0) out float FragMask;
+// r: geometrik kenar (keskinleştirme geri alınır), g: ince aralık (286: iki yanı aynı uzaklıktaki ön yüz, ortası derin; küplerin arası).
+// Aralık yerel TAA'daki gibi TAA Sharpness ile kenara dik yönde keskinleştirilir, siluet (duvar üstü, rampa kenarı) keskinleştirilmez (330 / 314)
+layout(location = 0) out vec2 FragMask;
 in vec2 v_UV;
 uniform sampler2D u_PrevMask;
 uniform int u_UseHistory = 0;      // 1: kamera duruyor ve önceki maske geçerli
@@ -59,6 +61,55 @@ float EdgeBetween(ivec2 a, ivec2 b, ivec2 sz)
     return e;
 }
 
+// t'de ince aralık: t (ya da t ile t + yön) iki yanındaki örneklerden derin, iki yan birbirine yakın uzaklıkta
+float GapAt(ivec2 t, ivec2 dir, ivec2 sz)
+{
+    float zm = 1e9;
+    {
+        float d = texelFetch(u_EdgeDepth, clamp(t, ivec2(0), sz - 1), 0).r;
+        zm = d >= 1.0 ? 1e9 : EdgeViewZ(d);
+    }
+    for (int wdt = 1; wdt <= 2; ++wdt)
+    {
+        ivec2 a = clamp(t - dir, ivec2(0), sz - 1), b = clamp(t + dir * wdt, ivec2(0), sz - 1);
+        float da = texelFetch(u_EdgeDepth, a, 0).r, db = texelFetch(u_EdgeDepth, b, 0).r;
+        if (da >= 1.0 || db >= 1.0)
+            continue;
+        float za = EdgeViewZ(da), zb = EdgeViewZ(db);
+        float zin = zm;
+        if (wdt == 2)
+        {
+            float d2 = texelFetch(u_EdgeDepth, clamp(t + dir, ivec2(0), sz - 1), 0).r;
+            zin = min(zm, d2 >= 1.0 ? 1e9 : EdgeViewZ(d2));
+        }
+        float near = max(za, zb);
+        // Eşik geometrik kenarınkiyle aynı (%2): uzaktaki küplerin arası ön yüzlerden yalnız birkaç metre derin
+        if (abs(za - zb) < 0.02 * min(za, zb) + 0.02 && zin - near > 0.02 * near + 0.02)
+            return 1.0;
+    }
+    return 0.0;
+}
+
+// 0..1: çıktı pikselinin 1.5 iç piksel yakınında ince aralık (yatay ya da dikey)
+float ThinGap()
+{
+    ivec2 sz = textureSize(u_EdgeDepth, 0);
+    vec2 p = (v_UV + u_EdgeJitterUV) * vec2(sz) - 0.5;
+    ivec2 c = ivec2(floor(p + 0.5));
+    float g = 0.0;
+    for (int y = -1; y <= 1; ++y)
+        for (int x = -1; x <= 1; ++x)
+        {
+            ivec2 t = c + ivec2(x, y);
+            float d = length(vec2(t) - p);
+            if (d >= 1.5)
+                continue;
+            float f = 1.0 - smoothstep(0.75, 1.5, d);
+            g = max(g, max(GapAt(t, ivec2(1, 0), sz), GapAt(t, ivec2(0, 1), sz)) * f);
+        }
+    return g;
+}
+
 // 0..1: çıktı pikseli geometrik bir kenarın üstünde. Pikselin titreşimli iç örnekler arasındaki yeri (TAAU ile aynı) ve kenar çiftlerinin
 // orta noktalarına uzaklığıyla yumuşak: titreşim her karede yeri kaydırdığında maske sıçramaz (sabit 3x3 penceresinde kenara yakın
 // pikseller karede bir maskeye girip çıkıyor, keskin / keskin olmayan arasında gidip gelip duran kamerada titriyordu)
@@ -90,8 +141,13 @@ float GeometricEdge()
 
 void main()
 {
-    float m = GeometricEdge();
+    vec2 m = vec2(GeometricEdge(), ThinGap());
     if (u_UseHistory == 1)
-        m = mix(m, texture(u_PrevMask, v_UV).r, u_HistoryWeight);
+    {
+        vec2 prev = texture(u_PrevMask, v_UV).rg;
+        m.r = mix(m.r, prev.r, u_HistoryWeight);
+        // Alt piksel aralığı titreşimin yalnız bazı karelerinde iç örneklere düşer: dururken azalan en büyük değerle tutulur
+        m.g = max(m.g, prev.g * 0.97);
+    }
     FragMask = m;
 }

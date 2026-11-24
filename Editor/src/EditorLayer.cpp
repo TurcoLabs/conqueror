@@ -1408,7 +1408,8 @@ namespace Conqueror::Editor
         else if (Input::GetCursorMode() != 0)
         {
             // Odak: yalnızca odaklıyken kaybedildiği anda (Alt+Tab); başsız/odaksız pencerede kilit kalabilir
-            const bool focused = glfwGetWindowAttrib(static_cast<GLFWwindow*>(Application::Get().GetWindow().GetNativeWindow()), GLFW_FOCUSED) != 0;
+            const bool focused = m_FocusOverride >= 0 ? m_FocusOverride == 1
+                                                      : glfwGetWindowAttrib(static_cast<GLFWwindow*>(Application::Get().GetWindow().GetNativeWindow()), GLFW_FOCUSED) != 0;
             const bool lostFocus = m_WindowWasFocused && !focused;
             m_WindowWasFocused = focused;
             const bool release = ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
@@ -7176,6 +7177,80 @@ namespace Conqueror::Editor
         // viewport_motion_blink <kare> u0 v0 u1 v1 [blue] [max x] (310): kamera hareket ederken (camera_fly ile birlikte) bölgedeki ince
         // aralıkların görünürlüğü (5x5 komşuluğun en parlağı - piksel; blue: yalnız mavi yüzeylerin 2 piksel çevresi) 12x12 hücrelerde;
         // kareler boyunca hücre değerinin ikinci farkı = ileri geri giderken yanıp sönme (eski TAA + NIS 0.34, TAAU 0.15)
+        // viewport_gap_dip mark|expect u0 v0 u1 v1 [<cond>] (286): bölgedeki mavi yüzeylerde satır boyunca yerel parlaklık minimumları (küplerin
+        // arası, birleşme çizgisi) işaretlenir (mark: referans kipte, ör. SSAA); expect aynı noktalardaki ortalama düşüşü ölçer (iki yanın
+        // ortalaması - ortadaki 3 pikselin en koyusu). Uzaktan aralıkların görünürlüğü: TAA + NIS yerel TAA'nın ne kadarı
+        Automation::RegisterCommand("viewport_gap_dip", [this](const Args& a, std::string& err) {
+            static std::vector<std::pair<int, int>> s_Gaps;
+            static int s_W = 0, s_H = 0;
+            if (a.size() < 6 || !m_ViewportPanel || !m_ViewportPanel->GetFramebuffer()) { err = "viewport_gap_dip mark|expect u0 v0 u1 v1 [cond]"; return false; }
+            const auto& fb = m_ViewportPanel->GetFramebuffer();
+            const auto& spec = fb->GetSpecification();
+            const int x0 = std::clamp((int)(std::stof(a[2]) * spec.Width), 0, (int)spec.Width - 1);
+            const int y0 = std::clamp((int)(std::stof(a[3]) * spec.Height), 0, (int)spec.Height - 1);
+            const int x1 = std::clamp((int)(std::stof(a[4]) * spec.Width), x0 + 1, (int)spec.Width);
+            const int y1 = std::clamp((int)(std::stof(a[5]) * spec.Height), y0 + 1, (int)spec.Height);
+            const int w = x1 - x0, h = y1 - y0;
+            std::vector<uint8_t> px((size_t)w * h * 4);
+            glGetTextureSubImage(fb->GetColorAttachmentRendererID(0), 0, x0, y0, 0, w, h, 1, GL_RGBA, GL_UNSIGNED_BYTE, (GLsizei)px.size(), px.data());
+            auto lum = [&](int x, int y) {
+                const uint8_t* p = &px[((size_t)y * w + x) * 4];
+                return 0.2126f * p[0] + 0.7152f * p[1] + 0.0722f * p[2];
+            };
+            auto blue = [&](int x, int y) {
+                const uint8_t* p = &px[((size_t)y * w + x) * 4];
+                return (int)p[2] - std::max((int)p[0], (int)p[1]) > 40;
+            };
+            if (a[1] == "mark")
+            {
+                s_Gaps.clear();
+                s_W = w;
+                s_H = h;
+                for (int y = 0; y < h; ++y)
+                {
+                    int bx0 = -1, bx1 = -1, nb = 0;
+                    for (int x = 0; x < w; ++x)
+                        if (blue(x, y)) { if (bx0 < 0) bx0 = x; bx1 = x; ++nb; }
+                    if (nb <= 12)
+                        continue;
+                    for (int x = bx0 + 2; x <= bx1 - 2; ++x)
+                    {
+                        const float l = lum(x, y), side = 0.5f * (lum(x - 2, y) + lum(x + 2, y));
+                        if (l < lum(x - 1, y) && l <= lum(x + 1, y) && side - l > 6.0f)
+                            s_Gaps.emplace_back(x, y);
+                    }
+                }
+                Automation::Report("GAPS marked " + std::to_string(s_Gaps.size()));
+                if (s_Gaps.empty()) { err = "no gaps found"; return false; }
+                return true;
+            }
+            if (a[1] != "expect" || a.size() < 7) { err = "viewport_gap_dip mark|expect u0 v0 u1 v1 [cond]"; return false; }
+            if (w != s_W || h != s_H || s_Gaps.empty()) { err = "region differs from the marked one"; return false; }
+            double sum = 0.0;
+            for (const auto& [x, y] : s_Gaps)
+            {
+                const float m = std::min(lum(x - 1, y), std::min(lum(x, y), lum(x + 1, y)));
+                sum += std::max(0.0f, 0.5f * (lum(x - 2, y) + lum(x + 2, y)) - m);
+            }
+            const float dip = (float)(sum / (double)s_Gaps.size());
+            char line[96];
+            std::snprintf(line, sizeof(line), "GAP DIP %.2f (%zu gaps)", dip, s_Gaps.size());
+            Automation::Report(line);
+            // ">last*v": bir önceki expect'in ölçtüğü düşüşün v katından büyük (aynı koşuda iki kip; gökyüzü / zaman farkı oranı etkilemez)
+            static float s_LastDip = -1.0f;
+            const std::string& cond = a[6];
+            bool ok;
+            if (cond.rfind(">last*", 0) == 0)
+                ok = s_LastDip > 0.0f && dip > s_LastDip * std::stof(cond.substr(6));
+            else
+            {
+                const float v = std::stof(cond.substr(cond[0] == '>' || cond[0] == '<' ? 1 : 0));
+                ok = cond[0] == '<' ? dip < v : dip > v;
+            }
+            if (!ok) err = "gap dip " + std::to_string(dip) + (s_LastDip > 0.0f ? " (previous " + std::to_string(s_LastDip) + ")" : std::string());
+            s_LastDip = dip;
+            return ok;
+        });
         Automation::RegisterCommand("viewport_motion_blink", [this](const Args& a, std::string& err) {
             if (a.size() < 6 || !m_ViewportPanel || !m_ViewportPanel->GetFramebuffer()) { err = "viewport_motion_blink <frames> u0 v0 u1 v1 [blue] [max x]"; return false; }
             const int frames = std::max(3, std::atoi(a[1].c_str()));
@@ -9996,6 +10071,15 @@ namespace Conqueror::Editor
                 if (percent > maxPercent) { e = "first shown frame differs from the settled layout in " + std::to_string(percent) + "%"; return false; }
                 return true;
             });
+            return true;
+        });
+        // window_focus <0|1|real> (319): pencere odağını taklit eder (GNOME'un ekran görüntüsü arayüzü PrtSc'de odağı alır; oynarken odak
+        // kaybı imleç kilidini bırakır). real: gerçek pencere durumuna döner
+        Automation::RegisterCommand("window_focus", [this](const Args& a, std::string& err) {
+            if (a.size() < 2) { err = "window_focus <0|1|real>"; return false; }
+            m_FocusOverride = a[1] == "real" ? -1 : (a[1] == "1" ? 1 : 0);
+            // ImGui'nin GLFW arka ucu da odak olayını iletir (tuşlar bırakılır)
+            ImGui::GetIO().AddFocusEvent(m_FocusOverride != 0);
             return true;
         });
         Automation::RegisterCommand("stats_ready", [this](const Args&, std::string& err) {

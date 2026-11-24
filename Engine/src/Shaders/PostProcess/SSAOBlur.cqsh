@@ -26,6 +26,10 @@ uniform sampler2D u_AO;        // yarım çözünürlük
 uniform sampler2D u_Depth;     // tam çözünürlük
 uniform vec2 u_TexelSize;
 uniform vec2 u_NearFar = vec2(0.1, 1000.0);
+// Uzamsal ağırlığın ölçeği: zamansal yükseltmede (TAAU, FSR 2 ...) AO iç çözünürlükte hesaplanır, 5x5'in ekrandaki ayak izi 1 / ölçek
+// kat genişler. 1 / ölçek² ile süzgecin çıktı piksellerindeki genişliği yerel çözünürlükteki kadar kalır (286: uzaktaki küplerin
+// arasındaki örtü daha sığ ve geniş çıkıyor, aralıklar yerel TAA'dakinden soluk görünüyordu)
+uniform float u_SpatialScale = 1.0;
 
 float DepthAt(ivec2 t, ivec2 hsz, ivec2 fsz)
 {
@@ -68,7 +72,7 @@ void main()
             if (z < 0.0)
                 continue;
             float rel = (z - (zc + gx * float(x) + gy * float(y))) / tol;
-            float w = exp(-0.22 * float(x * x + y * y)) * exp(-rel * rel);
+            float w = exp(-0.22 * u_SpatialScale * float(x * x + y * y)) * exp(-rel * rel);
             sum += texelFetch(u_AO, t, 0).r * w;
             wsum += w;
         }

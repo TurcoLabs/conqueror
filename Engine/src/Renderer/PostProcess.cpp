@@ -1325,8 +1325,8 @@ namespace Conqueror
         if (!Valid(mask))
             return 0;
         const int next = 1 - m_EdgeMaskIndex;
-        EnsureTarget(m_EdgeMask[0], w, h, GL_R8);
-        EnsureTarget(m_EdgeMask[1], w, h, GL_R8);
+        EnsureTarget(m_EdgeMask[0], w, h, GL_RG8);
+        EnsureTarget(m_EdgeMask[1], w, h, GL_RG8);
         glBindFramebuffer(GL_FRAMEBUFFER, m_EdgeMask[next].Framebuffer);
         glViewport(0, 0, (GLsizei)w, (GLsizei)h);
         const uint32_t normals = GetSceneNormalTexture();
@@ -1607,6 +1607,11 @@ namespace Conqueror
         blur->SetInt("u_Depth", 1);
         blur->SetFloat2("u_NearFar", m_AONearFar);
         blur->SetFloat2("u_TexelSize", glm::vec2(1.0f / aoSource.Width, 1.0f / aoSource.Height));
+        // 286: zamansal yükseltmede (iç çözünürlük < çıktı, titreşimli birikim) bulanıklaştırmanın çıktı pikselindeki genişliği yerel
+        // çözünürlükteki kadar: iç çözünürlükte 5x5 ekranda 1 / ölçek kat genişleyip küplerin arasındaki örtüyü sığlaştırıyordu. Yalnız
+        // zamansal birikimde (titreşim açık): kalan gürültü titreşim evreleri boyunca ortalanır; uzamsal yükselticide değişmez
+        const float aoScale = (m_JitterActive && m_RenderScale < 0.999f) ? std::max(m_RenderScale, 0.25f) : 1.0f;
+        blur->SetFloat("u_SpatialScale", 1.0f / (aoScale * aoScale));
         BindTexture(0, aoSource.Texture);
         BindTexture(1, GetSceneDepthTexture());
         PostProcess::DrawFullscreenQuad();
@@ -2597,6 +2602,8 @@ namespace Conqueror
             {
                 sharpen->SetInt("u_Unsharpened", 2);
                 sharpen->SetInt("u_EdgeMask", 3);
+                // 286: kenarlardaki keskinleştirilmemiş TAAU çıktısı yerel TAA'daki kadar keskinleştirilir (TAA Sharpness + Sharpen)
+                sharpen->SetFloat("u_EdgeAmount", std::min(settings.TAASharpness + ((settings.Sharpen && !m_CASSharpen) ? settings.SharpenAmount : 0.0f), 1.0f));
                 BindTexture(2, unsharpened);
                 BindTexture(3, edgeMask);
             }

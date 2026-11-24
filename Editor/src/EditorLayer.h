@@ -330,5 +330,6 @@ namespace Conqueror::Editor
         // Sağ / orta fare tuşunun basıldığı pencere (ImGui kök pencere kimliği): bırakma yalnız o pencereye aittir (263)
         unsigned int m_MousePressWindow[3] = { 0, 0, 0 };
         bool m_WindowWasFocused = false;
+        int m_FocusOverride = -1;            // otomasyon: pencere odağı (-1 gerçek durum, 0 odaksız, 1 odaklı; 319 ekran görüntüsü arayüzü)
 };
 }

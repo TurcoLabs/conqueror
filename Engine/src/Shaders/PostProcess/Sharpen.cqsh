@@ -30,15 +30,51 @@ uniform float u_MotionAmount = 0.0;
 uniform sampler2D u_Unsharpened;
 uniform int u_HasUnsharpened = 0;
 uniform sampler2D u_EdgeMask;     // EdgeMask.cqsh: geometrik kenar (0..1), kamera dururken zamanla biriktirilmiş
+uniform float u_EdgeAmount = 0.0; // kenarlardaki keskinleştirilmemiş görüntünün keskinliği (yerel TAA'nın TAA Sharpness'ı)
+
+// Kenara dik yönde keskinleştirme: parlaklık gradyanı yönünde iki komşuyla (CAS ağırlığıyla). Kenar boyunca örnek alınmaz: iç
+// çözünürlükten kalan basamak deseni (kenar boyunca değişen parlaklık) büyütülmez, yalnız kenarın iki yanı arasındaki fark artar
+vec3 SharpenAcross(sampler2D tex, float amount)
+{
+    vec3 c = texture(tex, v_UV).rgb;
+    if (amount <= 0.0)
+        return c;
+    vec2 t = u_InverseScreenSize;
+    const vec3 lw = vec3(0.2126, 0.7152, 0.0722);
+    float l[9];
+    for (int y = -1; y <= 1; ++y)
+        for (int x = -1; x <= 1; ++x)
+            l[(y + 1) * 3 + (x + 1)] = dot(texture(tex, v_UV + vec2(x, y) * t).rgb, lw);
+    vec2 g = vec2((l[2] + 2.0 * l[5] + l[8]) - (l[0] + 2.0 * l[3] + l[6]), (l[6] + 2.0 * l[7] + l[8]) - (l[0] + 2.0 * l[1] + l[2]));
+    float gl = length(g);
+    if (gl < 1e-4)
+        return c;
+    vec2 n = g / gl;
+    vec3 a = texture(tex, v_UV + n * t).rgb;
+    vec3 b = texture(tex, v_UV - n * t).rgb;
+    vec3 mn = min(c, min(a, b));
+    vec3 mx = max(c, max(a, b));
+    vec3 amp = sqrt(clamp(min(mn, 1.0 - mx) / max(mx, vec3(1e-4)), 0.0, 1.0));
+    float edgeFade = 1.0 - smoothstep(0.15, 0.35, dot(mx - mn, lw));
+    vec3 wgt = -amp * 2.0 * mix(0.125, 0.2, clamp(amount, 0.0, 1.0)) * edgeFade;
+    return clamp((c + (a + b) * wgt) / (1.0 + 2.0 * wgt), mn, mx);
+}
 
 void main()
 {
     vec3 c = texture(u_ScreenTexture, v_UV).rgb;
     if (u_HasUnsharpened == 1)
     {
-        float edge = texture(u_EdgeMask, v_UV).r;
-        if (edge > 0.0)
-            c = mix(c, texture(u_Unsharpened, v_UV).rgb, edge);
+        // Geometrik kenarda uzamsal keskinleştiricinin (NIS / FSR 1 / CAS) yerine TAAU'nun kendi çıktısı (330 / 314: NIS siluetlerde
+        // merdiven çıkarıyordu). Normal kırığında ve ince aralıkta (g: küplerin birleştiği yer) yerel TAA'daki kadar (TAA Sharpness)
+        // kenara dik yönde keskinleştirilir (286: hiç keskinleştirme yokken uzaktaki küplerin arası yerel TAA'dakinden soluk kalıyordu);
+        // derinlik silueti keskinleşmez
+        vec2 em = texture(u_EdgeMask, v_UV).rg;
+        if (em.r > 0.0)
+        {
+            vec3 u = (em.g > 0.0 && u_EdgeAmount > 0.0) ? SharpenAcross(u_Unsharpened, u_EdgeAmount * em.g) : texture(u_Unsharpened, v_UV).rgb;
+            c = mix(c, u, em.r);
+        }
     }
     float amount = u_Amount;
     if (u_HasMotionState == 1 && u_MotionAmount > 0.0)

@@ -1,0 +1,24 @@
+# template: fps
+# 286: uzaktan (45 m) piramidin küpleri arasındaki çizgiler TAA + NIS'te birbirine karışıyordu. Ölçü: SSAA'da işaretlenen aralık
+# noktalarında parlaklık düşüşü (viewport_gap_dip). Eskiden SSAA 22.1, yerel TAA 18.6, TAA + NIS 17.0 (yerelin %91'i). Nedenler: SSAO
+# iç çözünürlükte hesaplanıp 5x5 bulanıklaştırması ekranda 1.5 kat geniş yayılıyordu (zamansal yükseltmede süzgeç çıktı pikselinde
+# yerel kadar dar), ince aralıkta TAAU'nun dur-birik süzgeci yerel TAA'nınkinden genişti ve kenar maskesi aralığı hiç keskinleştirmiyordu
+# (yerel TAA TAA Sharpness uygular; siluetler 330 / 314 merdiveni yüzünden keskinleşmez, taau_nis_edge_stairs). Bu ölçüyle yerel TAA 19.4-19.6,
+# TAA + NIS eskiden yerelin %90.7'si (17.76), şimdi %94.0'ı (18.18)
+wait_until 3000 layout_settled
+wait 10
+focus Viewport
+cvar r.TemporalStability 1
+camera 45 6 0 0 2 0
+cvar r.AntiAliasing 7
+cvar r.Upscaler 0
+wait 120
+viewport_gap_dip mark 0.42 0.36 0.58 0.58
+cvar r.AntiAliasing 3
+cvar r.Upscaler 0
+wait 220
+viewport_gap_dip expect 0.42 0.36 0.58 0.58 >17
+cvar r.Upscaler 3
+wait 220
+viewport_gap_dip expect 0.42 0.36 0.58 0.58 >last*0.925
+quit
