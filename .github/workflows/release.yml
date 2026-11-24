@@ -77,9 +77,12 @@ jobs:
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v5
+      - name: Fetch the DirectX Shader Compiler (Direct3D 12 hardware ray tracing needs dxcompiler.dll + dxil.dll next to the editor and the player)
+        shell: bash
+        run: bash Tools/DXC/fetch-dxc.sh dxc x64
       - name: Build
         run: |
-          cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCQ_DXC_DIR="${{ github.workspace }}/dxc"
           cmake --build build --config Release --parallel 2 -- '/clp:ErrorsOnly;Summary' /v:minimal
       - name: Package
         shell: bash

@@ -138,12 +138,18 @@ jobs:
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v5
+      - name: Fetch the DirectX Shader Compiler (Direct3D 12 hardware ray tracing needs dxcompiler.dll + dxil.dll next to the editor and the player)
+        shell: bash
+        run: bash Tools/DXC/fetch-dxc.sh dxc x64
       - name: Configure
-        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCQ_DXC_DIR="${{ github.workspace }}/dxc"
       - name: Build
         # Yalnız hatalar ve özet (binlerce üçüncü taraf uyarısı asıl hatayı gömüyordu); her proje /MP ile zaten tüm
         # çekirdekleri kullanır, aynı anda en çok 2 proje (bellek tükenip cl.exe sessizce düşmesin)
         run: cmake --build build --config Release --parallel 2 -- '/clp:ErrorsOnly;Summary' /v:minimal
+      - name: DXC runtime is next to the editor (Direct3D 12 ray tracing)
+        shell: bash
+        run: for f in dxcompiler.dll dxil.dll; do test -f "build/bin/$f" || { echo "build/bin/$f missing"; ls build/bin | head -50; exit 1; }; done
 
   windows-arm64:
     name: Windows on ARM (MSVC ARM64)
@@ -152,9 +158,12 @@ jobs:
     continue-on-error: true
     steps:
       - uses: actions/checkout@v5
+      - name: Fetch the DirectX Shader Compiler (ARM64; Direct3D 12 hardware ray tracing)
+        shell: bash
+        run: bash Tools/DXC/fetch-dxc.sh dxc arm64
       - name: Configure
         # Görüntüdeki en yeni Visual Studio (windows-11-arm'da 2022 yok) CMake'in kendi seçimiyle
-        run: cmake -S . -B build -A ARM64
+        run: cmake -S . -B build -A ARM64 -DCQ_DXC_DIR="${{ github.workspace }}/dxc"
       - name: Build
         run: cmake --build build --config Release --parallel 2 -- '/clp:ErrorsOnly;Summary' /v:minimal
 
