@@ -7,6 +7,7 @@
 #include "Core/Logging/Log.h"
 
 #include <d3dcompiler.h>
+#include <dxcapi.h>
 #include <spirv_hlsl.hpp>
 
 #include <cstdlib>
@@ -38,6 +39,77 @@ namespace Conqueror::DXCommon
             return helpers + out;
         }
 
+    }
+
+    namespace
+    {
+        // 316: DXIL derleyicisi (DirectXShaderCompiler, dxcompiler.dll + imzalama için dxil.dll) çalışma anında açılır: satır içi ışın
+        // sorgusu (RayQuery, DXR 1.1) Shader Model 6.5 ister, d3dcompiler_47 (FXC) en çok 5.1 derler
+        DxcCreateInstanceProc DxcCreate()
+        {
+            static const DxcCreateInstanceProc s_Create = []() -> DxcCreateInstanceProc {
+                HMODULE m = LoadLibraryA("dxcompiler.dll");
+                return m ? reinterpret_cast<DxcCreateInstanceProc>(reinterpret_cast<void*>(GetProcAddress(m, "DxcCreateInstance"))) : nullptr;
+            }();
+            return s_Create;
+        }
+    }
+
+    // dxil.dll de gerekir: DXC derlediği DXIL'i onunla imzalar (imzasız DXIL'den D3D12 boru hattı oluşturmaz)
+    bool HasDXC()
+    {
+        static const bool s_Dxil = LoadLibraryA("dxil.dll") != nullptr;
+        return s_Dxil && DxcCreate() != nullptr;
+    }
+
+    bool CompileDXC(const std::string& source, const wchar_t* target, std::vector<uint8_t>& out, std::string& errors)
+    {
+        const DxcCreateInstanceProc create = DxcCreate();
+        if (!create)
+        {
+            errors = "dxcompiler.dll is not available";
+            return false;
+        }
+        IDxcCompiler3* compiler = nullptr;
+        if (FAILED(create(CLSID_DxcCompiler, __uuidof(IDxcCompiler3), reinterpret_cast<void**>(&compiler))) || !compiler)
+        {
+            errors = "DxcCreateInstance(CLSID_DxcCompiler) failed";
+            return false;
+        }
+        DxcBuffer buffer{ source.data(), source.size(), DXC_CP_UTF8 };
+        const wchar_t* args[] = { L"-E", L"main", L"-T", target, L"-O3", L"-HV", L"2021" };
+        IDxcResult* result = nullptr;
+        const HRESULT hr = compiler->Compile(&buffer, args, (UINT32)(sizeof(args) / sizeof(args[0])), nullptr, __uuidof(IDxcResult), reinterpret_cast<void**>(&result));
+        compiler->Release();
+        if (FAILED(hr) || !result)
+        {
+            errors = "DXC compile call failed";
+            return false;
+        }
+        HRESULT status = E_FAIL;
+        result->GetStatus(&status);
+        IDxcBlobUtf8* err = nullptr;
+        if (SUCCEEDED(result->GetOutput(DXC_OUT_ERRORS, __uuidof(IDxcBlobUtf8), reinterpret_cast<void**>(&err), nullptr)) && err)
+        {
+            if (err->GetStringLength())
+                errors.assign(err->GetStringPointer(), err->GetStringLength());
+            err->Release();
+        }
+        IDxcBlob* object = nullptr;
+        if (SUCCEEDED(status))
+            result->GetOutput(DXC_OUT_OBJECT, __uuidof(IDxcBlob), reinterpret_cast<void**>(&object), nullptr);
+        result->Release();
+        if (FAILED(status) || !object || object->GetBufferSize() == 0)
+        {
+            if (object)
+                object->Release();
+            if (errors.empty())
+                errors = "DXC produced no shader object";
+            return false;
+        }
+        out.assign((const uint8_t*)object->GetBufferPointer(), (const uint8_t*)object->GetBufferPointer() + object->GetBufferSize());
+        object->Release();
+        return true;
     }
 
     bool CompileHLSL(const std::string& source, const char* name, const char* entry, const char* target, std::vector<uint8_t>& out, std::string& errors)
@@ -73,15 +145,17 @@ namespace Conqueror::DXCommon
         {
             // Hesaplama (307): salt okunur depolama görüntüleri Texture2D (t#; UAV okuması D3D11'de yalnız R32 biçimlerinde garanti),
             // yazılabilirler RWTexture2D (u#); depolama blokları ByteAddressBuffer / RWByteAddressBuffer
+            // 316: hızlandırma yapısı kullanan (GL_EXT_ray_query) program satır içi ışın sorgusuyla SM 6.5'e (DXC, DXIL)
+            const bool rayQuery = p.AccelStructRegister >= 0;
             std::string hlsl;
             try
             {
                 spirv_cross::CompilerHLSL hc(p.ComputeSpirv);
                 spirv_cross::CompilerHLSL::Options ho;
-                ho.shader_model = 50;
+                ho.shader_model = rayQuery ? 65 : 50;
                 ho.nonwritable_uav_texture_as_srv = true;
                 hc.set_hlsl_options(ho);
-                hlsl = PortableHLSL(hc.compile());
+                hlsl = rayQuery ? hc.compile() : PortableHLSL(hc.compile());
             }
             catch (const std::exception& e)
             {
@@ -91,7 +165,7 @@ namespace Conqueror::DXCommon
             if (s_Dump && *s_Dump)
                 std::ofstream(std::string(s_Dump) + "/prog" + std::to_string(id) + ".cs.hlsl") << hlsl;
             std::string err;
-            if (!CompileHLSL(hlsl, "dxgl_cs", "main", "cs_5_0", p.CS, err))
+            if (rayQuery ? !CompileDXC(hlsl, L"cs_6_5", p.CS, err) : !CompileHLSL(hlsl, "dxgl_cs", "main", "cs_5_0", p.CS, err))
             {
                 log = std::string("[compute] ") + err;
                 return false;

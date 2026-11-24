@@ -157,6 +157,7 @@ namespace Conqueror::D12GL
         uint32_t LocalSize[3] = { 1, 1, 1 };
         std::vector<GLEmu::ImageBinding> Images;
         std::vector<GLEmu::StorageBlockBinding> StorageBlocks;
+        int AccelStructRegister = -1;                    // 316: u_TLAS'ın SRV yuvası (DXR satır içi ışın sorgusu), yoksa -1
         bool Linked = false;
         std::string Log;
         std::vector<uint8_t> VS, PS;                     // DXBC
@@ -294,6 +295,10 @@ namespace Conqueror::D12GL
 
     bool Install(std::string& error);
     void Shutdown();
+    // 316: DXR 1.1 satır içi ışın sorgusu (D12GLRayQuery.cpp): destekleniyorsa GLEmu'ya kaydedilir; TLAS'ın SRV tanımlayıcısı (yoksa nullptr)
+    void InstallRayQuery();
+    void ShutdownRayQuery();
+    const DX12::CpuDescriptor* CurrentTLASSRV();
     void BeginFrameResources();
     void SwapBuffers();
 

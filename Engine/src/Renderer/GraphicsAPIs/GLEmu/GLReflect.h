@@ -93,6 +93,7 @@ namespace Conqueror::GLEmu
         std::vector<ImageBinding> Images;
         std::vector<StorageBlockBinding> StorageBlocks;
         uint32_t TextureRegisters = 0;                   // örneklenen doku yazmaçlarının sayısı (t0..)
+        int AccelStructRegister = -1;                    // 316: donanım ışın sorgusunun hızlandırma yapısı (u_TLAS; t#, DXR / Metal RT)
     };
 
     bool ReflectProgram(const std::vector<ShaderSource>& shaders, const ResourceLimits& limits, ReflectedProgram& out, std::string& log);

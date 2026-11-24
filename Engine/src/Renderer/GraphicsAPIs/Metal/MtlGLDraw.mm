@@ -1364,6 +1364,12 @@ fragment ClearOut cq_clear(VSOut i [[stage_in]], constant Params& p [[buffer(0)]
         }
         if (p->NeedsBufferSizes)
             [enc setBytes:sizes length:sizeof(sizes) atIndex:MTL::kBufferSizeIndex];
+        // 316: donanım ışın sorgusunun TLAS'ı (yoksa dispatch atlanır: arabellek dizini boş kalırdı)
+        if (p->AccelStructBuffer >= 0 && !BindRayQueryTLAS(enc, (uint32_t)p->AccelStructBuffer))
+        {
+            CQ_CORE_WARN("[MtlGL] Compute dispatch skipped: no ray tracing acceleration structure is built");
+            return;
+        }
         const MTLSize group = MTLSizeMake(p->LocalSize[0], p->LocalSize[1], p->LocalSize[2]);
         if (args)
             [enc dispatchThreadgroupsWithIndirectBuffer:args->Storage indirectBufferOffset:(NSUInteger)std::max<int64_t>(indirectOffset, 0) threadsPerThreadgroup:group];

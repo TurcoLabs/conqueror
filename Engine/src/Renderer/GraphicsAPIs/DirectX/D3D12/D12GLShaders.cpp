@@ -59,6 +59,7 @@ namespace Conqueror::D12GL
             p.LocalSize[k] = tp.LocalSize[k];
         p.Images = std::move(tp.Images);
         p.StorageBlocks = std::move(tp.StorageBlocks);
+        p.AccelStructRegister = tp.AccelStructRegister;
         p.Id = c.NextProgramId++;
         if (p.IsCompute)
         {

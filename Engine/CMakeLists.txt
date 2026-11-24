@@ -262,6 +262,17 @@ if(WIN32)
     # Direct3D 12: d3d12.dll çalışma anında açılır (Windows 10 öncesinde D3D11 / OpenGL'e düşer)
     target_compile_definitions(${PROJECT_NAME} PUBLIC CQ_D3D12_ENABLED)
     message(STATUS "Conqueror: Direct3D 12 backend enabled (runtime-loaded)")
+    # 316: DXR 1.1 satır içi ışın sorgusu ışın sorgulu gölgelendiricileri DXC ile (SM 6.5, DXIL) derler: dxcompiler.dll + dxil.dll çalışma
+    # anında açılır (Tools/DXC/fetch-dxc.sh). Yoksa Direct3D 12 ışın izlemeyi hesaplama BVH'si ile yapar. Bulunursa bin/'e kopyalanır,
+    # Build Settings oyuncunun yanındaki DLL'leri Windows oyunlarına taşır
+    set(CQ_DXC_DIR "$ENV{CQ_DXC_DIR}" CACHE PATH "Folder with dxcompiler.dll and dxil.dll (Tools/DXC/fetch-dxc.sh); empty = no DXR")
+    if(CQ_DXC_DIR AND EXISTS "${CQ_DXC_DIR}/dxcompiler.dll" AND EXISTS "${CQ_DXC_DIR}/dxil.dll")
+        file(GLOB _cq_dxc_runtime "${CQ_DXC_DIR}/dxcompiler.dll" "${CQ_DXC_DIR}/dxil.dll" "${CQ_DXC_DIR}/DXC-*.txt")
+        file(COPY ${_cq_dxc_runtime} DESTINATION ${CMAKE_BINARY_DIR}/bin)
+        message(STATUS "Conqueror: DirectX Shader Compiler runtime copied (Direct3D 12 hardware ray queries)")
+    elseif(CQ_DXC_DIR)
+        message(WARNING "CQ_DXC_DIR is set but dxcompiler.dll / dxil.dll were not found there: Direct3D 12 ray tracing uses the compute BVH")
+    endif()
 endif()
 
 # ── Metal arka ucu ── (macOS varsayılanı; GL -> Metal çeviri katmanı, MSL SPIRV-Cross ile; Objective-C++ / ARC)

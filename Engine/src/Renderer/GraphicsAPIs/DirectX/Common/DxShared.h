@@ -46,6 +46,9 @@ namespace Conqueror::DXCommon
     bool TranslateProgram(const std::vector<ShaderSource>& shaders, uint64_t id, const ShaderLimits& limits, TranslatedProgram& out, std::string& log);
     // HLSL -> DXBC (d3dcompiler_47)
     bool CompileHLSL(const std::string& source, const char* name, const char* entry, const char* target, std::vector<uint8_t>& out, std::string& errors);
+    // 316: DXIL derleyicisi (dxcompiler.dll) çalışma anında bulunabildi mi; HLSL -> DXIL (ör. cs_6_5: satır içi ışın sorgusu)
+    bool HasDXC();
+    bool CompileDXC(const std::string& source, const wchar_t* target, std::vector<uint8_t>& out, std::string& errors);
 
     // ── Biçimler ──
     struct FormatInfo

@@ -60,8 +60,11 @@ namespace Conqueror::GLEmu
         {
             std::string s = src;
             std::regex versionRe(R"(#version[^\n]*)");
+            // 4.60 korunur (316: GL_EXT_ray_query 4.60 ister; VkGL ile aynı), diğerleri 4.50
+            std::smatch vm;
+            const bool v460 = std::regex_search(s, vm, versionRe) && vm.str().find("460") != std::string::npos;
             if (std::regex_search(s, versionRe))
-                s = std::regex_replace(s, versionRe, "#version 450", std::regex_constants::format_first_only);
+                s = std::regex_replace(s, versionRe, v460 ? "#version 460" : "#version 450", std::regex_constants::format_first_only);
             else
                 s = "#version 450\n" + s;
             s = std::regex_replace(s, std::regex(R"(\bgl_VertexID\b)"), "gl_VertexIndex");
@@ -308,7 +311,7 @@ namespace Conqueror::GLEmu
         struct Pending
         {
             std::string Name;
-            enum Kind { Block, Globals, Combined, Image, Sampler, StorageImage, StorageBuffer } K = Block;
+            enum Kind { Block, Globals, Combined, Image, Sampler, StorageImage, StorageBuffer, AccelStruct } K = Block;
             uint32_t OrigBinding = 0, Size = 0, Count = 1;
             GLenum Target = GL_TEXTURE_2D;
             bool Shadow = false, Integer = false;
@@ -422,6 +425,22 @@ namespace Conqueror::GLEmu
                     idx = (int)resources.size() - 1;
                 }
                 stageIdToRes[stage][sb.id] = idx;
+            }
+            // 316: donanım ışın sorgusunun hızlandırma yapısı (GL_EXT_ray_query, u_TLAS): kaynak görünümü (t#; DXR'de
+            // RaytracingAccelerationStructure SRV'si, Metal'de instance_acceleration_structure)
+            for (const auto& as : activeRes.acceleration_structures)
+            {
+                int idx = findRes(as.name);
+                if (idx < 0)
+                {
+                    Pending pr;
+                    pr.Name = as.name;
+                    pr.K = Pending::AccelStruct;
+                    pr.OrigBinding = comp.get_decoration(as.id, spv::DecorationBinding);
+                    resources.push_back(pr);
+                    idx = (int)resources.size() - 1;
+                }
+                stageIdToRes[stage][as.id] = idx;
             }
             if (stage == ShaderStage::Compute)
                 for (uint32_t k = 0; k < 3; ++k)
@@ -537,6 +556,12 @@ namespace Conqueror::GLEmu
                     sb.Writable = r.Writable;
                     p.StorageBlocks.push_back(sb);
                 }
+            }
+        for (size_t i = 0; i < resources.size(); ++i)
+            if (resources[i].K == Pending::AccelStruct)
+            {
+                finalBinding[i] = nextT;
+                p.AccelStructRegister = (int)nextT++;
             }
         if (uavCount > limits.UnorderedAccess)
         {

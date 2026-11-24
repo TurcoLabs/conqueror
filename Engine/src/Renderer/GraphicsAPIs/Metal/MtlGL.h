@@ -142,6 +142,7 @@ namespace Conqueror::MtlGL
         uint32_t LocalSize[3] = { 1, 1, 1 };
         std::vector<GLEmu::ImageBinding> Images;
         std::vector<GLEmu::StorageBlockBinding> StorageBlocks;
+        int AccelStructBuffer = -1;                      // 316: u_TLAS'ın arabellek dizini (Metal ışın izleme), yoksa -1
         bool Linked = false;
         std::string Log;
         id<MTLFunction> VS = nil, PS = nil;
@@ -278,6 +279,11 @@ namespace Conqueror::MtlGL
 
     bool Install(std::string& error);
     void Shutdown();
+    // 316: Metal ışın izleme (MtlGLRayQuery.mm): destekleniyorsa GLEmu'ya kaydedilir; TLAS'ı (ve kullandığı BLAS'ları) hesaplama
+    // kodlayıcısına bağlar, TLAS yoksa false
+    void InstallRayQuery();
+    void ShutdownRayQuery();
+    bool BindRayQueryTLAS(id<MTLComputeCommandEncoder> enc, uint32_t bufferIndex);
     void BeginFrameResources();
     void SwapBuffers();
 

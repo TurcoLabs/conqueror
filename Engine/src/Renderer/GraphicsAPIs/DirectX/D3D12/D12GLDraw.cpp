@@ -1365,6 +1365,18 @@ float4 PSPresent(VSOut i) : SV_Target { return float4(g_Src.SampleLevel(g_Smp, i
                 anyUAV = true;
             }
         }
+        // 316: donanım ışın sorgusunun TLAS'ı (yoksa dispatch atlanır: tanımlayıcı geçersiz olurdu)
+        if (p->AccelStructRegister >= 0)
+        {
+            const DX12::CpuDescriptor* tlas = CurrentTLASSRV();
+            if (!tlas || (uint32_t)p->AccelStructRegister >= DX12::kMaxSRVs)
+            {
+                CQ_CORE_WARN("[D12GL] Compute dispatch skipped: no ray tracing acceleration structure is built");
+                return;
+            }
+            srvs[p->AccelStructRegister] = tlas->Handle;
+            srvCount = std::max(srvCount, (uint32_t)p->AccelStructRegister + 1);
+        }
         Buffer* args = indirectBuffer ? GetBuffer(indirectBuffer) : nullptr;
         if (indirectBuffer)
         {

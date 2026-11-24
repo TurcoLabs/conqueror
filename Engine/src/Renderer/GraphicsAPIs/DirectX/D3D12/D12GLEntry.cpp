@@ -202,6 +202,7 @@ namespace Conqueror::D12GL
             return false;
         }
         CQ_CORE_INFO("[D12GL] GL 4.6 translation layer ready on {0} ({1} unimplemented entry points stubbed)", core.DeviceName(), g_StubCount);
+        InstallRayQuery();
         return true;
     }
 
@@ -212,6 +213,7 @@ namespace Conqueror::D12GL
         if (!core.IsInitialized())
             return;
         core.Flush();
+        ShutdownRayQuery();
         c.Live = false;
         for (auto& [n, t] : c.Textures) DestroyTextureImage(*t);
         for (auto& [n, t] : c.Renderbuffers) DestroyTextureImage(*t);

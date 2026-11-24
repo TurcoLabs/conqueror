@@ -35,6 +35,9 @@ namespace Conqueror::MtlGL
                 mo.platform = spirv_cross::CompilerMSL::Options::macOS;
 #endif
                 mo.set_msl_version(2, 1);
+                // 316: ışın sorgusu (intersection_query, kullanıcı örnek kimliği) MSL 2.4 ister
+                if (stage == 2 && rp.AccelStructRegister >= 0)
+                    mo.set_msl_version(2, 4);
                 // Hesaplama (307): görüntü atomikleri (FSR 2'nin r32ui sayaçları) Metal 3.1'de doğrudan
                 // Hesaplamada doku atomikleri için Metal 3.1 (çizim gölgelendiricileri sınanmış 2.1 çıktısında kalır)
                 if (stage == 2 && Core::Get().SupportsTextureAtomics())
@@ -67,6 +70,10 @@ namespace Conqueror::MtlGL
                         if (blk.Name == blockName)
                             comp.set_decoration(sb.id, spv::DecorationBinding, blk.Binding);
                 }
+                // 316: hızlandırma yapısı -> arabellek dizini (LinkProgram depolama bloklarından sonra atar)
+                for (const auto& as : res.acceleration_structures)
+                    if (rp.AccelStructRegister >= 0)
+                        comp.set_decoration(as.id, spv::DecorationBinding, (uint32_t)rp.AccelStructRegister);
                 msl = comp.compile();
                 if (needsBufferSizes)
                     *needsBufferSizes = comp.needs_buffer_size_buffer();
@@ -83,6 +90,9 @@ namespace Conqueror::MtlGL
                 std::ofstream(std::string(s_Dump) + "/prog" + std::to_string(programId) + (vertex ? ".vs.metal" : stage == 2 ? ".cs.metal" : ".fs.metal")) << msl;
             NSError* err = nil;
             MTLCompileOptions* opts = [MTLCompileOptions new];
+            if (stage == 2 && rp.AccelStructRegister >= 0)
+                if (@available(macOS 12.0, iOS 15.0, tvOS 15.0, *))
+                    opts.languageVersion = MTLLanguageVersion2_4;
             if (stage == 2 && Core::Get().SupportsTextureAtomics())
                 if (@available(macOS 14.0, iOS 17.0, tvOS 17.0, *))
                     opts.languageVersion = MTLLanguageVersion3_1;
@@ -146,6 +156,9 @@ namespace Conqueror::MtlGL
             uint32_t buf = rp.Compute ? 0u : (uint32_t)rp.Inputs.size();
             for (auto& blk : rp.StorageBlocks)
                 blk.Binding = buf++;
+            // 316: hızlandırma yapısı depolama bloklarından sonraki arabellek dizininde (GLReflect'in t# yazmacı Metal'de kullanılmaz)
+            if (rp.AccelStructRegister >= 0)
+                rp.AccelStructRegister = (int)buf++;
             if (tex > MTL::kMaxTextures || buf > MTL::kConstantBufferBase)
             {
                 p.Log = "Metal: too many storage images / buffers (" + std::to_string(rp.Images.size()) + " / " + std::to_string(rp.StorageBlocks.size()) + ")";
@@ -182,6 +195,7 @@ namespace Conqueror::MtlGL
             p.LocalSize[k] = rp.LocalSize[k];
         p.Images = rp.Images;
         p.StorageBlocks = rp.StorageBlocks;
+        p.AccelStructBuffer = rp.AccelStructRegister;
 
         p.Uniforms = std::move(rp.Uniforms);
         p.UniformByName = std::move(rp.UniformByName);
