@@ -693,6 +693,9 @@ namespace Conqueror::Editor
                     ImGui::SliderInt("Samples Per Frame", &pt.SamplesPerFrame, 1, 16);
                     ImGui::SetNextItemWidth(160.0f);
                     ImGui::DragFloat("Max Path Intensity", &pt.MaxPathIntensity, 0.5f, 0.01f, 10000.0f, "%.1f");
+                    ImGui::Checkbox("Temporal Accumulation", &pt.TemporalAccumulation);
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Keep accumulated samples while the camera moves (reprojected to the new view) instead of restarting");
                     if (ImGui::Button(ICON_FA_ROTATE "  Restart Accumulation"))
                         PathTracer::Reset();
                 }

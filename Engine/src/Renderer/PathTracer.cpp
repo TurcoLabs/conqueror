@@ -16,9 +16,11 @@ namespace Conqueror
 layout(rgba32f, binding = 0) uniform image2D u_Accum;
 layout(rgba16f, binding = 1) uniform writeonly image2D u_Target;
 layout(rgba32f, binding = 2) uniform image2D u_AlbedoAccum;   // birincil isabetin albedosu (gürültü giderici aydınlatmayı ondan ayırır)
+layout(rgba16f, binding = 3) uniform writeonly image2D u_PrimaryNormal;   // 315: bu örneğin birincil isabet normali (gürültü giderici kılavuzu)
 uniform mat4 u_InvViewProj;
 uniform ivec2 u_Size;
 uniform uint u_Frame;
+uniform uint u_Seed;            // 315: rastgele dizinin karesi (birikim yeniden izdüşümle taşınınca u_Frame tekrar edebilir)
 uniform int u_ResolveOnly;      // 1: örnek eklenmez, yalnızca birikmiş ortalama hedefe yazılır
 uniform int u_MaxBounces;
 uniform float u_MaxPathIntensity;
@@ -33,7 +35,7 @@ void main()
         imageStore(u_Target, px, vec4(acc.rgb / max(acc.w, 1.0), 1.0));
         return;
     }
-    s_Seed = (uint(px.x) * 1973u + uint(px.y) * 9277u + u_Frame * 26699u) | 1u;
+    s_Seed = (uint(px.x) * 1973u + uint(px.y) * 9277u + u_Seed * 26699u) | 1u;
     for (int k = 0; k < 4; ++k) rnd();
     vec2 uv = (vec2(px) + vec2(rnd(), rnd())) / vec2(u_Size) * 2.0 - 1.0;
     vec4 a = u_InvViewProj * vec4(uv, -1.0, 1.0), b = u_InvViewProj * vec4(uv, 1.0, 1.0);
@@ -48,7 +50,11 @@ void main()
         int ti = trace(o, d, 1e30, t, bc, false);
         if (ti < 0)
         {
-            if (bounce == 0) primary += background(d);
+            if (bounce == 0)
+            {
+                primary += background(d);
+                imageStore(u_PrimaryNormal, px, vec4(0.0));
+            }
             else radiance += throughput * ambient(d);
             break;
         }
@@ -63,7 +69,11 @@ void main()
         vec3 v = -d;
         vec3 po = p + ng * 1e-3;
         vec3 here = throughput * (m.Emission.rgb + directLight(p, po, n, v, m));
-        if (bounce == 0) albedo0 = max(m.Albedo.rgb, vec3(0.03));
+        if (bounce == 0)
+        {
+            albedo0 = max(m.Albedo.rgb, vec3(0.03));
+            imageStore(u_PrimaryNormal, px, vec4(n, 1.0));
+        }
         if (bounce == 0) primary += here;
         else radiance += here;
         if (bounce == u_MaxBounces) break;
@@ -126,6 +136,7 @@ void main()
 layout(rgba16f, binding = 0) uniform readonly image2D u_DnIn;
 layout(rgba16f, binding = 1) uniform writeonly image2D u_DnOut;
 layout(rgba32f, binding = 2) uniform readonly image2D u_DnAlbedo;   // birincil isabetin birikmiş albedosu (a: örnek sayısı)
+layout(rgba16f, binding = 3) uniform readonly image2D u_DnNormal;   // 315: birincil isabet normali (a = 0: gökyüzü)
 uniform sampler2D u_DnDepth;
 uniform ivec2 u_DnSize;
 uniform int u_DnStep;
@@ -159,6 +170,7 @@ void main()
     float gx = 0.5 * (DnLinear(p + ivec2(1, 0)) - DnLinear(p - ivec2(1, 0)));
     float gy = 0.5 * (DnLinear(p + ivec2(0, 1)) - DnLinear(p - ivec2(0, 1)));
     float lp = DnLum(cp.rgb);
+    vec4 np = imageLoad(u_DnNormal, p);
     const float k[3] = float[](0.375, 0.25, 0.0625);
     if (u_DnMode == 0)
     {
@@ -189,7 +201,11 @@ void main()
             float expected = zp + gx * float(o.x) + gy * float(o.y);
             float wz = exp(-abs(DnLinear(q) - expected) / (0.01 * zp + 0.002 * float(u_DnStep) * zp + 1e-4));
             float wl = exp(-abs(lp - DnLum(cq.rgb)) / sigma);
-            float w = k[abs(x)] * k[abs(y)] * wz * wl;
+            // 315: normal kılavuzu (SVGF): uzaktaki merdivenin basamak yüzü ile alın yüzü derinlik düzleminde ayrılmıyor (adım yüksekliği
+            // uzaklığın %1'inden küçük), tek örnekte parlaklık farkı da gürültüde kayboluyordu: hareket ederken merdiven bulanıp siliniyordu
+            vec4 nq = imageLoad(u_DnNormal, q);
+            float wn = (np.a > 0.5 && nq.a > 0.5) ? pow(clamp(dot(np.xyz, nq.xyz), 0.0, 1.0), 64.0) : 1.0;
+            float w = k[abs(x)] * k[abs(y)] * wz * wl * wn;
             sum += cq.rgb * w;
             vsum += w * w * cq.a;
             wsum += w;
@@ -199,6 +215,99 @@ void main()
     if (u_DnLast == 1)
         outc *= DnAlb(p);
     imageStore(u_DnOut, p, vec4(outc, u_DnLast == 1 ? 1.0 : vsum / (wsum * wsum)));
+}
+)";
+
+        // 315: hareket ederken birikim baştan başlamıyor, önceki karenin birikimi yeni görüşe taşınıyor (gerçek zamanlı yol izlemenin zamansal
+        // birikimi: SVGF / NVIDIA ReLAX / Unreal Lumen'in yeniden izdüşümü). Piksel derinlikten dünyaya, oradan önceki kameraya izdüşülür;
+        // önceki karenin 4 komşu texelinden derinliği (görüş uzaklığı) tutanlar çift doğrusal ağırlıkla alınır, örnek sayısı u_RpCap ile
+        // sınırlanır (yeni ışık / açılan alan çabuk otursun). Tutan texel yoksa (açılan alan) piksel boş başlar. Eskiden kamera kıpırdayınca
+        // her karede tek örnek + gürültü giderici kalıyordu: görüntü lekeli / bulanık, uzaktaki merdiven silinmişti (kullanıcının 620'si)
+        const char* kReprojectMain = R"(
+layout(rgba32f, binding = 0) uniform writeonly image2D u_RpAccum;
+layout(rgba32f, binding = 1) uniform writeonly image2D u_RpAlbedo;
+layout(rgba32f, binding = 2) uniform readonly image2D u_RpPrevAccum;
+layout(rgba32f, binding = 3) uniform readonly image2D u_RpPrevAlbedo;
+layout(r32f, binding = 4) uniform readonly image2D u_RpPrevW;
+layout(r32f, binding = 5) uniform writeonly image2D u_RpCurW;
+uniform sampler2D u_RpDepth;
+uniform mat4 u_RpInvViewProj;
+uniform mat4 u_RpViewProj;
+uniform mat4 u_RpPrevViewProj;
+uniform ivec2 u_RpSize;
+uniform float u_RpCap;
+uniform int u_RpWOnly;      // 1: yalnız bu karenin görüş uzaklığı yazılır (birikim taşınmaz)
+void main()
+{
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (p.x >= u_RpSize.x || p.y >= u_RpSize.y) return;
+    float d = texelFetch(u_RpDepth, p, 0).r;
+    vec2 uv = (vec2(p) + 0.5) / vec2(u_RpSize);
+    vec4 wp = u_RpInvViewProj * vec4(uv * 2.0 - 1.0, d * 2.0 - 1.0, 1.0);
+    wp /= wp.w;
+    float curW = d >= 1.0 ? 0.0 : (u_RpViewProj * wp).w;
+    imageStore(u_RpCurW, p, vec4(curW));
+    if (u_RpWOnly == 1)
+        return;
+    vec4 outAcc = vec4(0.0), outAlb = vec4(0.0);
+    if (d < 1.0)
+    {
+        vec4 pc = u_RpPrevViewProj * wp;
+        if (pc.w > 1e-4)
+        {
+            vec2 pp = (pc.xy / pc.w * 0.5 + 0.5) * vec2(u_RpSize) - 0.5;
+            ivec2 b = ivec2(floor(pp));
+            vec2 f = pp - vec2(b);
+            // Catmull-Rom (4x4): her karede yeniden örneklenen birikim çift doğrusal süzgeçle her karede biraz daha bulanıklaşıyordu
+            // (TAA'nın geçmişi gibi). Derinliği tutmayan texelin ağırlığı sıfır; geçerli ağırlık azsa çift doğrusala düşülür
+            vec4 wx = vec4(((-0.5 * f.x + 1.0) * f.x - 0.5) * f.x, (1.5 * f.x - 2.5) * f.x * f.x + 1.0, ((-1.5 * f.x + 2.0) * f.x + 0.5) * f.x, (0.5 * f.x - 0.5) * f.x * f.x);
+            vec4 wy = vec4(((-0.5 * f.y + 1.0) * f.y - 0.5) * f.y, (1.5 * f.y - 2.5) * f.y * f.y + 1.0, ((-1.5 * f.y + 2.0) * f.y + 0.5) * f.y, (0.5 * f.y - 0.5) * f.y * f.y);
+            vec3 mean = vec3(0.0), alb = vec3(0.0);
+            vec3 meanB = vec3(0.0), albB = vec3(0.0);
+            float ws = 0.0, wsB = 0.0, count = 0.0;
+            vec3 lo = vec3(1e30), hi = vec3(0.0);
+            for (int j = 0; j < 4; ++j)
+                for (int i = 0; i < 4; ++i)
+                {
+                    ivec2 t = b + ivec2(i - 1, j - 1);
+                    if (any(lessThan(t, ivec2(0))) || any(greaterThanEqual(t, u_RpSize)))
+                        continue;
+                    float tw = imageLoad(u_RpPrevW, t).r;
+                    if (tw <= 0.0 || abs(tw - pc.w) > 0.02 * pc.w + 0.02)
+                        continue;
+                    vec4 a = imageLoad(u_RpPrevAccum, t);
+                    vec4 al = imageLoad(u_RpPrevAlbedo, t);
+                    if (a.w < 0.5 || al.w < 0.5)
+                        continue;
+                    vec3 c = a.rgb / a.w, ca = al.rgb / al.w;
+                    float w = wx[i] * wy[j];
+                    mean += c * w;
+                    alb += ca * w;
+                    ws += w;
+                    if (i >= 1 && i <= 2 && j >= 1 && j <= 2)
+                    {
+                        float wb = (i == 2 ? f.x : 1.0 - f.x) * (j == 2 ? f.y : 1.0 - f.y);
+                        meanB += c * wb;
+                        albB += ca * wb;
+                        count += a.w * wb;
+                        wsB += wb;
+                        lo = min(lo, c);
+                        hi = max(hi, c);
+                    }
+                }
+            if (wsB > 0.25)
+            {
+                // Catmull-Rom'un eksi kanatları halka yapmasın: sonuç iç 2x2'nin aralığına kırpılır
+                vec3 m = ws > 0.5 ? clamp(mean / ws, lo, hi) : meanB / wsB;
+                vec3 ma = ws > 0.5 ? max(alb / ws, vec3(0.0)) : albB / wsB;
+                float n = min(count / wsB, u_RpCap);
+                outAcc = vec4(m * n, n);
+                outAlb = vec4(ma * n, n);
+            }
+        }
+    }
+    imageStore(u_RpAccum, p, outAcc);
+    imageStore(u_RpAlbedo, p, outAlb);
 }
 )";
 
@@ -218,7 +327,18 @@ void main()
             uint32_t Frame = 0;
             int LastBounces = -1;
             float LastIntensity = -1.0f;
+            // 315: hareket ederken zamansal birikim (yeniden izdüşüm)
+            GLuint PrimaryNormal = 0;           // birincil isabet normali (gürültü giderici kılavuzu)
+            GLuint PrevAccum = 0, PrevAlbedo = 0;
+            GLuint ViewW[2] = { 0, 0 };          // birikimin ait olduğu karenin piksel başına görüş uzaklığı (0: gökyüzü)
+            int WIndex = 0;
+            bool WValid = false;
+            GLuint ReprojectProgram = 0;
+            bool ReprojectTried = false;
+            uint32_t Seed = 0;                   // rastgele dizi (her örnekte artar)
+            bool Reprojected = false;            // bu karede birikim taşındı (hareket ediliyor)
         };
+        constexpr float kReprojectCap = 12.0f;   // taşınan birikimin en çok örnek sayısı (yeni ışık / açılan alan çabuk otursun)
         State& S() { static auto& s = *new State(); return s; }
         PathTracer::Settings s_Settings;
     }
@@ -236,7 +356,10 @@ void main()
         {
             State& s = S();
             const int spp = (int)s.Frame;
-            const int passes = spp <= 2 ? 4 : spp <= 8 ? 3 : spp <= 32 ? 2 : spp <= 128 ? 1 : 0;
+            int passes = spp <= 2 ? 4 : spp <= 8 ? 3 : spp <= 32 ? 2 : spp <= 128 ? 1 : 0;
+            // Hareket ederken birikim taşınır (çoğu pikselde ~24 örnek), yeni açılan pikseller tek örnekle başlar: süzgeç en az 2 geçiş
+            if (s.Reprojected)
+                passes = std::max(passes, 2);
             if (!passes || !depth || cam.Orthographic)
                 return;
             if (!s.DenoiseTried)
@@ -264,6 +387,7 @@ void main()
             glUniform1i(U("u_DnDepth"), 0);
             glBindTextureUnit(0, depth);
             glBindImageTexture(2, s.AlbedoAccum, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA32F);
+            glBindImageTexture(3, s.PrimaryNormal, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA16F);
             const GLuint groupsX = ((uint32_t)tw + 7) / 8, groupsY = ((uint32_t)th + 7) / 8;
             // Varyans ön geçişi (hedef -> geçici 0), sonra süzgeç geçişleri geçici tamponlar arasında (varyans da süzülür, SVGF gibi)
             uint32_t src = target;
@@ -284,7 +408,52 @@ void main()
             glBindImageTexture(0, 0, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA16F);
             glBindImageTexture(1, 0, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA16F);
             glBindImageTexture(2, 0, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA32F);
+            glBindImageTexture(3, 0, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA16F);
             glBindTextureUnit(0, 0);
+        }
+
+        // 315: görüş uzaklığı (u_RpWOnly) ya da birikimin önceki kareden taşınması
+        bool Reproject(uint32_t depth, int tw, int th, const glm::mat4& vp, const glm::mat4& prevVP, bool wOnly)
+        {
+            State& s = S();
+            if (!s.ReprojectTried)
+            {
+                s.ReprojectTried = true;
+                s.ReprojectProgram = RayTracingScene::CompileCompute("Path Tracer Reproject", "layout(local_size_x = 8, local_size_y = 8) in;", kReprojectMain);
+            }
+            if (!s.ReprojectProgram || !depth)
+                return false;
+            if (!wOnly)
+            {
+                glCopyImageSubData(s.Accum, GL_TEXTURE_2D, 0, 0, 0, 0, s.PrevAccum, GL_TEXTURE_2D, 0, 0, 0, 0, tw, th, 1);
+                glCopyImageSubData(s.AlbedoAccum, GL_TEXTURE_2D, 0, 0, 0, 0, s.PrevAlbedo, GL_TEXTURE_2D, 0, 0, 0, 0, tw, th, 1);
+                glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_UPDATE_BARRIER_BIT);
+            }
+            glUseProgram(s.ReprojectProgram);
+            auto U = [&](const char* n) { return glGetUniformLocation(s.ReprojectProgram, n); };
+            const glm::mat4 inv = glm::inverse(vp);
+            glUniformMatrix4fv(U("u_RpInvViewProj"), 1, GL_FALSE, &inv[0][0]);
+            glUniformMatrix4fv(U("u_RpViewProj"), 1, GL_FALSE, &vp[0][0]);
+            glUniformMatrix4fv(U("u_RpPrevViewProj"), 1, GL_FALSE, &prevVP[0][0]);
+            glUniform2i(U("u_RpSize"), tw, th);
+            glUniform1f(U("u_RpCap"), kReprojectCap);
+            glUniform1i(U("u_RpWOnly"), wOnly ? 1 : 0);
+            glUniform1i(U("u_RpDepth"), 0);
+            glBindTextureUnit(0, depth);
+            const int prevW = s.WIndex, curW = wOnly ? s.WIndex : 1 - s.WIndex;
+            glBindImageTexture(0, s.Accum, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA32F);
+            glBindImageTexture(1, s.AlbedoAccum, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA32F);
+            glBindImageTexture(2, s.PrevAccum, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA32F);
+            glBindImageTexture(3, s.PrevAlbedo, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA32F);
+            glBindImageTexture(4, s.ViewW[prevW], 0, GL_FALSE, 0, GL_READ_ONLY, GL_R32F);
+            glBindImageTexture(5, s.ViewW[curW], 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_R32F);
+            glDispatchCompute(((uint32_t)tw + 7) / 8, ((uint32_t)th + 7) / 8, 1);
+            glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
+            for (GLuint b = 0; b < 6; ++b)
+                glBindImageTexture(b, 0, 0, GL_FALSE, 0, GL_READ_ONLY, GL_R32F);
+            glBindTextureUnit(0, 0);
+            s.WIndex = curW;
+            return true;
         }
 
         bool Render(Scene& scene, const RenderCamera& cam, uint32_t target, uint32_t depth)
@@ -313,22 +482,42 @@ void main()
             }
             if (!s.Accum || s.AccumW != tw || s.AccumH != th)
             {
-                if (s.Accum) glDeleteTextures(1, &s.Accum);
-                if (s.AlbedoAccum) glDeleteTextures(1, &s.AlbedoAccum);
-                glCreateTextures(GL_TEXTURE_2D, 1, &s.Accum);
-                glTextureStorage2D(s.Accum, 1, GL_RGBA32F, tw, th);
-                glCreateTextures(GL_TEXTURE_2D, 1, &s.AlbedoAccum);
-                glTextureStorage2D(s.AlbedoAccum, 1, GL_RGBA32F, tw, th);
+                GLuint old[7] = { s.Accum, s.AlbedoAccum, s.PrimaryNormal, s.PrevAccum, s.PrevAlbedo, s.ViewW[0], s.ViewW[1] };
+                for (GLuint t : old)
+                    if (t) glDeleteTextures(1, &t);
+                auto make = [&](GLuint& t, GLenum fmt) { glCreateTextures(GL_TEXTURE_2D, 1, &t); glTextureStorage2D(t, 1, fmt, tw, th); };
+                make(s.Accum, GL_RGBA32F);
+                make(s.AlbedoAccum, GL_RGBA32F);
+                make(s.PrimaryNormal, GL_RGBA16F);
+                make(s.PrevAccum, GL_RGBA32F);
+                make(s.PrevAlbedo, GL_RGBA32F);
+                make(s.ViewW[0], GL_R32F);
+                make(s.ViewW[1], GL_R32F);
                 s.AccumW = tw;
                 s.AccumH = th;
                 s.Frame = 0;
+                s.WValid = false;
             }
             const glm::mat4 vp = cam.Projection * cam.View;
+            s.Reprojected = false;
             if (vp != s.LastViewProj)
             {
+                const glm::mat4 prevVP = s.LastViewProj;
                 s.LastViewProj = vp;
-                s.Frame = 0;
+                // 315: kamera kıpırdayınca birikim yeni görüşe taşınır (birikim varsa ve önceki karenin görüş uzaklığı biliniyorsa)
+                if (s_Settings.TemporalAccumulation && s.Frame > 0 && s.WValid && depth && !cam.Orthographic && Reproject(depth, tw, th, vp, prevVP, false))
+                {
+                    s.Frame = std::min<uint32_t>(s.Frame, (uint32_t)kReprojectCap);
+                    s.Reprojected = true;
+                }
+                else
+                {
+                    s.Frame = 0;
+                    s.WValid = false;
+                }
             }
+            if (!s.WValid && depth && !cam.Orthographic)
+                s.WValid = Reproject(depth, tw, th, vp, vp, true);
             if (s_Settings.MaxBounces != s.LastBounces || s_Settings.MaxPathIntensity != s.LastIntensity)
             {
                 s.LastBounces = s_Settings.MaxBounces;
@@ -353,6 +542,7 @@ void main()
             glBindImageTexture(0, s.Accum, 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA32F);
             glBindImageTexture(1, target, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA16F);
             glBindImageTexture(2, s.AlbedoAccum, 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA32F);
+            glBindImageTexture(3, s.PrimaryNormal, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA16F);
             const GLuint groupsX = ((uint32_t)tw + 7) / 8, groupsY = ((uint32_t)th + 7) / 8;
             const int maxSamples = std::max(1, s_Settings.MaxSamples);
             if ((int)s.Frame >= maxSamples)
@@ -368,6 +558,7 @@ void main()
                 for (int k = 0; k < spp && (int)s.Frame < maxSamples; ++k)
                 {
                     glUniform1ui(U("u_Frame"), s.Frame);
+                    glUniform1ui(U("u_Seed"), ++s.Seed);
                     glDispatchCompute(groupsX, groupsY, 1);
                     glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
                     ++s.Frame;
@@ -377,6 +568,7 @@ void main()
             glBindImageTexture(0, 0, 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA32F);
             glBindImageTexture(1, 0, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA16F);
             glBindImageTexture(2, 0, 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA32F);
+            glBindImageTexture(3, 0, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA16F);
             Denoise(target, depth, tw, th, cam);
             glUseProgram(0);
             return true;

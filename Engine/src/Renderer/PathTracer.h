@@ -20,6 +20,9 @@ namespace Conqueror
             int SamplesPerFrame = 1;
             int MaxSamples = 4096;            // bu sayıya ulaşınca durur
             float MaxPathIntensity = 24.0f;   // dolaylı ışık örneği üst sınırı (Unreal Max Path Intensity): ateşböceği noktaları
+            // 315: hareket ederken birikim baştan başlamaz, önceki karelerinki yeni görüşe taşınır (gerçek zamanlı yol izlemenin
+            // zamansal birikimi; kapalıyken Unreal'ın Path Tracing görünümü gibi her harekette yeniden başlar)
+            bool TemporalAccumulation = true;
         };
 
         CQ_API Settings& GetSettings();

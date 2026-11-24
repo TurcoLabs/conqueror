@@ -1,0 +1,23 @@
+# template: fps
+# matrix: CQ_RENDERER=opengl vulkan
+# 315: Path Tracing görünümünde hareket ederken görüntü lekeli / bulanıktı ve uzaktaki merdiven siliniyordu (kullanıcının 620'si):
+# kamera kıpırdayınca birikim baştan başlıyor, her karede tek örnek + gürültü giderici kalıyordu. Artık birikim yeni görüşe taşınır
+# (derinlikten önceki kameraya izdüşüm, derinliği tutan texeller Catmull-Rom ağırlığıyla, en çok 12 örnek; gerçek zamanlı yol izlemenin
+# zamansal birikimi: SVGF / ReLAX), gürültü giderici birincil isabet normaline de bakar (basamak yüzü ile alın yüzü ayrılır). Merdiven
+# bölgesinde, ileri uçarken son karenin aynı yerde 700 karede oturmuş görüntüden ortalama farkı: eski 1.30, şimdi 1.08
+timeout 600
+wait_until 3000 layout_settled
+wait 10
+focus Viewport
+camera 30 22 -25 -14 0 -6
+shading pathtracing
+pathtracer spp 1
+pathtracer max 4000
+wait 120
+camera_fly 0 0 4 40
+wait 39
+viewport_region_change mark 0.465 0.20 0.833 0.556
+wait 700
+viewport_region_change expect 0.465 0.20 0.833 0.556 <1.17
+shading shaded
+quit

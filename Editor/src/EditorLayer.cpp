@@ -4866,6 +4866,7 @@ namespace Conqueror::Editor
             if (a[1] == "bounces") { st.MaxBounces = std::stoi(a[2]); return true; }
             if (a[1] == "max") { st.MaxSamples = std::stoi(a[2]); return true; }
             if (a[1] == "spp") { st.SamplesPerFrame = std::stoi(a[2]); return true; }
+            if (a[1] == "temporal") { st.TemporalAccumulation = std::stoi(a[2]) != 0; return true; }
             if (a[1] == "expect_samples")
             {
                 const int n = PathTracer::GetSampleCount();
@@ -6808,8 +6809,9 @@ namespace Conqueror::Editor
         auto regionProbe = [](const std::shared_ptr<Framebuffer>& fb, const Args& a, std::string& err) -> bool {
             // game_region <u0> <v0> <u1> <v1> [<kanal> <min|max|mean|detail> <v | >v | <v>]...: Game görünümünde bölge istatistiği
             // (u, v 0..1, sol alt köşe 0,0). Kanal: r g b a lum, red/green/blue = o kanalın diğerlerinden baskınlığı (r - max(g, b)).
-            // detail: yatay komşu piksel farkının ortalaması (doku / bulut ayrıntısı; düz renk geçişinde ~0); edgeres: bölgeden geçen
-            // yatay / yatık kenarın düz çizgiden sapması (piksel, merdivenlenme)
+            // detail: yatay komşu piksel farkının ortalaması (doku / bulut ayrıntısı; düz renk geçişinde ~0); vdetail: dikey komşu farkı
+            // (yatay çizgiler: merdivenin basamak kenarları, 315); edgeres: bölgeden geçen yatay / yatık kenarın düz çizgiden sapması
+            // (piksel, merdivenlenme)
             if (a.size() < 5 || !fb) { err = "region u0 v0 u1 v1 [channel stat cond]..."; return false; }
             const auto& spec = fb->GetSpecification();
             auto toPx = [](const std::string& v, uint32_t size) { return std::clamp((int)(std::stof(v) * (float)size), 0, (int)size - 1); };
@@ -6835,7 +6837,7 @@ namespace Conqueror::Editor
                 const std::string& ch = a[k];
                 const std::string& stat = a[k + 1];
                 const std::string& cond = a[k + 2];
-                float mn = 1e9f, mx = -1e9f, sum = 0.0f, diff = 0.0f;
+                float mn = 1e9f, mx = -1e9f, sum = 0.0f, diff = 0.0f, vdiff = 0.0f;
                 const size_t n = (size_t)w * h;
                 for (size_t i = 0; i < n; ++i)
                 {
@@ -6845,9 +6847,11 @@ namespace Conqueror::Editor
                     sum += v;
                     if ((int)(i % (size_t)w) + 1 < w)
                         diff += std::abs(value(i + 1, ch) - v);
+                    if (i + (size_t)w < n)
+                        vdiff += std::abs(value(i + (size_t)w, ch) - v);
                 }
                 float have = stat == "min" ? mn : stat == "max" ? mx : stat == "detail" ? diff / (float)std::max<size_t>(1, n - (size_t)h)
-                           : sum / (float)n;
+                           : stat == "vdetail" ? vdiff / (float)std::max<size_t>(1, n - (size_t)w) : sum / (float)n;
                 if (stat == "edgeres")
                 {
                     // edgeres: bölgeden geçen yatay / yatık bir kenarın düz çizgiden ortalama sapması (piksel, karekök ortalama; 330): her
@@ -6896,7 +6900,7 @@ namespace Conqueror::Editor
                         }
                     }
                 }
-                if (stat == "detail" || stat == "edgeres")
+                if (stat == "detail" || stat == "vdetail" || stat == "edgeres")
                 {
                     char buf[32];
                     std::snprintf(buf, sizeof(buf), "%.3f", have);
