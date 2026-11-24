@@ -706,7 +706,10 @@ namespace Conqueror
             else
             {
                 // TAA: Halton(2,3) 16 konum; TSSAA (8TX): ilk 8 konum
-                const uint32_t count = m_TAAVariant == 2 ? 8u : 16u;
+                // TAAU (iç çözünürlük < 1): her çıktı pikseline yerel TAA'daki kadar farklı örnek düşsün diye evre sayısı 8 x ölçek²
+                // (FSR 2 / DLSS'nin önerisi; Kaliteli kipte 18, Dengeli 24, Performans 32). 16 sabit evrede çıktı pikseli başına
+                // yerel TAA'nın üçte biri kadar örnek birikiyordu (330 / 314: duvar üstünün kenarı yerel TAA'dan merdivenli)
+                const uint32_t count = m_TAAVariant == 2 ? 8u : JitterPhaseCount();
                 const uint32_t i = (m_FrameIndex % count) + 1u;
                 pixel = glm::vec2(Halton(i, 2) - 0.5f, Halton(i, 3) - 0.5f);
             }
@@ -2446,13 +2449,16 @@ namespace Conqueror
         {
             // TAAU: iç çözünürlükteki titreşimli kare + çıktı çözünürlüğündeki geçmiş -> yeni geçmiş, sonra çıktıya keskinleştirerek
             const int ni = 1 - m_TAAUIndex;
-            EnsureTarget(m_TAAUHistory[0], outW, outH, GL_RGBA16F);
-            EnsureTarget(m_TAAUHistory[1], outW, outH, GL_RGBA16F);
+            // RGBA32F: alfa kanalı birikmiş ağırlığı (0.5 adımla, en çok evre sayısı) + titreme sayacını tam sayı olarak taşır; RGBA16F
+            // 2048'den büyük tam sayıları tutamıyordu (birikim üst sınırı 15.5'ti)
+            EnsureTarget(m_TAAUHistory[0], outW, outH, GL_RGBA32F);
+            EnsureTarget(m_TAAUHistory[1], outW, outH, GL_RGBA32F);
             glBindFramebuffer(GL_FRAMEBUFFER, m_TAAUHistory[ni].Framebuffer);
             glViewport(0, 0, (GLsizei)outW, (GLsizei)outH);
             taau->Bind();
             taau->SetInt("u_Current", 0);
             taau->SetInt("u_History", 1);
+            taau->SetFloat("u_AccCap", (float)JitterPhaseCount() - 0.5f);
             taau->SetInt("u_Depth", 2);
             taau->SetInt("u_GNormal", 3);
             taau->SetInt("u_Velocity", 4);

@@ -21,6 +21,7 @@ layout(location = 0) out vec4 FragColor;
 layout(location = 1) out vec4 DebugOut;   // r.TAADebug: pikselin geçmiş yolu renkle (geçmişe yazılmaz, yalnız gösterilir)
 in vec2 v_UV;
 uniform int u_Debug = 0;
+uniform float u_AccCap = 15.5;   // dururken birikimin üst sınırı (titreşim evre sayısı - 0.5; RGBA32F geçmiş)
 
 uniform sampler2D u_Current;    // iç çözünürlükte titreşimli kare (LDR)
 uniform sampler2D u_History;    // çıktı çözünürlüğünde geçmiş
@@ -493,8 +494,8 @@ void main()
     if (settle && !settleYoung)
     {
         current = sumN / max(wsumN, 1e-4);
-        alphaSettle = wmaxN / (min(accBefore, 15.5) + wmaxN);
-        acc = min(accBefore + wmaxN, 15.5);
+        alphaSettle = wmaxN / (min(accBefore, u_AccCap) + wmaxN);
+        acc = min(accBefore + wmaxN, u_AccCap);
     }
     else if (settleYoung)
     {

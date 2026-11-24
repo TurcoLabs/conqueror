@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+#include <cmath>
 #include "Core/Base/Base.h"
 #include "RHI/Framebuffer.h"
 #include "RHI/Shader.h"
@@ -261,7 +263,15 @@ namespace Conqueror
         float m_FinalNear = 0.1f, m_FinalFar = 1000.0f, m_FinalFovY = 1.0f;
         // TAAU: çıktı çözünürlüğünde geçmiş (RGBA16F, LDR)
         RenderTarget m_TAAUHistory[2];
-        RenderTarget m_TAAURejectAA;                  // 292: TAAU çıktısı, geçmişi yeni reddedilen piksellerde FXAA'lı (Unreal TSR rejection AA)
+        RenderTarget m_TAAURejectAA;
+        // Titreşim evre sayısı: yerel TAA 16, TAAU 8 x (çıktı / iç)² (en az 16, en çok 64)
+        uint32_t JitterPhaseCount() const
+        {
+            if (m_RenderScale >= 0.999f)
+                return 16u;
+            const float r = 1.0f / std::max(m_RenderScale, 0.25f);
+            return std::clamp((uint32_t)std::ceil(8.0f * r * r), 16u, 64u);
+        }                  // 292: TAAU çıktısı, geçmişi yeni reddedilen piksellerde FXAA'lı (Unreal TSR rejection AA)
         int m_TAAUIndex = 0;
         bool m_TAAUValid = false;
         // Snapdragon GSR 2: hareket + derinlik kırpma (iç çözünürlük) ve çıktı çözünürlüğünde geçmiş (RGBA16F, LDR)
