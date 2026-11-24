@@ -151,10 +151,14 @@ namespace Conqueror
                     char name[64];
                     snprintf(name, sizeof(name), "frame_%06u.png", frame.Index);
                     std::string path = (std::filesystem::path(s.Output) / name).string();
-                    // GL satırları alttan üste: ters çevirerek yaz
-                    stbi_flip_vertically_on_write(1);
-                    stbi_write_png(path.c_str(), (int)s.Width, (int)s.Height, 4, frame.Pixels.data(), (int)s.Width * 4);
-                    stbi_flip_vertically_on_write(0);
+                    // GL satırları alttan üste: satırlar burada ters çevrilir. stb'nin yazma ters çevirme bayrağı işlemin tamamında geçerlidir
+                    // (iş parçacığına özel değil): kayıt sürerken ana iş parçacığında yazılan PNG'ler (ekran görüntüsü, küçük resim, atlas)
+                    // bu işçinin açtığı bayrakla ikinci kez çevrilip baş aşağı kaydediliyordu
+                    const size_t stride = (size_t)s.Width * 4;
+                    std::vector<uint8_t> upright(frame.Pixels.size());
+                    for (uint32_t y = 0; y < s.Height; ++y)
+                        std::memcpy(&upright[(size_t)y * stride], &frame.Pixels[(size_t)(s.Height - 1 - y) * stride], stride);
+                    stbi_write_png(path.c_str(), (int)s.Width, (int)s.Height, 4, upright.data(), (int)stride);
                 }
                 else if (s.FFmpeg)
                 {

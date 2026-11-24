@@ -1,0 +1,21 @@
+# template: fps
+# Kaydedici PNG dizisi yazarken stb'nin işlemin tamamında geçerli yazma ters çevirme bayrağını kendi iş parçacığında açıp kapatıyordu:
+# kayıt sürerken ana iş parçacığında yazılan PNG'ler (otomasyon ekran görüntüleri, küçük resimler, atlaslar) baş aşağı kaydediliyordu.
+# Kaydedici satırları artık kendisi çevirir. Ölçü: kayıt sırasında ve kayıt yokken alınan pencere görüntüleri arasında 8 düzeyden çok
+# farklı kenar pikseli: düzeltmeyle 164 (oyunda dururken silah sallanması), eski kaydediciyle 57.796 (bütün görüntüler ters)
+timeout 500
+wait 60
+focus Game
+play
+wait 60
+screenshot_frames {work}/upref 10
+wait 14
+record_start png fixed fps=60 out={work}/uprec
+wait 2
+screenshot_frames {work}/uptest 10
+wait 14
+record_stop
+image_seq_edges {work}/upref {work}/uptest 2 8 405 185 1437 779 max 2000
+stop
+wait 5
+quit
