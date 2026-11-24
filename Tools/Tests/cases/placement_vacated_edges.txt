@@ -1,0 +1,28 @@
+# sample-project: Parkour
+# 292: Create menüsünden sürüklenen küp platformun üstünden kenarın yanına çekilince (aynı sürüklemede) platform kenarı bir an merdivenli /
+# noktalı görünüyordu (kullanıcının 632 / 633'ü). Küpün ayrıldığı piksellerin geçmişi atılır (doğru: küpün rengini taşır); TAA + NIS'te
+# (TAAU) kamera dururken bu pikseller dar süzgeç ve en yakın iç örneğin ağırlığıyla yeniden birikiyordu: ilk karelerde her çıktı pikseli
+# yalnız kendine en yakın düşük çözünürlüklü örneği gösteriyor, bölge taramalı ve kenarlar basamaklıydı; geçmişi yeni reddedilen
+# piksellerde uzamsal kenar yumuşatma da yoktu. Artık ilk 4 örnek geniş süzgeçle ve eşit ağırlıkla birikir, bu piksellere FXAA uygulanır
+# (Unreal TSR'nin reddedilen geçmişteki uzamsal kenar yumuşatması). Ölçü: küpün ayrıldığı bölgede ilk 3 karede aynı kaydın oturmuş
+# karesinden 12 seviyeden çok farklı piksel: 1919 -> 860 (yerel TAA 1058)
+timeout 300
+wait 60
+open_scene Assets/Scenes/Menu.cqscene
+wait 30
+focus Viewport
+cvar r.TemporalStability 1
+cvar r.AntiAliasing 3
+cvar r.Upscaler 3
+camera 5 20 15 0.5 0 6.6
+wait 150
+place_drag_path "3D Object/Cube" 0.50 0.40 0.50 0.40 40 hold
+wait 40
+place_drag_path "3D Object/Cube" 0.50 0.40 0.50 0.80 4 hold
+wait 2
+screenshot_frames {work}/nis 40
+wait 45
+place_drag_path "3D Object/Cube" 0.50 0.80 0.50 0.80 2
+wait 10
+image_seq_edges {work}/nis {work}/nis 0 2 785 245 1065 455 ref_frame 39 all 1 diff 12 max 1300
+quit

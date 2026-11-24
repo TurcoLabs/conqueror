@@ -244,6 +244,7 @@ namespace Conqueror
         DestroyTarget(m_T2xHistory[1]);
         DestroyTarget(m_TAAUHistory[0]);
         DestroyTarget(m_TAAUHistory[1]);
+        DestroyTarget(m_TAAURejectAA);
         DestroyTarget(m_SGSR2Motion);
         DestroyTarget(m_SGSR2History[0]);
         DestroyTarget(m_SGSR2History[1]);
@@ -2539,6 +2540,31 @@ namespace Conqueror
             // kamera tutucusu (owner 4), sonra keskinleştirici
             uint32_t taauResult = m_TAAUHistory[ni].Texture;
             uint32_t unsharpened = 0;
+            // 292: geçmişi yeni reddedilen (açılan, nesnenin ayrıldığı) piksel ilk karelerde yalnız birkaç titreşimli düşük çözünürlüklü
+            // örnekten oluşur: küp duvarın üstünden kaldırılınca duvar üstünün kenarı birkaç kare merdivenli kalıyordu. Yerel TAA'daki gibi
+            // (son geçişin FXAA'sı yalnız reddedilen piksellerde) ve Unreal TSR'nin reddedilen geçmişteki uzamsal kenar yumuşatması gibi:
+            // FXAA yalnız birikmiş ağırlığı küçük piksellerde, ağırlık büyüdükçe azalarak (FXAA.cqsh u_MaskMode 2, maske geçmişin alfası)
+            auto rejectFxaa = PostProcess::GetShader("FXAA");
+            if (!taauDebug && Valid(rejectFxaa))
+            {
+                EnsureTarget(m_TAAURejectAA, outW, outH, GL_RGBA16F);
+                glBindFramebuffer(GL_FRAMEBUFFER, m_TAAURejectAA.Framebuffer);
+                glViewport(0, 0, (GLsizei)outW, (GLsizei)outH);
+                rejectFxaa->Bind();
+                rejectFxaa->SetInt("u_ScreenTexture", 0);
+                rejectFxaa->SetFloat2("u_InverseScreenSize", glm::vec2(1.0f / (float)outW, 1.0f / (float)outH));
+                rejectFxaa->SetInt("u_MotionMask", 1);
+                rejectFxaa->SetInt("u_UseMotionMask", 1);
+                rejectFxaa->SetInt("u_RejectOnly", 0);
+                rejectFxaa->SetInt("u_CameraStill", 0);
+                rejectFxaa->SetInt("u_MaskMode", 2);
+                BindTexture(0, taauResult);
+                BindTexture(1, m_TAAUHistory[ni].Texture);
+                PostProcess::DrawFullscreenQuad();
+                rejectFxaa->SetInt("u_MaskMode", 0);
+                taauResult = m_TAAURejectAA.Texture;
+                Renderer::GetStats().PostProcessPasses++;
+            }
             if (taauDebug)
                 taauResult = m_TAADebug.Texture;
             else if (spatialSharpen)

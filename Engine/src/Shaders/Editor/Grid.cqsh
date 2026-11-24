@@ -181,11 +181,19 @@ vec2 TemporalCoverage(vec3 world, float pull)
 // boyu; fwidth'in |dx| + |dy|'si yatık çizgide kalınlığı değiştirir) ve 1 piksellik doğrusal geçiş. Bu profilde pikseller boyunca toplam
 // yoğunluk çizginin alt piksel konumundan bağımsız olarak hep 'pixels'tır (214: eski düz çekirdek + smoothstep kenarı, çizgi uzaklaşırken
 // / yakınlaşırken ekranda kaydıkça kareden kareye %5-10, en çok %24 parlaklık ve 2 <-> 3 piksel kalınlık sıçraması yapıyordu)
+// 214 (ikinci kısım): çizgi kutusu piksel ayak izinin çadır süzgeciyle (yarıçap 1 piksel) katlanır. Kutu + 1 piksellik doğrusal kenar
+// profilinde toplam yoğunluk sabitti ama çizgi piksel altı kaydıkça "3 tam piksel" ile "2 tam + 2 yarım piksel" arasında gidip geliyordu:
+// görünen kalınlık (RMS genişlik) %15.5 oynuyor, yakınlaşıp uzaklaşırken kırmızı eksen hafifçe büyüyüp küçülüyordu. Çadır süzgeçli
+// kutunun örneklenmiş genişliği kaymadan bağımsızdır (%0), tepe değeri 1 ve toplamı yine 'pixels'
+float TentCDF(float x)
+{
+    return x <= -1.0 ? 0.0 : x <= 0.0 ? 0.5 * (x + 1.0) * (x + 1.0) : x <= 1.0 ? 1.0 - 0.5 * (1.0 - x) * (1.0 - x) : 1.0;
+}
 float AxisLine(float coord, float pixels)
 {
     float d = length(vec2(dFdx(coord), dFdy(coord)));
     float distPx = abs(coord) / max(d, 1e-12);
-    return clamp(pixels * 0.5 + 0.5 - distPx, 0.0, 1.0);
+    return clamp(TentCDF(distPx + pixels * 0.5) - TentCDF(distPx - pixels * 0.5), 0.0, 1.0);
 }
 
 void main()

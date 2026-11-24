@@ -261,6 +261,7 @@ namespace Conqueror
         float m_FinalNear = 0.1f, m_FinalFar = 1000.0f, m_FinalFovY = 1.0f;
         // TAAU: çıktı çözünürlüğünde geçmiş (RGBA16F, LDR)
         RenderTarget m_TAAUHistory[2];
+        RenderTarget m_TAAURejectAA;                  // 292: TAAU çıktısı, geçmişi yeni reddedilen piksellerde FXAA'lı (Unreal TSR rejection AA)
         int m_TAAUIndex = 0;
         bool m_TAAUValid = false;
         // Snapdragon GSR 2: hareket + derinlik kırpma (iç çözünürlük) ve çıktı çözünürlüğünde geçmiş (RGBA16F, LDR)

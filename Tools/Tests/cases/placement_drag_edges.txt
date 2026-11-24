@@ -1,0 +1,40 @@
+# sample-project: Parkour
+# 309: Create menüsünden Viewport'a sürüklenen küpün (Unreal Place Actors önizlemesi) kenarları sürüklerken merdivenliydi (kullanıcının
+# 629 / 630'u, Parkour Menu sahnesi). İki neden: TAA + NIS'te (TAAU) 3x3'ünde hareket eden nesne olan her pikselin geçmiş ağırlığı hız
+# vektörü kesin olsa da %50'ye iniyordu; ve küpün zemine değen alt kenarında 3x3'ün en yakın örneği önündeki durağan zemin olduğu için
+# kenarın geçmişi zeminin hareketiyle (kenarın eski yerinden) alınıp sıkı kırpılıyordu (TAA ve TAAU). Aynı sürükleme sabit adımla SSAA
+# (referans), TAA ve TAA + NIS ile kaydedilir; küpün alt kenarı çevresinde referanstan 8 seviyeden çok sapan kenar pikseli, kare başına:
+# TAA 75 -> 40, TAA + NIS 135 -> 96
+timeout 600
+wait 60
+open_scene Assets/Scenes/Menu.cqscene
+wait 30
+focus Viewport
+cvar r.TemporalStability 1
+cvar r.AntiAliasing 7
+cvar r.Upscaler 0
+camera 6 14 -30 2.6 0.5 -2.6
+wait 200
+place_drag_path "3D Object/Cube" 0.30 0.66 0.62 0.66 30
+screenshot_frames {work}/ref 26
+wait 40
+undo
+wait 5
+cvar r.AntiAliasing 3
+cvar r.Upscaler 0
+camera 6 14 -30 2.6 0.5 -2.6
+wait 200
+place_drag_path "3D Object/Cube" 0.30 0.66 0.62 0.66 30
+screenshot_frames {work}/taa 26
+wait 40
+undo
+wait 5
+cvar r.Upscaler 3
+camera 6 14 -30 2.6 0.5 -2.6
+wait 200
+place_drag_path "3D Object/Cube" 0.30 0.66 0.62 0.66 30
+screenshot_frames {work}/nis 26
+wait 40
+image_seq_edges {work}/ref {work}/taa 12 24 825 600 1005 680 max 55
+image_seq_edges {work}/ref {work}/nis 12 24 825 600 1005 680 max 115
+quit

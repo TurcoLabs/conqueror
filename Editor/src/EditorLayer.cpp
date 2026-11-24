@@ -1221,6 +1221,18 @@ namespace Conqueror::Editor
             bool InPlace = false;        // true: kamera yerinde döner (sağ tıkla bakınmak), false: odak noktası çevresinde
         };
         AutomationSpin s_AutomationSpin;
+        // place_drag_path otomasyonu: Create menüsü girişi Viewport'a sürüklenirken (Unreal Place Actors) imleç her karede düz bir yol
+        // boyunca ilerler, son karede bırakılır. Önizleme gerçek sürüklemedeki gibi her karede güncellenir (place_drag + wait iki karede
+        // bir çağrıldığından önizleme her adımda silinip yeniden oluşuyordu)
+        struct AutomationPlaceDrag
+        {
+            std::string Entry;
+            glm::vec2 From{ 0.0f }, To{ 0.0f };   // Viewport'ta 0..1
+            int Frames = 0, Done = 0;
+            bool Hold = false;     // yolun sonunda bırakılmaz: sonraki place_drag_path gelene kadar imleç son noktada bekler
+            bool Active = false;
+        };
+        AutomationPlaceDrag s_AutomationPlaceDrag;
     }
 
     void EditorLayer::OnUpdate(Timestep ts)
@@ -1255,6 +1267,19 @@ namespace Conqueror::Editor
             // Sabit 1/60 sn adım: başsız test ortamında kare süresi değişken (10-60 FPS); hareket 60 FPS'teki Shift+W ile aynı olsun
             cam.SetFocalPoint(cam.GetFocalPoint() + world * (1.0f / 60.0f));
             --s_AutomationFly.Frames;
+        }
+        if (s_AutomationPlaceDrag.Active && m_ViewportPanel)
+        {
+            auto& d = s_AutomationPlaceDrag;
+            d.Done = std::min(d.Done + 1, d.Frames);
+            const float t = (float)d.Done / (float)d.Frames;
+            const glm::vec2 uv = d.From + (d.To - d.From) * t;
+            const glm::vec2* b = m_ViewportPanel->GetViewportBounds();
+            const ImVec2 p(b[0].x + (b[1].x - b[0].x) * uv.x, b[0].y + (b[1].y - b[0].y) * uv.y);
+            const bool drop = !d.Hold && d.Done >= d.Frames;
+            m_ViewportPanel->UpdatePlacementDrag(d.Entry, p, drop);
+            if (drop)
+                d = AutomationPlaceDrag{};
         }
         if (s_AutomationSpin.Frames > 0 && m_ViewportPanel)
         {
@@ -7034,17 +7059,22 @@ namespace Conqueror::Editor
         // fazlası) her sütunda tepe ±6 satırdaki, çevresine göre fazla enerjisi; kareler boyunca sütun ortalamasının göreli ikinci farkı.
         // Kamera uzaklaşırken çizgi ekranda kaydıkça parlaklığı sabit kalmalı (eski profilde kareden kareye %5-10, en çok %24 oynuyordu)
         Automation::RegisterCommand("viewport_line_flicker", [this](const Args& a, std::string& err) {
-            if (a.size() < 6 || !m_ViewportPanel || !m_ViewportPanel->GetFramebuffer()) { err = "viewport_line_flicker <frames> u0 v0 u1 v1 [mean% x] [max% y]"; return false; }
+            if (a.size() < 6 || !m_ViewportPanel || !m_ViewportPanel->GetFramebuffer()) { err = "viewport_line_flicker <frames> u0 v0 u1 v1 [mean% x] [max% y] [wmean% x] [wmax% y]"; return false; }
             const int frames = std::max(3, std::atoi(a[1].c_str()));
             const float u0 = std::stof(a[2]), v0 = std::stof(a[3]), u1 = std::stof(a[4]), v1 = std::stof(a[5]);
-            float meanLimit = -1.0f, maxLimit = -1.0f;
+            float meanLimit = -1.0f, maxLimit = -1.0f, wMeanLimit = -1.0f, wMaxLimit = -1.0f;
             for (size_t k = 6; k + 1 < a.size(); k += 2)
             {
                 if (a[k] == "mean%") meanLimit = std::stof(a[k + 1]);
                 else if (a[k] == "max%") maxLimit = std::stof(a[k + 1]);
+                else if (a[k] == "wmean%") wMeanLimit = std::stof(a[k + 1]);
+                else if (a[k] == "wmax%") wMaxLimit = std::stof(a[k + 1]);
             }
+            // Enerjinin yanında çizginin görünen kalınlığı (214, ikinci kısım): sütundaki fazla kırmızının ağırlık merkezi çevresindeki RMS
+            // genişliği. Çizgi ekranda piksel altı kaydıkça 3 tam piksel ile "2 tam + 2 yarım" piksel arasında gidip gelirse genişlik oynar
             auto energies = std::make_shared<std::vector<double>>();
-            Automation::AddFrameCheck("viewport line flicker", frames, [this, energies, frames, u0, v0, u1, v1, meanLimit, maxLimit](uint32_t, uint32_t, std::string& e) {
+            auto widths = std::make_shared<std::vector<double>>();
+            Automation::AddFrameCheck("viewport line flicker", frames, [this, energies, widths, frames, u0, v0, u1, v1, meanLimit, maxLimit, wMeanLimit, wMaxLimit](uint32_t, uint32_t, std::string& e) {
                 const auto fb = m_ViewportPanel ? m_ViewportPanel->GetFramebuffer() : nullptr;
                 if (!fb) { e = "no viewport image"; return false; }
                 const auto& spec = fb->GetSpecification();
@@ -7056,7 +7086,7 @@ namespace Conqueror::Editor
                 std::vector<double> red((size_t)w * h);
                 for (size_t i = 0; i < red.size(); ++i)
                     red[i] = lin(px[i * 4]) - lin(px[i * 4 + 1]);
-                double total = 0.0;
+                double total = 0.0, widthSum = 0.0;
                 int columns = 0;
                 for (int x = 0; x < w; ++x)
                 {
@@ -7074,29 +7104,47 @@ namespace Conqueror::Editor
                     }
                     std::sort(bg.begin(), bg.end());
                     const double base = bg.empty() ? 0.0 : bg[bg.size() / 2];
-                    double sum = 0.0;
+                    double sum = 0.0, sy = 0.0, syy = 0.0;
                     for (int y = std::max(0, peak - 6); y <= std::min(h - 1, peak + 6); ++y)
-                        sum += std::max(0.0, red[(size_t)y * w + x] - base);
+                    {
+                        const double v = std::max(0.0, red[(size_t)y * w + x] - base);
+                        sum += v;
+                        sy += v * (y - peak);
+                        syy += v * (y - peak) * (y - peak);
+                    }
                     total += sum;
+                    if (sum > 1e-6)
+                    {
+                        const double m = sy / sum;
+                        widthSum += std::sqrt(std::max(0.0, syy / sum - m * m));
+                    }
                     ++columns;
                 }
                 if (columns == 0) { e = "no red line in the region"; return false; }
                 energies->push_back(total / columns);
+                widths->push_back(widthSum / columns);
                 if ((int)energies->size() < frames)
                     return true;
-                const auto& en = *energies;
-                double mean = 0.0, worst = 0.0;
-                for (size_t i = 1; i + 1 < en.size(); ++i)
-                {
-                    const double d2 = std::abs(en[i + 1] - 2.0 * en[i] + en[i - 1]) / std::max(en[i], 1e-9) * 100.0;
-                    mean += d2;
-                    worst = std::max(worst, d2);
-                }
-                mean /= (double)(en.size() - 2);
-                char line[160];
-                std::snprintf(line, sizeof(line), "LINE FLICKER %d frames: energy %.3f, second difference mean %.2f%%, max %.2f%%", frames, en[0], mean, worst);
+                auto wobble = [](const std::vector<double>& en, double& mean, double& worst) {
+                    mean = 0.0;
+                    worst = 0.0;
+                    for (size_t i = 1; i + 1 < en.size(); ++i)
+                    {
+                        const double d2 = std::abs(en[i + 1] - 2.0 * en[i] + en[i - 1]) / std::max(en[i], 1e-9) * 100.0;
+                        mean += d2;
+                        worst = std::max(worst, d2);
+                    }
+                    mean /= (double)(en.size() - 2);
+                };
+                double mean, worst, wMean, wWorst;
+                wobble(*energies, mean, worst);
+                wobble(*widths, wMean, wWorst);
+                char line[256];
+                std::snprintf(line, sizeof(line), "LINE FLICKER %d frames: energy %.3f, second difference mean %.2f%%, max %.2f%%; width %.3f px, second difference mean %.2f%%, max %.2f%%",
+                              frames, (*energies)[0], mean, worst, (*widths)[0], wMean, wWorst);
                 Automation::Report(line);
                 if ((meanLimit >= 0.0f && mean > meanLimit) || (maxLimit >= 0.0f && worst > maxLimit)) { e = std::string("line flicker over the limit: ") + line; return false; }
+                if ((wMeanLimit >= 0.0f && wMean > wMeanLimit) || (wMaxLimit >= 0.0f && wWorst > wMaxLimit)) { e = std::string("line width wobble over the limit: ") + line; return false; }
                 return true;
             });
             return true;
@@ -7197,6 +7245,72 @@ namespace Conqueror::Editor
         // girdiler: önce kenar yumuşatmasız referans, sonra denenen kip) karşılaştırır. Referansın düz olduğu yerde (5x5 aralığı < 16) 28
         // seviyeden çok sapan piksel = hareket eden nesnenin bıraktığı iz / gölgedeki lekeler (kenarlar sayılmaz: kenar yumuşatma onları
         // zaten değiştirir). Kare başına ortalama ve en çok sayı raporlanır; max verilirse ortalama onu aşınca FAIL
+        // image_seq_edges <ref önek> <test önek> <first> <last> x0 y0 x1 y1 [diff n] [max m] [ref_frame N] [all 1] (309): screenshot_frames
+        // dizileri (önek_N.png, aynı girdilerle önce referans, sonra denenen kip). Referansın kenar bandında (yerel gradyan > 24, 1 piksel
+        // genişletilmiş) test görüntüsünün referanstan diff seviyeden (varsayılan 8) çok saptığı piksel sayısı: hareket eden nesnenin
+        // kenarındaki merdiven / çentik. ref_frame N: her kare referansın N. karesiyle karşılaştırılır (292: aynı kaydın oturmuş karesi);
+        // all 1: kenar bandı aranmaz, bölgedeki bütün pikseller. Kare başına ortalama ve en çok; max verilirse ortalama onu aşınca FAIL
+        Automation::RegisterCommand("image_seq_edges", [](const Args& a, std::string& err) {
+            if (a.size() < 9) { err = "image_seq_edges <ref prefix> <test prefix> <first> <last> x0 y0 x1 y1 [diff n] [max m]"; return false; }
+            const int first = std::atoi(a[3].c_str()), last = std::atoi(a[4].c_str());
+            const int x0 = std::atoi(a[5].c_str()), y0 = std::atoi(a[6].c_str()), x1 = std::atoi(a[7].c_str()), y1 = std::atoi(a[8].c_str());
+            int diffLimit = 8, refFrame = -1;
+            bool all = false;
+            float limit = -1.0f;
+            for (size_t k = 9; k + 1 < a.size(); k += 2)
+            {
+                if (a[k] == "max") limit = (float)std::atof(a[k + 1].c_str());
+                else if (a[k] == "diff") diffLimit = std::max(1, std::atoi(a[k + 1].c_str()));
+                else if (a[k] == "ref_frame") refFrame = std::atoi(a[k + 1].c_str());
+                else if (a[k] == "all") all = std::atoi(a[k + 1].c_str()) != 0;
+            }
+            auto load = [](const std::string& prefix, int f, int& w, int& h) {
+                const std::string p = prefix + "_" + std::to_string(f) + ".png";
+                int n = 0;
+                unsigned char* d = stbi_load(p.c_str(), &w, &h, &n, 3);
+                std::vector<int> out;
+                if (d)
+                {
+                    out.resize((size_t)w * h);
+                    for (size_t i = 0; i < out.size(); ++i)
+                        out[i] = (int)std::lround((d[i * 3] + d[i * 3 + 1] + d[i * 3 + 2]) / 3.0);
+                    stbi_image_free(d);
+                }
+                return out;
+            };
+            double sum = 0.0;
+            int worst = 0, frames = 0;
+            for (int f = first; f <= last; ++f)
+            {
+                int wr = 0, hr = 0, wt = 0, ht = 0;
+                const auto r = load(a[1], refFrame >= 0 ? refFrame : f, wr, hr), t = load(a[2], f, wt, ht);
+                if (r.empty() || t.empty() || wr != wt || hr != ht) { err = "missing or mismatched frame " + std::to_string(f); return false; }
+                const int bx0 = std::clamp(x0, 1, wr - 2), bx1 = std::clamp(x1, 1, wr - 2), by0 = std::clamp(y0, 1, hr - 2), by1 = std::clamp(y1, 1, hr - 2);
+                auto grad = [&](int x, int y) {
+                    const int c = r[(size_t)y * wr + x];
+                    return std::max(std::abs(r[(size_t)y * wr + x + 1] - c), std::abs(r[(size_t)(y + 1) * wr + x] - c));
+                };
+                int count = 0;
+                for (int y = by0; y < by1; ++y)
+                    for (int x = bx0; x < bx1; ++x)
+                    {
+                        bool edge = all;
+                        for (int dy = -1; dy <= 1 && !edge; ++dy)
+                            for (int dx = -1; dx <= 1 && !edge; ++dx)
+                                edge = grad(std::clamp(x + dx, 0, wr - 2), std::clamp(y + dy, 0, hr - 2)) > 24;
+                        if (edge && std::abs(t[(size_t)y * wr + x] - r[(size_t)y * wr + x]) > diffLimit)
+                            ++count;
+                    }
+                sum += count;
+                worst = std::max(worst, count);
+                ++frames;
+            }
+            char line[200];
+            std::snprintf(line, sizeof(line), "SEQ EDGES %d frames: mean %.1f, max %d edge pixels more than %d levels off the reference", frames, sum / std::max(frames, 1), worst, diffLimit);
+            Automation::Report(line);
+            if (limit >= 0.0f && sum / std::max(frames, 1) > limit) { err = std::string("edge deviation over the limit: ") + line; return false; }
+            return true;
+        });
         Automation::RegisterCommand("image_seq_trail", [](const Args& a, std::string& err) {
             if (a.size() < 9) { err = "image_seq_trail <ref dir> <test dir> <first> <last> x0 y0 x1 y1 [max n] [diff n]"; return false; }
             // record_start çıktı klasörünün içinde Recording_<zaman> alt klasörü açar
@@ -8380,6 +8494,21 @@ namespace Conqueror::Editor
             const glm::vec2* b = m_ViewportPanel->GetViewportBounds();
             const ImVec2 p(b[0].x + (b[1].x - b[0].x) * std::stof(a[2]), b[0].y + (b[1].y - b[0].y) * std::stof(a[3]));
             m_ViewportPanel->UpdatePlacementDrag(a[1], p, a[4] == "drop");
+            return true;
+        });
+        // place_drag_path <menü yolu> <u0> <v0> <u1> <v1> <kare> [hold]: giriş Viewport'ta (u0, v0)'dan (u1, v1)'e kare kare sürüklenir, son
+        // karede bırakılır; hold: bırakılmaz, imleç son noktada bekler (sonraki place_drag_path aynı sürüklemeyi sürdürür). Beklemez:
+        // sürükleme sürerken her karede ekran görüntüsü alınabilsin
+        Automation::RegisterCommand("place_drag_path", [this](const Args& a, std::string& err) {
+            if (a.size() < 7 || !m_ViewportPanel) { err = "place_drag_path <menu path> <u0> <v0> <u1> <v1> <frames> [hold]"; return false; }
+            auto& d = s_AutomationPlaceDrag;
+            d.Entry = a[1];
+            d.From = { std::stof(a[2]), std::stof(a[3]) };
+            d.To = { std::stof(a[4]), std::stof(a[5]) };
+            d.Frames = std::max(1, std::stoi(a[6]));
+            d.Done = 0;
+            d.Hold = a.size() >= 8 && a[7] == "hold";
+            d.Active = true;
             return true;
         });
         // spawn_asset <yol> [x y z]: varlığı sahneye bırak (Viewport'a / Hierarchy'ye sürükleyip bırakmakla aynı kod)

@@ -209,6 +209,8 @@ void main()
     vec2 farUV = v_UV;
     bool movingNow = false;
     int movingWhy = 0;   // hata ayıklama: 1 hareket bayrağı, 2 saydam dikdörtgen, 3 önceki kapsama
+    float movDepth = 1.0;   // 3x3'te hareket bayraklı (hareket eden nesne) örneklerin en yakını (309: temas kenarı)
+    vec2 movUV = v_UV;
     float sampleDepth[9];   // 3x3 örneklerinin derinliği ve rengi (YCoCg): açılan pikselin kendi yüzeyinin aralığı için
     vec3 sampleYC[9];
     for (int y = -1; y <= 1; ++y)
@@ -254,6 +256,11 @@ void main()
         {
             movingNow = true;
             movingWhy = 1;
+            if (dep < movDepth)
+            {
+                movDepth = dep;
+                movUV = uv;
+            }
         }
     }
     vec3 current = currentSum / max(weightSum, 1e-4);
@@ -388,10 +395,34 @@ void main()
     }
     // Nesnenin kendi hareketi (hareket vektörü geçişi): kameraya bağlı silah / eller, düşen küp, kalkan hedef geçmişini
     // kamera hareketine göre değil kendi hareketine göre alır
+    // 309: hareket eden nesnenin temas kenarı (zeminde sürüklenen küpün alt kenarı): 3x3'ün en yakın örneği önündeki durağan zemin, küp
+    // ondan yalnız birkaç santim geride. Kenar küpe aittir ve küple birlikte kayar; zeminin (durağan) hareketiyle alınan geçmiş kenarın
+    // eski yerindeydi, piksel sıkı kırpılıp her karede yalnız titreşimli tek örnekle kalıyor, sürüklenen küpün alt kenarı merdivenli
+    // görünüyordu. Kesin hızlı hareket eden nesne en yakın durağan örnekten temas payı kadar gerideyse (önündeki durağan nesnenin arkasından
+    // geçmiyorsa) kenarın geçmişi nesnenin hareketiyle alınır
+    bool contactEdge = false;
+    if (u_HasVelocity == 1 && movDepth < 1.0 && closestDepth < movDepth)
+    {
+        ivec2 vsz = textureSize(u_Velocity, 0);
+        vec4 sv = texelFetch(u_Velocity, clamp(ivec2(closestUV * vec2(vsz)), ivec2(0), vsz - 1), 0);
+        vec4 mv = texelFetch(u_Velocity, clamp(ivec2(movUV * vec2(vsz)), ivec2(0), vsz - 1), 0);
+        float wS = ViewW(closestUV, closestDepth);
+        if (sv.x >= 5000.0 && mv.x < 5000.0 && mv.z > 0.75 && ViewW(movUV, movDepth) - wS < 0.03 * wS + 0.05)
+        {
+            closestUV = movUV;
+            closestDepth = movDepth;
+            contactEdge = true;
+        }
+    }
     vec4 objectVelocity = vec4(1e4);
     if (u_HasVelocity == 1)
         objectVelocity = texelFetch(u_Velocity, clamp(ivec2(closestUV * vec2(textureSize(u_Velocity, 0))), ivec2(0), textureSize(u_Velocity, 0) - 1), 0);
     bool hasObjectVelocity = objectVelocity.x < 5000.0;
+    // 309: piksel hareket eden nesnenin kenarını izliyor (geçmiş nesnenin kesin hareketiyle, kenarın önceki yerinden alınır): 3x3'teki
+    // önceki kapsama işareti aynı nesnenindir, geçmiş atılmaz. Eskiden sürüklenen küpün arkasında kalan kenar şeridi her karede
+    // sıfırlanıp tek titreşimli örnekle kalıyordu (arka kenar merdivenli). Silinen / gizlenen nesnenin yerinde nesne hızı yoktur: atılır
+    if (hasObjectVelocity && objectVelocity.z > 0.75)
+        vacated = false;
     if (hasObjectVelocity)
     {
         velocity = objectVelocity.xy;
@@ -1065,7 +1096,11 @@ void main()
     // Durum x: hareket payı (0..1, TAA + FXAA'da son geçiş FXAA'sı) + 2 x geçmişi reddedilen (yeni açılan / yüzeyi değişen)
     // piksel: TAA'nın orada yalnız bu karesi var, basamaklı kalırdı; son geçiş yalnız bu piksellere FXAA uygular
     // Son geçiş FXAA'sı açılan pikselin ilk iki karesinde (geçmiş henüz 1-2 kare: basamak birikimle tam kapanmadı)
-    StateOut = vec4(((hold || silhouetteSlow) ? 0.0 : clamp((speed - 0.5) / 4.0, 0.0, 1.0)) + ((disoccluded || edgeDisoccluded || ageNow <= 2.0) ? 2.0 : 0.0), min(shadowNow, 0.99) + 2.0 * ageNow, stillAge + 32.0 * (2.0 * flicker + (outsideNow ? 1.0 : 0.0)), clamp(meanOut, 0.0, 0.999) + 2.0 * blurAge);
+    // 309: hareket eden nesnenin kesin geçmişi olmayan pikselleri (kenarı: 3x3'ün en yakın örneği önündeki durağan zemin, ayrıldığı yer)
+    // sıkı kırpılır, orada da TAA'nın yalnız bu titreşimli karesi kalır: sürüklenen küpün kenarları her karede merdivenliydi. Unreal
+    // TSR'nin reddedilen geçmişte uzamsal kenar yumuşatması gibi bu pikseller de son geçişin FXAA / SMAA'sına girer
+    bool movingReject = (movingNow || movedBefore) && !centerExact;
+    StateOut = vec4(((hold || silhouetteSlow) ? 0.0 : clamp((speed - 0.5) / 4.0, 0.0, 1.0)) + ((disoccluded || edgeDisoccluded || ageNow <= 2.0 || movingReject) ? 2.0 : 0.0), min(shadowNow, 0.99) + 2.0 * ageNow, stillAge + 32.0 * (2.0 * flicker + (outsideNow ? 1.0 : 0.0)), clamp(meanOut, 0.0, 0.999) + 2.0 * blurAge);
     // Parlaklık sınırı: sonuç bu karenin 3x3'ündeki ve geçmişteki en parlak (sıkıştırılmış) değeri aşamaz. Kırpılan geçmiş
     // RGB'ye dönünce sıkıştırılmış parlaklık 1'e yaklaşabiliyor, Expand onu yüzlerce kat büyütüyordu: tek piksel bloomla beyaz
     // yuvarlak bir lekeye, büyükse bir anlık tüm ekran beyazlığına dönüyordu

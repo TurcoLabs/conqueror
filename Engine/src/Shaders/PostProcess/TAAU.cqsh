@@ -159,6 +159,8 @@ void main()
     float farthest = 0.0;       // 3x3'ün en uzak (gökyüzü dışı) derinliği: kenar paralaksı için
     ivec2 farTex = closestTex;
     bool moving = false;
+    float movDepth = 1.0;       // 3x3'te hareket bayraklı (hareket eden nesne) örneklerin en yakını (309: temas kenarı)
+    ivec2 movTex = closestTex;
     // Pikselin kendi noktası: çıktı pikseline en yakın iç örnek. Aynı yüzeyin örnekleri (uzaklığı bu noktanınkine yakın) ayrı
     // aralıkta toplanır: açılan pikselin geçmişi yalnız kendi yüzeyinin renklerine kırpılır
     ivec2 cTex = clamp(base, ivec2(0), inMax);
@@ -211,9 +213,30 @@ void main()
             farTex = t;
         }
         if (u_HasMotionFlag == 1 && texelFetch(u_GNormal, t, 0).w >= 3.5)
+        {
             moving = true;
+            if (dep < movDepth)
+            {
+                movDepth = dep;
+                movTex = t;
+            }
+        }
     }
     vec3 current = sum / max(wsum, 1e-4);
+    // 309: hareket eden nesnenin temas kenarı (zeminde sürüklenen küpün alt kenarı): 3x3'ün en yakın örneği önündeki durağan zemin, küp
+    // ondan yalnız birkaç santim geride. Kenar küple birlikte kayar: kesin hızlı nesne en yakın durağan örnekten temas payı kadar
+    // gerideyse (durağan bir nesnenin arkasından geçmiyorsa) kenarın geçmişi nesnenin hareketiyle alınır (yerel TAA ile aynı)
+    if (u_HasVelocity == 1 && movDepth < 1.0 && closest < movDepth)
+    {
+        vec4 sv = texelFetch(u_Velocity, closestTex, 0);
+        vec4 mv = texelFetch(u_Velocity, movTex, 0);
+        float wS = ViewW((vec2(closestTex) + 0.5) * u_InTexel, closest);
+        if (sv.x >= 5000.0 && mv.x < 5000.0 && mv.z > 0.75 && ViewW((vec2(movTex) + 0.5) * u_InTexel, movDepth) - wS < 0.03 * wS + 0.05)
+        {
+            closest = movDepth;
+            closestTex = movTex;
+        }
+    }
     // Yeniden izdüşüm: 3x3'ün en yakın derinliği (kenarda ön yüzün hareketi)
     vec2 closestUV = (vec2(closestTex) + 0.5) * u_InTexel;
     vec4 world = u_InvViewProj * vec4(closestUV * 2.0 - 1.0, closest * 2.0 - 1.0, 1.0);
@@ -226,6 +249,7 @@ void main()
     if (u_CameraStill == 1 || prevClip.w <= 0.0)
         velocity = vec2(0.0);
     bool objectVelocity = false;
+    bool exactObject = false;   // geçmiş hareket eden nesnenin kesin hızıyla izleniyor (nesnenin kendisi ya da kenarı)
     if (u_HasVelocity == 1)
     {
         vec4 ov = texelFetch(u_Velocity, closestTex, 0);
@@ -233,8 +257,14 @@ void main()
         {
             velocity = ov.xy;
             objectVelocity = true;
+            exactObject = ov.z > 0.75;
         }
     }
+    // 309: yalnız hızı kesin bilinmeyen hareket (yaklaşık hızlı graph malzeme, durağan bir nesnenin arkasından geçen nesnenin kenarı)
+    // az geçmişle çizilir. Eskiden 3x3'te hareket eden nesne olan her pikselin geçmiş ağırlığı %50'ye iniyordu: kesin hızla izlenen
+    // sürüklenen küp her karede yarı yarıya tek titreşimli örnekten oluşuyor, kenarları merdivenli görünüyordu (yerel TAA'da kesin
+    // hızlı nesne zaten normal yoldan gider)
+    bool movingStrict = moving && !exactObject;
     // Pikselin kendi yüzeyi 3x3'ün en yakın yüzeyi mi (gökyüzü hiçbir zaman değil) ve iki yanı en yakın yüzeyle çevrili ince aralık mı
     // (küplerin arası: aralık ön yüzlerle birlikte kayar)
     bool onClosestSurface = cDepth < 1.0 && abs(cW - curW) < 0.03 * curW + 0.02;
@@ -306,7 +336,8 @@ void main()
     {
         ivec2 vsz = textureSize(u_Velocity, 0);
         ivec2 vc = clamp(ivec2((vec2(cTex) + 0.5) * u_InTexel * vec2(vsz)), ivec2(0), vsz - 1);
-        if (texelFetch(u_Velocity, vc, 0).x >= 5000.0)
+        // Kesin hızla izlenen kenar pikselinde önceki kapsama işareti aynı nesnenindir (geçmiş kenarın önceki yerinden gelir): atılmaz
+        if (texelFetch(u_Velocity, vc, 0).x >= 5000.0 && !exactObject)
             for (int i = 0; i < 9 && !vacated; ++i)
             {
                 vec4 nv = texelFetch(u_Velocity, clamp(vc + ivec2(i % 3 - 1, i / 3 - 1), ivec2(0), vsz - 1), 0);
@@ -453,16 +484,27 @@ void main()
     // açık, bir iki saniye sonra koyu). Hareket ederken geçmiş 4 örnek değerinde sayılır (durunca ilk kare tek titreşimli kareye atlamaz)
     float acc = 4.0;
     float alphaSettle = -1.0;
-    if (settle)
+    // 292: kamera dururken geçmişi yeni sıfırlanan (nesnenin ayrıldığı / açılan) piksel de dar süzgeç ve en yakın iç örneğin ağırlığıyla
+    // birikiyordu: ilk karelerde her çıktı pikseli yalnız kendine en yakın düşük çözünürlüklü örneği gösteriyor, bölge noktalı / taramalı
+    // ve kenarları basamaklı görünüyordu (önizleme küpü duvarın üstünden çekilince duvar üstünün kenarı). Hareket ederken genç pikseldeki
+    // gibi (329): ilk 4 örnek geniş süzgeçle ve her çıktı pikselinde aynı ağırlıkla (1/2, 1/3, 1/4), sonra dar süzgeçle birikim sürer
+    vec3 currentWide = current;
+    bool settleYoung = settle && accBefore < 3.99;
+    if (settle && !settleYoung)
     {
         current = sumN / max(wsumN, 1e-4);
         alphaSettle = wmaxN / (min(accBefore, 15.5) + wmaxN);
         acc = min(accBefore + wmaxN, 15.5);
     }
+    else if (settleYoung)
+    {
+        alphaSettle = 1.0 / (accBefore + 1.0);
+        acc = min(accBefore + 1.0, 4.0);
+    }
     if (hold)
         feedback = max(feedback, 0.94);
     feedback = mix(feedback, max(feedback, 0.96), slowTrust);
-    if (moving || reactive)
+    if (movingStrict || reactive)
         feedback = min(feedback, 0.5);
     // Yaklaşırken geçmiş bu kareden düşük çözünürlüklüdür (TAA ile aynı ilke): ağırlık büyütme oranıyla sınırlı
     // Görüş açısı daralınca (sağ tık nişan, dürbün) görüntü odak uzaklığı oranında büyür
@@ -494,10 +536,12 @@ void main()
     }
     if (vacated)
     {
-        // Nesnenin bıraktığı geçmiş atılır: bu karenin örneği, birikim yeniden başlar (genç piksel olarak eşit ağırlıkla oturur)
-        history = current;
+        // Nesnenin bıraktığı geçmiş atılır: bu karenin örneği (geniş süzgeçle), birikim yeniden başlar (genç piksel olarak eşit ağırlıkla
+        // oturur)
+        history = currentWide;
+        current = currentWide;
         alpha = 1.0;
-        acc = wmax;
+        acc = 1.0;
         flicker = 0.0;
     }
     else if (revealed)
@@ -505,7 +549,8 @@ void main()
         // Geçmiş örtücünündür: atılır, bu karenin (geniş süzgeçli, yumuşak) değeriyle başlanır; sonraki karelerde genç piksel olarak
         // eşit ağırlıkla oturur. Eskiden örtücünün rengi kendi yüzeyinin aralığına kırpılıp %40 tutuluyordu: kırpılan renk (mavi küp ->
         // gökyüzü aralığı) yanlış tonda kalıp açılan alanda çizgi çizgi görünüyordu
-        history = current;
+        history = currentWide;
+        current = currentWide;
         alpha = 1.0;
         acc = 1.0;
         flicker = 0.0;
@@ -521,7 +566,7 @@ void main()
         if (vacated) tint = vec3(1.0, 0.4, 0.6);
         else if (revealed) tint = vec3(1.0, 0.5, 0.0);
         else if (shadowChanged) tint = vec3(1.0, 0.8, 0.0);
-        else if (moving || reactive) tint = vec3(1.0, 0.0, 0.0);
+        else if (movingStrict || reactive) tint = vec3(1.0, 0.0, 0.0);
         else if (objectVelocity) tint = vec3(0.5, 0.0, 0.0);
         else if (velAmbiguous) tint = vec3(0.0, 1.0, 1.0) * (clamped ? 1.0 : 0.55);   // camgöbeği: paralaks belirsiz kenar
         else if (hold) tint = vec3(0.5, 1.0, 0.6);

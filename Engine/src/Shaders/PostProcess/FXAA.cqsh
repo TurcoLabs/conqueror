@@ -31,6 +31,11 @@ uniform int u_UseMotionMask = 0;
 uniform int u_CameraStill = 0;
 // 1: yalnız TAA'nın geçmişini reddettiği (yeni açılan / yüzeyi değişen) pikseller (durum x >= 1.5); TAA modunda
 uniform int u_RejectOnly = 0;
+// 2: TAAU (TAA + NIS / FSR 1 / CAS) çıktısı: maske dokunun alfa kanalındaki birikmiş örnek ağırlığından (acc = floor(a / 64) / 2).
+// Geçmişi yeni reddedilen (açılan / nesnenin ayrıldığı) piksel ilk karelerde yalnız birkaç titreşimli düşük çözünürlüklü örnekten
+// oluşur, kenarı merdivenlidir (292: küp duvarın üstünden kaldırılınca duvar üstünün kenarı). Unreal TSR'nin reddedilen geçmişteki
+// uzamsal kenar yumuşatması gibi: ağırlık 1'de tam, 4'te sıfır
+uniform int u_MaskMode = 0;
 
 // Kalite ayarları (FXAA 3.11 belgesindeki "yüksek kalite" değerleri)
 const float kSubpix = 0.75;               // alt piksel yumuşatma miktarı
@@ -188,7 +193,17 @@ void main()
     {
         // TAA + FXAA: kamera dururken TAA zaten zamansal yumuşatmayı tamamlar; durağan görüntüye dokunulmaz
         float m;
-        if (u_RejectOnly == 1)
+        if (u_MaskMode == 2)
+        {
+            float acc = floor(max(texture(u_MotionMask, v_TexCoord).a, 0.0) / 64.0 + 1e-3) * 0.5;
+            m = clamp((4.0 - acc) / 3.0, 0.0, 1.0);
+            if (m <= 0.0)
+            {
+                FragColor = vec4(original, 1.0);
+                return;
+            }
+        }
+        else if (u_RejectOnly == 1)
         {
             // Yalnız TAA'nın geçmişini reddettiği pikseller (yeni açılan alan): TAA'nın tek karesi orada basamaklı kalırdı.
             // Unreal'daki gibi geçmiş oturana kadar sürer: açılmadan sonraki ilk karelerde TAA yalnız birkaç titreşim örneğini

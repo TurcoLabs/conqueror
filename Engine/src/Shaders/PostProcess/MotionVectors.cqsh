@@ -23,6 +23,11 @@ uniform int u_CameraStill = 0;
 uniform mat4 u_InvViewProj;      // titreşimli
 uniform mat4 u_PrevViewProj;     // önceki karenin titreşimsiz matrisi
 uniform vec2 u_JitterUV;
+float ViewW(vec2 uv, float d)
+{
+    vec4 h = u_InvViewProj * vec4(uv * 2.0 - 1.0, d * 2.0 - 1.0, 1.0);
+    return 1.0 / max(abs(h.w), 1e-8);
+}
 void main()
 {
     float depth = texture(u_Depth, v_UV).r;
@@ -37,6 +42,34 @@ void main()
         vec4 ov = texture(u_Velocity, v_UV);
         if (ov.x < 5000.0)
             velocity = ov.xy;
+        else if (depth < 1.0)
+        {
+            // 309: hareket eden nesnenin temas kenarı (zeminde sürüklenen küpün alt kenarı). FSR 2 hareket vektörünü 3x3'ün en yakın
+            // derinliğinden alır; küpün alt kenarında en yakın örnek önündeki durağan zemindir, kenarın geçmişi zeminin hareketiyle
+            // (kenarın eski yerinden) gelip reddediliyor, sürüklenen küpün alt kenarı merdivenli kalıyordu. Kesin hızlı hareket eden
+            // nesnenin yalnız temas payı kadar önündeki durağan piksel nesnenin hareketini yazar (TAA / TAAU'daki temas kenarı kuralı)
+            ivec2 p = ivec2(gl_FragCoord.xy);
+            ivec2 sz = textureSize(u_Velocity, 0);
+            float wSelf = ViewW(v_UV, depth);
+            float best = 1e9;
+            for (int i = 0; i < 9; ++i)
+            {
+                ivec2 t = clamp(p + ivec2(i % 3 - 1, i / 3 - 1), ivec2(0), sz - 1);
+                vec4 nv = texelFetch(u_Velocity, t, 0);
+                if (nv.x >= 5000.0 || nv.z <= 0.75)
+                    continue;
+                vec2 tuv = (vec2(t) + 0.5) / vec2(sz);
+                float nd = texture(u_Depth, tuv).r;
+                if (nd >= 1.0)
+                    continue;
+                float wN = ViewW(tuv, nd);
+                if (wN > wSelf && wN - wSelf < 0.03 * wSelf + 0.05 && wN < best)
+                {
+                    best = wN;
+                    velocity = nv.xy;
+                }
+            }
+        }
     }
     MotionOut = -velocity;   // FSR 2: önceki konum = uv + hareket
 }
