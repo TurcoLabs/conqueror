@@ -1,0 +1,52 @@
+# template: fps
+# 338: TAA + NIS'te köprünün altında ateş edince tavan yarım saniye açık kalıyor, ince karo çizgileri beyaz kesik çizgilere dönüyordu
+# (kullanıcının 12-14. resimleri). Namlu alevinin ışığı tek karelik; SSAA, yerel TAA ve FSR AA'da tavan bir sonraki karede eski
+# parlaklığına döner. TAAU'da ise alev karesi geçmişe yazılıyor, kamera dururken birikimin 1/18 ağırlığıyla sönüyordu (dokulu tavanda
+# 3x3 kırpma kutusu +14 seviyelik farkı kırpamaz). Yerel TAA'daki gibi kısa ışık değişimi (motor bildirir, en çok 6 kare) artık TAAU
+# geçmişine yazılmaz: geçmiş ışıktan önceki haliyle kalır, alev yalnız gösterilen görüntüye düşük frekanslı katkı olarak eklenir.
+# Tavanın ortalama parlaklığı (SSAA 112 -> alev 163 -> 115 -> 112): eski TAAU 113 -> 143 -> 130 -> 127 ... 35. karede 120, yeni
+# 113 -> 162 -> 115 -> 112. Alevden sonraki 31 karede referansın düz olduğu yerde 28 seviyeden çok sapan piksel: eski kare başına 570
+# (en çok 1892), yeni 0
+timeout 400
+wait 60
+focus Game
+play
+wait 30
+script set Pistol@Weapon recoilPitch float 0
+script set Pistol@Weapon recoilYaw float 0
+script set Pistol@Weapon hipSpread float 0
+script set Pistol@Weapon aimSpread float 0
+script set Pistol@Weapon moveSpread float 0
+cvar r.AntiAliasing 7
+cvar r.Upscaler 0
+entity move Player 0 0.9 -11.8
+wait 4
+script set Player@FirstPersonShooter yaw float 0
+script set Player@FirstPersonShooter pitch float 12
+wait 120
+record_start png fixed fps=60 out={work}/fire338_ref
+wait 6
+script set Player@FirstPersonShooter fireInput bool true
+wait 2
+script set Player@FirstPersonShooter fireInput bool false
+wait 40
+record_stop
+wait 30
+cvar r.AntiAliasing 3
+cvar r.Upscaler 3
+entity move Player 0 0.9 -11.8
+wait 4
+script set Player@FirstPersonShooter yaw float 0
+script set Player@FirstPersonShooter pitch float 12
+wait 120
+record_start png fixed fps=60 out={work}/fire338_nis
+wait 6
+script set Player@FirstPersonShooter fireInput bool true
+wait 2
+script set Player@FirstPersonShooter fireInput bool false
+wait 40
+record_stop
+image_seq_trail {work}/fire338_ref {work}/fire338_nis 9 39 0 0 1034 170 max 20
+stop
+wait 5
+quit

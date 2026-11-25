@@ -273,6 +273,8 @@ namespace Conqueror
         // TAAU: çıktı çözünürlüğünde geçmiş (RGBA16F, LDR)
         RenderTarget m_TAAUHistory[2];
         RenderTarget m_TAAURejectAA;
+        RenderTarget m_TAAUDisplay;          // 338: ışık dondurulan karede gösterilen TAAU çıktısı (geçmiş ışıktan önceki halinde kalır)
+        bool m_TAAULightingChanged = false;  // TAAU bu karede ışık değişimini tüketti (RunStillHold owner 4)
         // Titreşim evre sayısı: yerel TAA 16, TAAU 8 x (çıktı / iç)² (en az 16, en çok 64)
         uint32_t JitterPhaseCount() const
         {

@@ -19,8 +19,10 @@ void main()
 #version 450 core
 layout(location = 0) out vec4 FragColor;
 layout(location = 1) out vec4 DebugOut;   // r.TAADebug: pikselin geçmiş yolu renkle (geçmişe yazılmaz, yalnız gösterilir)
+layout(location = 2) out vec4 DisplayOut; // 338: ışık dondurulan karede gösterilen renk (geçmişten ayrı; başka karelerde bağlı değil)
 in vec2 v_UV;
 uniform int u_Debug = 0;
+uniform int u_LightingFreeze = 0;   // 338: kısa ışık değişimi (namlu alevi, motor bildirir: en çok 6 kare): geçmişe yazılmaz, yalnız gösterilir
 uniform float u_AccCap = 15.5;   // dururken birikimin üst sınırı (titreşim evre sayısı - 0.5; RGBA32F geçmiş)
 
 uniform sampler2D u_Current;    // iç çözünürlükte titreşimli kare (LDR)
@@ -322,6 +324,7 @@ void main()
     if (u_HistoryValid == 0 || any(lessThan(prevUV, vec2(0.0))) || any(greaterThan(prevUV, vec2(1.0))))
     {
         FragColor = vec4(current, 0.0);
+        DisplayOut = FragColor;
         if (u_Debug == 1)
             DebugOut = vec4(1.0);   // beyaz: geçmiş yok / ekran dışından
         return;
@@ -594,6 +597,24 @@ void main()
         flicker = 0.0;
     }
     FragColor = vec4(max(mix(history, current, alpha), vec3(0.0)), floor(acc * 2.0) * 64.0 + flicker * 2.0 + (outsideNow ? 1.0 : 0.0));
+    DisplayOut = FragColor;
+    // 338: namlu alevi gibi kısa ışık değişimi (motor bir nokta / spot ışığın gücünün değiştiğini bildirir; en çok 6 kare) geçmişe yazılmaz
+    // (yerel TAA'daki gibi). Eskiden alev karesi geçmişe girip dururken birikimin 1/18 ağırlığıyla 0.5 saniyede sönüyordu: ateş edince
+    // tavan +14 seviye açık kalıyor, ince karo çizgileri beyaz kesik çizgilere dönüyordu (dokulu yüzeyde 3x3 kutusu bu farkı kırpamaz).
+    // Geçmişe ışıktan önceki (kırpılmamış, yeniden izdüşülmüş) geçmiş ve durumu yazılır; gösterilen: geçmiş + ışığın düşük frekanslı
+    // katkısı (bu karenin 3x3 ortalaması - geçmişin aynı ayak izindeki ortalaması: ayrıntı geçmişten, ışık bu kareden). Hareket eden
+    // nesne, nesnenin ayrıldığı / açılan piksel, parçacık ve tutarsız geçmiş eski yoldan
+    bool lightFrozen = u_LightingFreeze == 1 && !moving && !objectVelocity && !reactive && !vacated && !revealed && historyDepthOk && !velAmbiguous;
+    if (lightFrozen)
+    {
+        vec3 histMean = vec3(0.0);
+        for (int y = -1; y <= 1; ++y)
+            for (int x = -1; x <= 1; ++x)
+                histMean += RGBToYCoCg(max(texture(u_History, prevUV + vec2(x, y) * u_InTexel).rgb, vec3(0.0)));
+        histMean /= 9.0;
+        DisplayOut = vec4(max(YCoCgToRGB(RGBToYCoCg(historyBeforeClamp) + mean - histMean), vec3(0.0)), FragColor.a);
+        FragColor = vec4(max(historyBeforeClamp, vec3(0.0)), stateBefore);
+    }
     if (u_Debug == 1)
     {
         // Pembe: nesnenin ayrıldığı yer, turuncu: açılan alan, altın: hareketli gölgede ışığı değişen, kırmızı: hareket eden nesne /
@@ -601,7 +622,8 @@ void main()
         // ve güvenilir (geniş kutu), eflatun: gökyüzü komşusu, sarı: normal kırpma (parlak: geçmiş kırpıldı, koyu: kırpılmadı)
         vec3 tint;
         bool clamped = distance(RGBToYCoCg(historyBeforeClamp), RGBToYCoCg(history)) > 0.02;
-        if (vacated) tint = vec3(1.0, 0.4, 0.6);
+        if (lightFrozen) tint = vec3(0.75, 0.45, 1.0);   // lila: ışık değişiminde geçmişi korunan piksel
+        else if (vacated) tint = vec3(1.0, 0.4, 0.6);
         else if (revealed) tint = vec3(1.0, 0.5, 0.0);
         else if (shadowChanged) tint = vec3(1.0, 0.8, 0.0);
         else if (movingStrict || reactive) tint = vec3(1.0, 0.0, 0.0);

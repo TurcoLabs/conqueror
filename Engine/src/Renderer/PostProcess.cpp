@@ -245,6 +245,7 @@ namespace Conqueror
         DestroyTarget(m_TAAUHistory[0]);
         DestroyTarget(m_TAAUHistory[1]);
         DestroyTarget(m_TAAURejectAA);
+        DestroyTarget(m_TAAUDisplay);
         DestroyTarget(m_SGSR2Motion);
         DestroyTarget(m_SGSR2History[0]);
         DestroyTarget(m_SGSR2History[1]);
@@ -821,7 +822,7 @@ namespace Conqueror
         m_FSR2HoldOwner = owner;
         m_FSR2HoldFrame = m_FrameIndex;
         // TAA çıktısında (owner 3) ışık değişimini TAA bu karede zaten tüketti
-        const bool lightingChanged = owner == 3 ? m_TAALightingChanged : Renderer3D::ConsumeLightingChange(this);
+        const bool lightingChanged = owner == 3 ? m_TAALightingChanged : owner == 4 ? m_TAAULightingChanged : Renderer3D::ConsumeLightingChange(this);
         const uint32_t next = 1u - m_FSR2HoldIndex;
         EnsureTarget(m_FSR2Hold, w, h, GL_RGBA8);
         EnsureTarget(m_FSR2HoldState[0], w, h, GL_RGBA16F);
@@ -2496,6 +2497,21 @@ namespace Conqueror
             // 2048'den büyük tam sayıları tutamıyordu (birikim üst sınırı 15.5'ti)
             EnsureTarget(m_TAAUHistory[0], outW, outH, GL_RGBA32F);
             EnsureTarget(m_TAAUHistory[1], outW, outH, GL_RGBA32F);
+            const bool historyValid = m_TAAUValid && m_HasPrevViewProj && m_TAAUHistory[m_TAAUIndex].Width == outW && m_TAAUHistory[m_TAAUIndex].Height == outH;
+            // r.TAADebug: pikselin geçmiş yolu ikinci hedefe (TAA'daki gibi), yalnız gösterilir
+            const bool taauDebug = ConsoleSystem::Overrides().TAADebug == 1;
+            // 338: nokta / spot ışığın gücü bu karede değişti (namlu alevi). En çok 6 kare süren kısa değişim geçmişe yazılmaz (yerel TAA
+            // gibi): gösterilen görüntü ayrı hedefe (alev yalnız orada), geçmiş ışıktan önceki haliyle kalır
+            const bool lightingChanged = Renderer3D::ConsumeLightingChange(this);
+            m_TAAULightingChanged = lightingChanged;
+            m_LightChangeFrames = lightingChanged ? m_LightChangeFrames + 1 : 0;
+            const bool lightingFreeze = lightingChanged && m_LightChangeFrames <= 6 && historyValid;
+            // Ek hedefler bağlamalardan önce kurulur (CreateTarget kendi çerçeve tamponunu ve dokusunu bağlar: sonra kurulunca ilk
+            // dondurulan karede TAAU yanlış hedefe ve yanlış dokularla çizip görüntüyü siyah bırakıyordu)
+            if (lightingFreeze)
+                EnsureTarget(m_TAAUDisplay, outW, outH, GL_RGBA16F);
+            if (taauDebug)
+                EnsureTarget(m_TAADebug, outW, outH, GL_RGBA16F);
             glBindFramebuffer(GL_FRAMEBUFFER, m_TAAUHistory[ni].Framebuffer);
             glViewport(0, 0, (GLsizei)outW, (GLsizei)outH);
             taau->Bind();
@@ -2508,7 +2524,6 @@ namespace Conqueror
             const uint32_t normals = GetSceneNormalTexture();
             taau->SetInt("u_HasMotionFlag", normals ? 1 : 0);
             taau->SetInt("u_HasVelocity", m_FinalHasVelocity ? 1 : 0);
-            const bool historyValid = m_TAAUValid && m_HasPrevViewProj && m_TAAUHistory[m_TAAUIndex].Width == outW && m_TAAUHistory[m_TAAUIndex].Height == outH;
             taau->SetInt("u_HistoryValid", historyValid ? 1 : 0);
             NoteTemporalStart(historyValid);
             taau->SetInt("u_CameraStill", m_CameraStill ? 1 : 0);
@@ -2563,22 +2578,27 @@ namespace Conqueror
             BindTexture(2, GetSceneDepthTexture());
             BindTexture(3, normals);
             BindTexture(4, m_FinalHasVelocity ? m_Velocity.Texture : 0);
-            // r.TAADebug: pikselin geçmiş yolu ikinci hedefe (TAA'daki gibi), yalnız gösterilir
-            const bool taauDebug = ConsoleSystem::Overrides().TAADebug == 1;
             taau->SetInt("u_Debug", taauDebug ? 1 : 0);
+            taau->SetInt("u_LightingFreeze", lightingFreeze ? 1 : 0);
             if (taauDebug)
-            {
-                EnsureTarget(m_TAADebug, outW, outH, GL_RGBA16F);
                 glNamedFramebufferTexture(m_TAAUHistory[ni].Framebuffer, GL_COLOR_ATTACHMENT1, m_TAADebug.Texture, 0);
-                const GLenum buffers[2] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1 };
-                glNamedFramebufferDrawBuffers(m_TAAUHistory[ni].Framebuffer, 2, buffers);
+            if (lightingFreeze)
+                glNamedFramebufferTexture(m_TAAUHistory[ni].Framebuffer, GL_COLOR_ATTACHMENT2, m_TAAUDisplay.Texture, 0);
+            if (taauDebug || lightingFreeze)
+            {
+                const GLenum buffers[3] = { GL_COLOR_ATTACHMENT0, taauDebug ? (GLenum)GL_COLOR_ATTACHMENT1 : (GLenum)GL_NONE,
+                                            lightingFreeze ? (GLenum)GL_COLOR_ATTACHMENT2 : (GLenum)GL_NONE };
+                glNamedFramebufferDrawBuffers(m_TAAUHistory[ni].Framebuffer, lightingFreeze ? 3 : 2, buffers);
             }
             PostProcess::DrawFullscreenQuad();
-            if (taauDebug)
+            if (taauDebug || lightingFreeze)
             {
                 const GLenum buffers[1] = { GL_COLOR_ATTACHMENT0 };
                 glNamedFramebufferDrawBuffers(m_TAAUHistory[ni].Framebuffer, 1, buffers);
-                glNamedFramebufferTexture(m_TAAUHistory[ni].Framebuffer, GL_COLOR_ATTACHMENT1, 0, 0);
+                if (taauDebug)
+                    glNamedFramebufferTexture(m_TAAUHistory[ni].Framebuffer, GL_COLOR_ATTACHMENT1, 0, 0);
+                if (lightingFreeze)
+                    glNamedFramebufferTexture(m_TAAUHistory[ni].Framebuffer, GL_COLOR_ATTACHMENT2, 0, 0);
             }
             glTextureParameteri(cur, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
             m_TAAUIndex = ni;
@@ -2588,7 +2608,7 @@ namespace Conqueror
                                         m_SpatialSharpener == UpscalerMode::CAS;
             // Keskinleştirme TAAU'nun kamera dururken kalan küçük titreşimini büyütür (285 / 288'deki gibi): önce FSR 2 / SGSR 2'deki duran
             // kamera tutucusu (owner 4), sonra keskinleştirici
-            uint32_t taauResult = m_TAAUHistory[ni].Texture;
+            uint32_t taauResult = lightingFreeze ? m_TAAUDisplay.Texture : m_TAAUHistory[ni].Texture;
             uint32_t unsharpened = 0;
             // 292: geçmişi yeni reddedilen (açılan, nesnenin ayrıldığı) piksel ilk karelerde yalnız birkaç titreşimli düşük çözünürlüklü
             // örnekten oluşur: küp duvarın üstünden kaldırılınca duvar üstünün kenarı birkaç kare merdivenli kalıyordu. Yerel TAA'daki gibi
