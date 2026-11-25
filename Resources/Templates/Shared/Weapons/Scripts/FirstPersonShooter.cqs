@@ -559,8 +559,11 @@ script FirstPersonShooter : ConquerorScript
         eye = MathLerp(eye, eyeTarget, 1.0 - MathExp(-12.0 * dt));
         if (MathAbs(eye - eyeTarget) < 0.0002) { eye = eyeTarget; }
         var aimTarget = aiming ? 1.0 : 0.0;
-        aim01 = MathLerp(aim01, aimTarget, 1.0 - MathExp(-aimInSpeed * dt));
-        if (MathAbs(aim01 - aimTarget) < 0.0002) { aim01 = aimTarget; }
+        // Üstel yaklaşım + en az doğrusal adım (saniyede 1.5): geçiş sonlu sürede (~0.3 s) biter, sona sıçrama yok. Yalnız üstel yaklaşımda
+        // son ~0.4 saniye görüş açısı ekranda 0.05-0.5 piksel kayıyor, zamansal kenar yumuşatma (TAA, TAA + NIS) bunu hareket sayıp nişan
+        // bırakıldıktan sonra küplerin aralarında kısa bir parıltı bırakıyordu (327)
+        var aimStep = MathMax(MathAbs(aimTarget - aim01) * (1.0 - MathExp(-aimInSpeed * dt)), 1.5 * dt);
+        aim01 = aim01 < aimTarget ? MathMin(aim01 + aimStep, aimTarget) : MathMax(aim01 - aimStep, aimTarget);
         var w = CurrentWeapon();
         var aimFov = w >= 0 ? GetScriptField(w, "aimFov") : 60.0;
         if (cam >= 0)
