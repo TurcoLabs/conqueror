@@ -1,0 +1,16 @@
+# template: fps
+# 321: EQAA'da (8 kapsam / 4 renk örneği) Viewport'ta zemindeki editör ızgarası ve kırmızı / mavi eksen çizgileri hiç görünmüyordu
+# (yalnız mavi eksenin gökyüzü önündeki parçası); diğer bütün AA'larda görünüyordu. EQAA'da sahne hedefi tek örnek ama sahne kapsam
+# örnekli çerçeve tamponuna çizilir ve derinlik testi o örneklerde yapılır; ızgara ise örnek sayısını 1 sanıp eğim payı vermiyor, alçak
+# açıda zeminin örnekleri ızgaranın önünde kalıyordu. Kırmızı eksenin geçtiği şeritte kırmızının baskınlığı: MSAA 4.1, EQAA eski -15.4
+# (çizgi yok, mavi-gri zemin), yeni 4.0
+wait_until 3000 layout_settled
+wait 10
+focus Viewport
+cvar r.AntiAliasing 9
+wait 60
+viewport_region 0.05 0.455 0.30 0.495 red mean >1.5
+cvar r.AntiAliasing 6
+wait 60
+viewport_region 0.05 0.455 0.30 0.495 red mean >1.5
+quit

@@ -111,7 +111,7 @@ namespace Conqueror
         // Şu an bu görünümün (çok örneklemesiz) sahne hedefine çiziliyorsa sahne derinliği, değilse 0. Derinlik yazmayan
         // saydam çizimler (parçacıklar) örnekleyebilir: yüzeye yaklaşınca yumuşakça solarlar (soft particles)
         static uint32_t GetCurrentSceneDepth();
-        // Şu an çizilen görünümün sahne hedefinin örnek sayısı (MSAA / EQAA / CSAA > 1; görünüm yoksa 1)
+        // Şu an çizilen görünümün sahne derinliğinin örnek sayısı (MSAA; EQAA / CSAA'da kapsam örnekleri; görünüm yoksa 1)
         static uint32_t GetCurrentSamples();
         // Son karede çözülen yükseltici ve (310) çıktı çözünürlüğünde yalnız keskinleştiren uzamsal yükseltici (yoksa None)
         UpscalerMode GetResolvedUpscaler() const { return m_Upscaler; }

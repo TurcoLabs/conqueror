@@ -1096,7 +1096,14 @@ namespace Conqueror
 
     uint32_t PostProcessStack::GetCurrentSamples()
     {
-        return s_Current ? std::max(1u, s_Current->m_Samples) : 1u;
+        if (!s_Current)
+            return 1u;
+        // 321: EQAA / CSAA'da sahne hedefi tek örnek ama sahne kapsam örnekli çerçeve tamponuna çizilir; derinlik testi o örneklerin
+        // konumlarında yapılır ve çözülen derinlik bir örnekten gelir. Eskiden 1 dönüyordu: Viewport ızgarası derinliğin piksel merkezinde
+        // olduğunu varsayıp eğim payı vermiyor, alçak açıda zeminin örnekleri ızgaranın önünde kalıyor, zemindeki ızgara ve eksen
+        // çizgileri EQAA'da hiç görünmüyordu (yalnız gökyüzünün önündeki parçaları)
+        const uint32_t coverage = (s_Current->m_CoverageFramebuffer && s_Current->m_CoverageSamples > 0) ? s_Current->m_CoverageSamples : 0u;
+        return std::max({ 1u, s_Current->m_Samples, coverage });
     }
 
     uint32_t PostProcessStack::GetCurrentSceneDepth()
