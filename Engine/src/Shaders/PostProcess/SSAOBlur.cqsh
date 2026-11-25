@@ -30,6 +30,13 @@ uniform vec2 u_NearFar = vec2(0.1, 1000.0);
 // kat genişler. 1 / ölçek² ile süzgecin çıktı piksellerindeki genişliği yerel çözünürlükteki kadar kalır (286: uzaktaki küplerin
 // arasındaki örtü daha sığ ve geniş çıkıyor, aralıklar yerel TAA'dakinden soluk görünüyordu)
 uniform float u_SpatialScale = 1.0;
+// 340: yoğunluk ve üs süzülmüş ham görünürlüğe uygulanır (SSAO / ışın izlemeli AO ham değer yazar)
+uniform float u_Intensity = 1.0;
+uniform float u_Power = 1.0;
+float ApplyAO(float visibility)
+{
+    return pow(clamp(1.0 - (1.0 - visibility) * u_Intensity, 0.0, 1.0), u_Power);
+}
 
 float DepthAt(ivec2 t, ivec2 hsz, ivec2 fsz)
 {
@@ -77,5 +84,5 @@ void main()
             wsum += w;
         }
     }
-    FragAO = wsum > 1e-5 ? sum / wsum : texelFetch(u_AO, c, 0).r;
+    FragAO = ApplyAO(wsum > 1e-5 ? sum / wsum : texelFetch(u_AO, c, 0).r);
 }

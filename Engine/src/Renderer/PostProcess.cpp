@@ -1643,6 +1643,8 @@ namespace Conqueror
         // zamansal birikimde (titreşim açık): kalan gürültü titreşim evreleri boyunca ortalanır; uzamsal yükselticide değişmez
         const float aoScale = (m_JitterActive && m_RenderScale < 0.999f) ? std::max(m_RenderScale, 0.25f) : 1.0f;
         blur->SetFloat("u_SpatialScale", 1.0f / (aoScale * aoScale));
+        blur->SetFloat("u_Intensity", std::max(settings.AOIntensity, 0.0f));
+        blur->SetFloat("u_Power", std::max(settings.AOPower, 0.01f));
         BindTexture(0, aoSource.Texture);
         BindTexture(1, GetSceneDepthTexture());
         PostProcess::DrawFullscreenQuad();

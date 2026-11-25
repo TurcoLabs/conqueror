@@ -185,8 +185,8 @@ void main()
             occ += 1.0;
         }
     }
-    float ao = 1.0 - occ / float(max(rays, 1)) * u_FxAO.y;
-    imageStore(u_OutAO, px, vec4(pow(clamp(ao, 0.0, 1.0), u_FxAO.z)));
+    // Ham görünürlük: yoğunluk ve üs SSAO'daki gibi bulanıklaştırmadan sonra (SSAOBlur, 340)
+    imageStore(u_OutAO, px, vec4(1.0 - occ / float(max(rays, 1))));
 }
 )";
 

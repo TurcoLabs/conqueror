@@ -105,6 +105,8 @@ void main()
         float rangeCheck = 1.0 - smoothstep(radius, 2.0 * radius, abs(p.z - sceneZ));
         occlusion += (sceneZ >= samplePos.z + 0.02 ? 1.0 : 0.0) * rangeCheck;
     }
-    float ao = 1.0 - (occlusion / 16.0) * u_Intensity;
-    FragAO = pow(clamp(ao, 0.0, 1.0), u_Power);
+    // 340: ham görünürlük (yoğunluk ve üs SSAOBlur'da, gürültü süzüldükten sonra). Eskiden burada uygulanıyordu: yoğunluk 4 / üs 4'te
+    // tek örneğin değişmesi pikseli 0.75^4 = 0.32 ile 0.5^4 = 0.06 arasında oynatıyor, 5x5 bulanıklaştırma büyütülmüş gürültüyü silemiyor,
+    // halelerde ve zeminde kumlu noktalar kalıyordu (HDRP'nin GTAO'su da yoğunluğu gürültü gidermeden sonra uygular)
+    FragAO = 1.0 - occlusion / 16.0;
 }
