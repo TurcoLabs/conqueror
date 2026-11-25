@@ -78,6 +78,9 @@ namespace Conqueror::Editor
 
         void DrawToolbar();
         void RenderGame(Timestep ts, bool isPlaying, bool renderOnly);
+        // RenderGame + zamansal geçmiş yeniden başladıysa aynı sahne durumu titreşim döngüsünün kalanı kadar yeniden çizilir (339 / 328:
+        // Play / Stop / sekme dönüşünde küplerin arası ilk karelerde yanıp sönmesin; oyunda kamera kesmesinde takılma olmasın diye yapılmaz)
+        void RenderGameWarm(Timestep ts, bool isPlaying, bool renderOnly);
 
         StatsPanel* m_StatsPanel = nullptr;
         bool m_StatsExpanded = true;
@@ -85,6 +88,7 @@ namespace Conqueror::Editor
         // Son ImGui karesinde sekme görünür müydü: düzenleme modunda gizli Game sekmesi çizilmez (Unity gibi; sahne
         // görünümüyle aynı sekme grubundayken editörün GPU yükü iki katına çıkıyordu). Oyunda güncelleme sürer.
         bool m_TabVisible = true;
+        uint32_t m_PendingWarmup = 0;   // RenderGameWarm: gizliyken yeniden başlayan geçmişin görünür olunca doldurulacak örnekleri
         bool m_WasMuted = false;
         float m_SavedVolume = 1.0f;
         UIInputState m_UIInput;          // ImGui karesinde toplanır, sonraki OnUpdate'te tüketilir

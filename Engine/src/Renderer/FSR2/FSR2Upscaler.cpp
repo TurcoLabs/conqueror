@@ -63,6 +63,11 @@ namespace Conqueror
         return { x, y };
     }
 
+    uint32_t FSR2Upscaler::JitterPhaseCount(uint32_t renderWidth, uint32_t displayWidth)
+    {
+        return (uint32_t)std::max(ffxFsr2GetJitterPhaseCount((int32_t)renderWidth, (int32_t)std::max(displayWidth, renderWidth)), 1);
+    }
+
     bool FSR2Upscaler::Dispatch(const Params& p)
     {
         State& s = *m_State;

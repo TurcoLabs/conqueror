@@ -897,6 +897,29 @@ namespace Conqueror
         m_PrevDepthValid = false;
     }
 
+    uint32_t PostProcessStack::TakeTemporalWarmup(bool* cameraCut)
+    {
+        const bool restarted = m_TemporalRestarted;
+        if (cameraCut)
+            *cameraCut = m_CameraCutFrame;
+        m_TemporalRestarted = false;
+        m_CameraCutFrame = false;
+        // Titreşimsiz zamansal yöntem (yalnız kararlılık katmanı) ısıtılmaz: aynı örnek tekrar birikir, yanıp sönme yok
+        if (!restarted || !m_JitterActive || m_HoldTemporalHistory)
+            return 0;
+        uint32_t phases;
+        if (m_TAAVariant == 1 || m_TAAVariant == 3)
+            phases = 2u;   // TSAA, SMAA T2x: iki konum
+        else if (m_TAAVariant == 4)
+            phases = FSR2Upscaler::JitterPhaseCount(m_Width, m_FSR2AtRenderRes ? m_Width : std::max(m_OutputWidth, m_Width));
+        else if (m_TAAVariant == 2)
+            phases = 8u;   // TSSAA (8TX)
+        else
+            phases = JitterPhaseCount();
+        // Bu kare ilk örnek; döngünün kalanı (en çok 31: %50 altı iç çözünürlükte süre sınırı, kalan örnekler normal birikir)
+        return std::min(phases, 32u) - 1u;
+    }
+
     void PostProcessStack::SetHoldTemporalHistory(bool hold)
     {
         if (hold == m_HoldTemporalHistory)
@@ -1868,6 +1891,7 @@ namespace Conqueror
                     resolve->SetInt("u_HasMotionFlag", normals ? 1 : 0);
                     resolve->SetInt("u_HasVelocity", m_FinalHasVelocity ? 1 : 0);
                     resolve->SetInt("u_HistoryValid", (m_T2xValid && m_HasPrevViewProj) ? 1 : 0);
+                    NoteTemporalStart(m_T2xValid && m_HasPrevViewProj);
                     resolve->SetInt("u_CameraStill", m_CameraStill ? 1 : 0);
                     resolve->SetMat4("u_InvViewProj", m_FinalInvViewProj);
                     resolve->SetMat4("u_PrevViewProj", m_PrevViewProj);
@@ -2014,6 +2038,7 @@ namespace Conqueror
             stab->SetInt("u_HasVelocity", m_FinalHasVelocity ? 1 : 0);
             stab->SetInt("u_HasReactive", m_ReactiveUsed ? 1 : 0);
             stab->SetInt("u_HistoryValid", (m_StabValid && m_HasPrevViewProj) ? 1 : 0);
+            NoteTemporalStart(m_StabValid && m_HasPrevViewProj);
             stab->SetInt("u_CameraStill", m_CameraStill ? 1 : 0);
             stab->SetMat4("u_InvViewProj", m_StabInvViewProj);
             stab->SetMat4("u_PrevViewProj", m_PrevViewProj);
@@ -2134,6 +2159,7 @@ namespace Conqueror
             prm.DisplayHeight = outH;
             prm.JitterPixels = m_JitterNDC * 0.5f * glm::vec2((float)m_Width, (float)m_Height);
             prm.Reset = !m_MetalFXValid;
+            NoteTemporalStart(m_MetalFXValid);
             if (m_MetalFX->Dispatch(prm))
             {
                 m_MetalFXValid = true;
@@ -2162,6 +2188,7 @@ namespace Conqueror
             const bool nativeXeSS = m_AAMode == AntiAliasingMode::XeSSAA && outW == m_Width && outH == m_Height;
             prm.Native = nativeXeSS;
             prm.Reset = !m_XeSSValid;
+            NoteTemporalStart(m_XeSSValid);
             if (m_XeSS->Dispatch(prm))
             {
                 m_XeSSValid = true;
@@ -2203,6 +2230,7 @@ namespace Conqueror
             const bool nativeDLSS = m_AAMode == AntiAliasingMode::DLAA && outW == m_Width && outH == m_Height;
             prm.Native = nativeDLSS;
             prm.Reset = !m_DLSSValid;
+            NoteTemporalStart(m_DLSSValid);
             prm.FrameTimeMs = m_DeltaTime * 1000.0f;
             if (m_DLSS->Dispatch(prm))
             {
@@ -2313,6 +2341,7 @@ namespace Conqueror
             prm.FovY = m_FinalFovY;
             prm.FrameTimeMs = m_DeltaTime * 1000.0f;
             prm.Reset = !m_FSR2Valid;
+            NoteTemporalStart(m_FSR2Valid);
             // FSR AA (yerel çözünürlük): RCAS birikmiş görüntüdeki ince çizgileri (duvar ızgarası, uzak kenar) noktalı / benekli
             // keskinleştiriyordu; yerel çözünürlükte keskinlik TAA'nınkiyle aynı (TAA Sharpness + hareket ederken artış)
             const bool nativeFSR = m_AAMode == AntiAliasingMode::FSRAA && fsrW == m_Width && fsrH == m_Height;
@@ -2410,6 +2439,7 @@ namespace Conqueror
             EnsureTarget(m_SGSR2History[0], outW, outH, GL_RGBA16F);
             EnsureTarget(m_SGSR2History[1], outW, outH, GL_RGBA16F);
             const bool historyOk = m_SGSR2Valid && m_HasPrevViewProj && m_SGSR2History[m_SGSR2Index].Width == outW && m_SGSR2History[m_SGSR2Index].Height == outH;
+            NoteTemporalStart(historyOk);
             glBindFramebuffer(GL_FRAMEBUFFER, m_SGSR2History[ni].Framebuffer);
             glViewport(0, 0, (GLsizei)outW, (GLsizei)outH);
             sgsrUpscale->Bind();
@@ -2473,6 +2503,7 @@ namespace Conqueror
             taau->SetInt("u_HasVelocity", m_FinalHasVelocity ? 1 : 0);
             const bool historyValid = m_TAAUValid && m_HasPrevViewProj && m_TAAUHistory[m_TAAUIndex].Width == outW && m_TAAUHistory[m_TAAUIndex].Height == outH;
             taau->SetInt("u_HistoryValid", historyValid ? 1 : 0);
+            NoteTemporalStart(historyValid);
             taau->SetInt("u_CameraStill", m_CameraStill ? 1 : 0);
             taau->SetMat4("u_InvViewProj", m_FinalInvViewProj);
             {
@@ -2811,6 +2842,8 @@ namespace Conqueror
         CQ_PROFILE_SAMPLE("Render.PostProcess", Rendering);
         CQ_PROFILE_GPU("Post Processing");
         m_LitScene = litScene;
+        m_TemporalRestarted = false;
+        m_CameraCutFrame = false;
         ResolveAntiAliasing(settings, camera, litScene);
 
         GLint outputFBO = 0;
@@ -2873,6 +2906,7 @@ namespace Conqueror
             m_LastCameraStep = step;
             if (jumped || teleported || glm::dot(prevDir, curDir) < 0.5f)
             {
+                m_CameraCutFrame = true;
                 m_HistoryValid = false;
                 m_FSR2Valid = false;
                 m_DLSSValid = false;

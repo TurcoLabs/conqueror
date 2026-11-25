@@ -1,0 +1,22 @@
+# template: fps
+# 339 / 328: FSR AA + NIS (ve TAA + NIS) seçiliyken Play'e ya da Stop'a basınca mavi küplerin arası ilk ~10 karede yanıp sönüyordu.
+# Neden: görünüm bir süre çizilmeyince (Play'den önce Game sekmesi arkadaydı, oynarken Viewport arkadaydı) ya da AA değişince zamansal
+# geçmiş baştan başlar; ilk karelerde her yeni titreşim konumu görüntünün yarısını, üçte birini... belirler, iç çözünürlük pikselinden
+# ince küp aralığı bir görünüp bir kaybolur (kare kareye 100 seviyeye varan değişim). Artık geçmiş yeniden başlayınca görünüm aynı sahne
+# durumunu titreşim döngüsünün kalanı kadar daha çizer (zaman ilerlemeden; FSR 2 / TAAU %67'de 17 ek çizim): görüntü ilk karede oturmuş
+# gelir. Kullanıcının akışı: Viewport öndeyken AA seçilir, Play (Game öne gelir), Stop (Viewport öne gelir). Piramidin bölgesinde
+# ilk 20 karede 8 seviyeden çok değişen piksel: Play eski %18.0 (16'dan çok %10.3) -> yeni %0.4 (%0); Stop (Viewport) eski %12.0 (%4.1)
+# -> yeni %0.1 (%0). Ek çizimlerin süresi (bir kez): Play 65 -> 127 ms, Stop 17 -> 48 ms, AA değişimi 17 -> 70 ms
+wait_until 3000 layout_settled
+wait 10
+focus Viewport
+cvar r.AntiAliasing 26
+cvar r.Upscaler 3
+wait 90
+play
+game_flicker 20 0.395 0.415 0.495 0.627 max8% 2.0 max% 0.5
+wait 100
+stop
+viewport_flicker 20 0.355 0.52 0.43 0.64 max8% 2.0 max% 0.5
+wait 60
+quit

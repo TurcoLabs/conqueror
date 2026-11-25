@@ -81,6 +81,15 @@ namespace Conqueror
         // Kamera bu arada çok oynadıysa kamera kesmesi denetimi geçmişi sıfırlar. Dondurulamayan zamansal yükselticiler (TAAU, FSR 2,
         // DLSS, XeSS, MetalFX, SGSR 2, SMAA T2x, kararlılık) giriş ve çıkışta yeniden başlar
         void SetHoldTemporalHistory(bool hold);
+        // Zamansal geçmişi ısıtma (339 / 328): bu karede bir zamansal yöntemin (TAA, TAAU, FSR 2, DLSS, XeSS, MetalFX, SGSR 2,
+        // SMAA T2x, kararlılık) geçmişi baştan başladıysa (görünüm ilk kez ya da bir süre sonra yeniden çiziliyor: Play / Stop, sekme
+        // değişimi; yöntem, çözünürlük ya da görünüm seçeneği değişti; kamera kesmesi) geçmiş tek örnekten başlar ve ilk karelerde her
+        // titreşim konumu görüntüyü büyük ölçüde değiştirir: iç çözünürlük pikselinden ince ayrıntı (küplerin arası) ~10 kare yanıp söner.
+        // Görünüm aynı sahne durumunu (zaman ilerlemeden, yalnız çizim) döndürülen sayı kadar daha çizerse her çizim titreşim dizisinin
+        // sonraki konumunu biriktirir ve görüntü ilk karede oturmuş olarak gelir (bir kerelik ek çizim süresi). Döndürülen sayı titreşim
+        // döngüsünün kalanı (yerel TAA 15, %67 TAAU / FSR 2 17); gerekmezse 0. cameraCut: sebep kamera kesmesi (oyun sırasında
+        // ışınlanma: oyunda takılma olmasın diye çağıran atlayabilir). Bayrak okununca temizlenir
+        uint32_t TakeTemporalWarmup(bool* cameraCut = nullptr);
 
         // Renderer3D: şu an bu görünümün sahne hedefine çiziliyorsa Temporal AA alt piksel titreşimi (NDC)
         static bool GetCurrentJitter(glm::vec2& outNDC);
@@ -389,6 +398,10 @@ namespace Conqueror
         bool m_AdaptValid = false;
         bool m_UseAutoExposure = false;
         bool m_HoldTemporalHistory = false;
+        // TakeTemporalWarmup: bu karede bir zamansal yöntem geçmişsiz başladı / sebep kamera kesmesi
+        bool m_TemporalRestarted = false;
+        bool m_CameraCutFrame = false;
+        void NoteTemporalStart(bool historyValid) { if (!historyValid) m_TemporalRestarted = true; }
         bool m_TAAResolved = false;
     };
 

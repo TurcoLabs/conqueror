@@ -178,7 +178,15 @@ namespace Conqueror::Editor
             return;
         }
 
-        RenderView(ts, true);
+        RenderViewWarm(ts, true);
+    }
+
+    void ViewportPanel::RenderViewWarm(Timestep ts, bool updateScene)
+    {
+        RenderView(ts, updateScene);
+        const uint32_t warmup = m_PostStack.TakeTemporalWarmup();
+        for (uint32_t i = 0; i < warmup; ++i)
+            RenderView(Timestep(0.0f), false);
     }
 
     // Sahneyi görünümün boyutunda çiz. updateScene = false: yalnız çizim (panel boyutu ImGui karesinde değişince aynı karede yeni boyutta
@@ -473,7 +481,7 @@ namespace Conqueror::Editor
         if (validSize && newViewportSize != m_ViewportSize)
         {
             ApplyViewportSize(newViewportSize);
-            RenderView(Timestep(0.0f), false);
+            RenderViewWarm(Timestep(0.0f), false);
         }
         if (m_ViewportSize.x > 0.0f && m_ViewportSize.y > 0.0f)
         {
@@ -552,7 +560,7 @@ namespace Conqueror::Editor
             // 277: sahne bu karede çizildikten sonra seçim değiştiyse (İçerik Tarayıcısından bırakılan fotoğraf / model, menüden
             // oluşturulan, kopyalanan ya da silinen nesne) görüntü aynı karede yeniden çizilir: gizmo ile nesne aynı karede görünür
             if (SelectionKey() != m_RenderedSelectionKey)
-                RenderView(Timestep(0.0f), false);
+                RenderViewWarm(Timestep(0.0f), false);
         }
         else
         {

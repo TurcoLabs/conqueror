@@ -50,11 +50,28 @@ namespace Conqueror::Editor
     {
         if (!m_TabVisible && !m_Playing)
             return;
-        RenderGame(ts, isPlaying, false);
+        RenderGameWarm(ts, isPlaying, false);
     }
 
-    // Oyunu görünümün boyutunda çiz. renderOnly: yalnız çizim (panel boyutu ImGui karesinde değişince aynı karede yeni boyutta yeniden
-    // çizilir; oyun, UI girdisi, hata ayıklama çizgilerinin süresi ve kayıt ilerlemez)
+    void GamePanel::RenderGameWarm(Timestep ts, bool isPlaying, bool renderOnly)
+    {
+        RenderGame(ts, isPlaying, renderOnly);
+        bool cameraCut = false;
+        const uint32_t warmup = m_PostStack.TakeTemporalWarmup(&cameraCut);
+        if (warmup && !(cameraCut && isPlaying))
+            m_PendingWarmup = warmup;
+        else if (m_PendingWarmup > 0)
+            --m_PendingWarmup;   // gizliyken çizilen her kare geçmişe bir örnek ekledi
+        // Sekme gizliyken (oynarken arkada çizilir; Play'in ilk karesi sekme öne gelmeden, eski boyutta çizilir) ısıtılmaz: görünür
+        // olunca (çoğunlukla aynı karede yeni boyutta yeniden çizilirken) kalan örnekler doldurulur
+        if (!m_TabVisible || m_PendingWarmup == 0)
+            return;
+        const uint32_t count = m_PendingWarmup;
+        m_PendingWarmup = 0;
+        for (uint32_t i = 0; i < count; ++i)
+            RenderGame(Timestep(0.0f), isPlaying, true);
+    }
+
     void GamePanel::RenderGame(Timestep ts, bool isPlaying, bool renderOnly)
     {
         if (m_Framebuffer && m_ViewportSize.x > 0 && m_ViewportSize.y > 0)
@@ -422,7 +439,7 @@ namespace Conqueror::Editor
         {
             m_Framebuffer->Resize((uint32_t)renderSize.x, (uint32_t)renderSize.y);
             m_ViewportSize = newViewportSize;
-            RenderGame(Timestep(0.0f), m_Playing, true);
+            RenderGameWarm(Timestep(0.0f), m_Playing, true);
         }
 
         // Görüntü (alan dışına taşarsa kırp)

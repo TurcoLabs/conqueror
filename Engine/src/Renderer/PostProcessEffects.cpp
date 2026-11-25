@@ -635,6 +635,7 @@ namespace Conqueror
         shader->SetFloat("u_Feedback", std::clamp(settings.TAAFeedback, 0.5f, 0.97f));
         shader->SetInt("u_Debug", taaDebug ? 1 : 0);
         shader->SetInt("u_HistoryValid", (m_HistoryValid && m_HasPrevViewProj) ? 1 : 0);
+        NoteTemporalStart(m_HistoryValid && m_HasPrevViewProj);
         // Kamera kıpırdamıyor (titreşimsiz görüş-izdüşüm önceki kareyle aynı): sabit yüzeylerin hareketi tam sıfır. Derinlikten
         // yeniden izdüşüm uzak yüzeylerde kayan nokta hatasıyla piksel altı "hareket" üretiyor, piksel durağan sayılmıyor,
         // geçmiş birikmiyor ve uzak kenarlar (duvar üstü, küplerin arası) titreşim döngüsüyle yanıp sönüyordu

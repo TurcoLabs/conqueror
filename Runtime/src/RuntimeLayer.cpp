@@ -399,55 +399,68 @@ namespace Conqueror::Runtime
         auto& post = PostProcess::Default();
         // Pixel Perfect Camera: düşük çözünürlüklü sahne + tam sayı büyütme / çerçeve
         const PixelPerfect::View pixelView = PixelPerfect::Resolve(*m_ActiveScene, width, height);
-        post.BeginScene(pixelView.RenderWidth, pixelView.RenderHeight);
-        glm::vec3 bg = Math::SRGBToLinear(m_ActiveScene->ResolveCameraBackground(m_ActiveScene->GetPrimaryCameraEntity()).Color);
-        RenderCommand::SetClearColor({ bg.r, bg.g, bg.b, 1.0f });
-        RenderCommand::Clear();
-        // Development Build: Unreal gibi F1 tel kafes / F2 ışıksız / F3 ışıklı / F4 yalnız ışık (son oyunda yok)
-        const bool devViewModes = Project::GetActive() && Project::GetActive()->GetConfig().Build.DevelopmentBuild;
-        if (devViewModes)
-            GameViewModes::HandleHotkeys();
-        else
-            GameViewModes::Set(GameViewModes::Mode::Lit);
-        // Görünüm modu anında değişir (275): hata ayıklama görünümünde zamansal geçmişler son ışıklı karede donar
-        post.SetHoldTemporalHistory(GameViewModes::Current() != GameViewModes::Mode::Lit);
-        GameViewModes::BeginScene();
-        m_ActiveScene->OnUpdateRuntime(ts);
-        GameViewModes::EndScene();
-        post.EndScene();
+        // Sahne + post-process. renderOnly: aynı sahne durumu yalnız yeniden çizilir (zaman, oyun ve girdi ilerlemez; zamansal geçmişi ısıtma)
+        auto renderFrame = [&](Timestep frameTs, bool renderOnly) {
+            post.BeginScene(pixelView.RenderWidth, pixelView.RenderHeight);
+            glm::vec3 bg = Math::SRGBToLinear(m_ActiveScene->ResolveCameraBackground(m_ActiveScene->GetPrimaryCameraEntity()).Color);
+            RenderCommand::SetClearColor({ bg.r, bg.g, bg.b, 1.0f });
+            RenderCommand::Clear();
+            // Development Build: Unreal gibi F1 tel kafes / F2 ışıksız / F3 ışıklı / F4 yalnız ışık (son oyunda yok)
+            const bool devViewModes = Project::GetActive() && Project::GetActive()->GetConfig().Build.DevelopmentBuild;
+            if (!devViewModes)
+                GameViewModes::Set(GameViewModes::Mode::Lit);
+            else if (!renderOnly)
+                GameViewModes::HandleHotkeys();
+            // Görünüm modu anında değişir (275): hata ayıklama görünümünde zamansal geçmişler son ışıklı karede donar
+            post.SetHoldTemporalHistory(GameViewModes::Current() != GameViewModes::Mode::Lit);
+            GameViewModes::BeginScene();
+            m_ActiveScene->OnUpdateRuntime(frameTs, renderOnly);
+            GameViewModes::EndScene();
+            post.EndScene();
 
-        // Pencere içinde çizim alanı: Android Automotive'de araç çubuklarının arasındaki bölge (pencere boyutu zaten bu alan)
-        int outX = 0, outY = 0;
+            // Pencere içinde çizim alanı: Android Automotive'de araç çubuklarının arasındaki bölge (pencere boyutu zaten bu alan)
+            int outX = 0, outY = 0;
 #ifdef __ANDROID__
-        {
-            int x = 0, y = 0, w = 0, h = 0;
-            if (Android::OutputViewport(x, y, w, h))
             {
-                outX = x;
-                outY = y;
+                int x = 0, y = 0, w = 0, h = 0;
+                if (Android::OutputViewport(x, y, w, h))
+                {
+                    outX = x;
+                    outY = y;
+                    RenderCommand::SetClearColor({ 0.0f, 0.0f, 0.0f, 1.0f });
+                    RenderCommand::Clear();
+                }
+            }
+#endif
+            RenderCommand::SetViewport(outX, outY, width, height);
+            if (pixelView.Active)
+            {
                 RenderCommand::SetClearColor({ 0.0f, 0.0f, 0.0f, 1.0f });
                 RenderCommand::Clear();
+                RenderCommand::SetViewport(outX + pixelView.Output.x, outY + pixelView.Output.y, pixelView.Output.z, pixelView.Output.w);
             }
-        }
-#endif
-        RenderCommand::SetViewport(outX, outY, width, height);
-        if (pixelView.Active)
+            post.SetPointUpscale(pixelView.PointSample);
+            RenderCamera camera;
+            m_ActiveScene->GetRuntimeRenderCamera(pixelView.RenderWidth, pixelView.RenderHeight, camera);
+            // Görünen gökyüzü her zaman ton eşlenir (boş sahnede beyaza patlamasın)
+            const bool skyVisible = m_ActiveScene->GetRenderSettings().Environment.Sky != SkyMode::SolidColor
+                                 && m_ActiveScene->ResolveCameraBackground(m_ActiveScene->GetPrimaryCameraEntity()).DrawSky;
+            PostProcessSettings resolvedPost = PostProcessVolumes::Resolve(*m_ActiveScene, m_ActiveScene->GetRenderSettings().Post, camera.Position);
+            if (!GameViewModes::PostEffectsAllowed())
+                resolvedPost.Enabled = false;
+            post.Render(resolvedPost, camera, TimeManager::GetTime(), m_ActiveScene->HasRenderable3D() || skyVisible);
+            RenderCommand::SetViewport(outX, outY, width, height);
+        };
+        renderFrame(ts, false);
+        // 339 / 328: zamansal geçmiş baştan başladıysa (oyunun ilk karesi, sahne yüklendi, AA / çözünürlük değişti) aynı sahne durumu titreşim
+        // döngüsünün kalanı kadar yeniden çizilir: görüntü ilk karede oturmuş gelir, ince ayrıntı (küplerin arası) ilk karelerde yanıp
+        // sönmez. Kamera kesmesinde (ışınlanma, yeniden doğma) yapılmaz: oyun sırasında takılma olmasın
         {
-            RenderCommand::SetClearColor({ 0.0f, 0.0f, 0.0f, 1.0f });
-            RenderCommand::Clear();
-            RenderCommand::SetViewport(outX + pixelView.Output.x, outY + pixelView.Output.y, pixelView.Output.z, pixelView.Output.w);
+            bool cameraCut = false;
+            const uint32_t warmup = post.TakeTemporalWarmup(&cameraCut);
+            for (uint32_t i = 0; !cameraCut && i < warmup; ++i)
+                renderFrame(Timestep(0.0f), true);
         }
-        post.SetPointUpscale(pixelView.PointSample);
-        RenderCamera camera;
-        m_ActiveScene->GetRuntimeRenderCamera(pixelView.RenderWidth, pixelView.RenderHeight, camera);
-        // Görünen gökyüzü her zaman ton eşlenir (boş sahnede beyaza patlamasın)
-        const bool skyVisible = m_ActiveScene->GetRenderSettings().Environment.Sky != SkyMode::SolidColor
-                             && m_ActiveScene->ResolveCameraBackground(m_ActiveScene->GetPrimaryCameraEntity()).DrawSky;
-        PostProcessSettings resolvedPost = PostProcessVolumes::Resolve(*m_ActiveScene, m_ActiveScene->GetRenderSettings().Post, camera.Position);
-        if (!GameViewModes::PostEffectsAllowed())
-            resolvedPost.Enabled = false;
-        post.Render(resolvedPost, camera, TimeManager::GetTime(), m_ActiveScene->HasRenderable3D() || skyVisible);
-        RenderCommand::SetViewport(outX, outY, width, height);
 
         // UI (ekran üstü canvas'lar)
         glm::vec2 mouse = Input::GetMousePosition();

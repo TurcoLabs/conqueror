@@ -205,6 +205,9 @@ namespace Conqueror::Editor
         ViewportShading m_AppliedShading = ViewportShading::Shaded;   // son karedeki kip (değişince zamansal geçmiş yeniden başlar)
         void ApplyViewportSize(const glm::vec2& size);
         void RenderView(Timestep ts, bool updateScene);
+        // RenderView + zamansal geçmiş yeniden başladıysa (Stop'tan / sekmeden dönüş, AA değişimi, kamera kesmesi) aynı sahne durumu
+        // titreşim döngüsünün kalanı kadar yeniden çizilir: görüntü ilk karede oturmuş gelir, küplerin arası yanıp sönmez (339 / 328)
+        void RenderViewWarm(Timestep ts, bool updateScene);
         EditorViewOptions m_AppliedViewOptions;   // son karede sahneye verilen (değişince zamansal geçmiş yeniden başlar)
         bool m_ViewOptionsApplied = false;
         bool m_ShowSelectionOutline = true;

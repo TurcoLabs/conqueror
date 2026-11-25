@@ -38,6 +38,7 @@ namespace Conqueror
 
         // FSR 2'nin önerdiği titreşim dizisi (Halton 2,3; evre sayısı 8 x ölçek²), iç çözünürlük pikseli
         static glm::vec2 JitterOffset(uint32_t frameIndex, uint32_t renderWidth, uint32_t displayWidth);
+        static uint32_t JitterPhaseCount(uint32_t renderWidth, uint32_t displayWidth);
 
     private:
         struct State;
