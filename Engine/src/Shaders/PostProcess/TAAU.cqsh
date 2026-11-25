@@ -353,13 +353,20 @@ void main()
         float occW = 1e9;
         float shiftPx = cPrev.w > 0.0 ? RevealShift(cNow, cPrevUV, cPrevW, inSize, occW) : -1.0;
         bool occluderAdjacent = cDepth >= 1.0 && occW >= nearW * 0.85 - 0.05;
-        revealed = shiftPx >= (occluderAdjacent ? 2.0 : 1.0);
+        // 342: ön nesnenin silüet bandındaki gökyüzü pikseli (örtücü 3x3'teki en yakın yüzey kadar yakın: genişletilmiş hızın yarıçapı
+        // içinde) açılma sayılmaz ve geçmişini ön nesnenin hareketiyle alır (FSR 2'nin genişletilmiş derinlik / hızı ve yerel TAA'nın
+        // "9 örneğin hepsi gökyüzü" koşulu gibi): kenarın yumuşatılmış profili ön nesneyle birlikte kayar, kenarın hemen ötesi bir önceki
+        // karede de gökyüzüydü. Eskiden bandın pikselleri kendi (gökyüzü) hareketiyle duvarın eski yerinden geçmiş alıp açılma sayılıyor,
+        // geçmişleri her karede atılıyordu; hangi pikselin atılacağı iç çözünürlüğün basamağına bağlı olduğundan yana yürürken duvarın
+        // üst kenarı ham iç çözünürlük merdiveni gibi testere dişli görünüyordu (merdiven kalıntısı 0.29 px; yerel TAA 0.11, FSR 2 0.12).
+        // Bandın ötesindeki gökyüzü (örtücü uzakta) ve gökyüzü olmayan arka plan (335: piramidin açtığı duvar) eskisi gibi
+        revealed = shiftPx >= 1.0 && !occluderAdjacent;
         // 335: ön yüzün kenarındaki arka plan pikseli (kendi yüzeyi en yakın yüzey değil; ince aralık hariç) geçmişini de kendi yüzeyinin
         // hareketiyle alır (açılma testi gibi). En yakın yüzeyin hareketiyle aldığında geçmiş ön yüzün eski yerinden, yani ön yüzün
         // renginden geliyordu: hızlı yana koşarken piramidin açtığı duvarda açılmadan sonraki karelerde mavi çizgiler ve eski silüet kalıyordu
         // Yalnız iki hareket en az 1 iç piksel ayrışınca (açılma testinin gördüğü hız): daha yavaş paralakste (zıplama) açılma görülmez,
         // kendi hareketiyle alınan geçmiş ön yüzün eski yerine düşer; en yakın yüzeyin hareketi ise kenarın hemen yanındaki aynı noktayı verir
-        if (!onClosestSurface && !enclosedGap && u_CameraStill == 0 && cPrev.w > 0.0 && length(((cNow - cPrevUV) - velocity) * inSize) >= 1.0)
+        if (!onClosestSurface && !enclosedGap && !occluderAdjacent && u_CameraStill == 0 && cPrev.w > 0.0 && length(((cNow - cPrevUV) - velocity) * inSize) >= 1.0)
         {
             vec2 ownPrev = v_UV - (cNow - cPrevUV);
             if (all(greaterThanEqual(ownPrev, vec2(0.0))) && all(lessThanEqual(ownPrev, vec2(1.0))))

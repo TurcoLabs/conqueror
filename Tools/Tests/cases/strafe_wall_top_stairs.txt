@@ -1,0 +1,38 @@
+# template: fps
+# 342: TAA + NIS'te hareket ederken duvarların üst kenarı merdivenli / testere dişli görünüyor, durunca düzeliyordu (kullanıcının
+# 23-24. resimleri). Duvar boyunca bakarken yana yürüyünce kenarın üstündeki gökyüzü pikselleri ön nesnenin silüet bandında olduğu halde
+# kendi (gökyüzü) hareketleriyle duvarın eski yerinden geçmiş alıp "açılan alan" sayılıyor, geçmişleri her karede atılıyordu; hangisinin
+# atılacağı iç çözünürlüğün basamağına bağlı olduğundan kenar ham %67 merdiveni gibi kalıyordu. Artık bandın gökyüzü pikselleri FSR 2 /
+# yerel TAA gibi ön nesnenin hareketiyle geçmiş alır, açılma sayılmaz. Duvar üstü kenarının düz çizgiden sapması (merdiven kalıntısı,
+# piksel; kendi ölçümüm 30-560 sütunları): SSAA 0.06, yerel TAA 0.11, FSR AA + NIS 0.12, TAA + NIS eski 0.29 -> yeni 0.08. Aşağıdaki
+# ölçü (bölgedeki kenarın düz çizgiden sapması, yürürken 6 kare): eski 0.35-0.80, yeni 0.07-0.16
+timeout 400
+wait 60
+focus Game
+play
+wait 30
+cvar r.AntiAliasing 3
+cvar r.Upscaler 3
+entity move Player -24 0.9 12
+wait 4
+script set Player@FirstPersonShooter yaw float 25
+script set Player@FirstPersonShooter pitch float 5
+wait 90
+key_down D
+wait 12
+game_region 0.145 0.562 0.435 0.747 lum edgeres <0.3
+wait 4
+game_region 0.145 0.562 0.435 0.747 lum edgeres <0.3
+wait 4
+game_region 0.145 0.562 0.435 0.747 lum edgeres <0.3
+wait 4
+game_region 0.145 0.562 0.435 0.747 lum edgeres <0.3
+wait 4
+game_region 0.145 0.562 0.435 0.747 lum edgeres <0.3
+wait 4
+game_region 0.145 0.562 0.435 0.747 lum edgeres <0.3
+wait 4
+key_up D
+stop
+wait 5
+quit
