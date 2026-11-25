@@ -10,31 +10,31 @@ namespace Conqueror
     struct EditorGridSettings
     {
         bool Visible = true;
-        float BaseSize = 1.0f;      // en küçük hücre (snap ile eşleştirilebilir)
+        float BaseSize = 1.0f;      // smallest cell size (can match snapping)
         float Opacity = 1.0f;
-        float FadeDistance = 0.0f;  // 0 = kamera yüksekliğine göre otomatik
-        // Açık renkli çizgiler: varsayılan gökyüzünün gri zemini (~0.56) üzerinde de seçilsin
-        // (eski 0.55 ince çizgi zeminle aynı tondaydı ve görünmüyordu)
+        float FadeDistance = 0.0f;  // 0 = automatic based on camera altitude
+        // Light colored lines: distinct against the default sky grey ground (~0.56)
+        // (the previous 0.55 thin line matched the ground tone and was barely visible)
         glm::vec3 MinorColor = glm::vec3(0.86f);
         glm::vec3 MajorColor = glm::vec3(1.0f);
     };
 
-    // Editör görünümleri için shader tabanlı sonsuz ızgara
+    // Shader-based infinite grid for editor viewports
     class CQ_API EditorGrid
     {
     public:
         static EditorGridSettings& Settings();
-        // plane2D: XY düzlemi (2D görünüm); aksi halde XZ zemin düzlemi.
-        // background: ızgara en arkada (gökyüzünün hemen önünde) çizilir; 2D görünümde sprite ve
-        // modeller her zaman ızgaranın önünde görünür
+        // plane2D: XY plane (2D view); otherwise XZ ground plane.
+        // background: grid rendered in background (right before the sky); in 2D views sprites and
+        // models always appear in front of the grid
         static void Render(const RenderCamera& camera, bool plane2D, bool linearOutput = true, bool background = false);
-        // Zamansal kenar yumuşatmalı (TAA, Temporal Stability, zamansal yükseltici) görünüm: 3D ızgara sahneye çizilmez, kenar yumuşatma
-        // ve ton eşlemeden sonra son görüntünün üstüne çizilmek üzere ertelenir (Unity Scene ızgarası / Unreal editör ilkelleri gibi).
-        // Sahne hedefine çizilirken çağrılır. Zamansal yöntem yoksa false döner, ızgara eskisi gibi sahneye çizilmelidir
+        // Viewports with temporal anti-aliasing (TAA, Temporal Stability, temporal upscaler): 3D grid is not drawn directly into the scene,
+        // but deferred to render atop the final image after anti-aliasing and tonemapping (similar to Unity Scene grid / Unreal editor primitives).
+        // Called when rendering to scene target. Returns false if no temporal method is active; grid should be drawn directly.
         static bool DeferToComposite(const RenderCamera& camera);
-        // Ertelenen ızgarayı son görüntüye (dokusu colorTexture, sRGB) çizer; ertelenen yoksa bir şey yapmaz. sceneDepth: görünümün
-        // (çok örneklide çözülmüş) sahne derinliği (PostProcessStack::GetSceneDepthTexture)
-        // objectVelocity: PostProcessStack::GetObjectVelocityTexture (0: bu karede hareket eden / silinen nesne yok)
+        // Renders the deferred grid onto the final image (colorTexture, sRGB); no-op if nothing was deferred. sceneDepth: viewport's
+        // (multisample-resolved) scene depth (PostProcessStack::GetSceneDepthTexture)
+        // objectVelocity: PostProcessStack::GetObjectVelocityTexture (0: no moving / deleted objects this frame)
         static void RenderDeferred(uint32_t colorTexture, uint32_t width, uint32_t height, uint32_t sceneDepth, uint32_t objectVelocity = 0);
         static void Shutdown();
     };
