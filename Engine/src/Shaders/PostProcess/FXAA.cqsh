@@ -195,7 +195,7 @@ void main()
         float m;
         if (u_MaskMode == 2)
         {
-            float acc = floor(max(texture(u_MotionMask, v_TexCoord).a, 0.0) / 64.0 + 1e-3) * 0.5;
+            float acc = floor(mod(max(texture(u_MotionMask, v_TexCoord).a, 0.0), 4096.0) / 64.0 + 1e-3) * 0.5;   // TAAU durumu (4096: hareket işareti)
             m = clamp((4.0 - acc) / 3.0, 0.0, 1.0);
             if (m <= 0.0)
             {
