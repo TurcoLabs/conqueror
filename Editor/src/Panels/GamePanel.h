@@ -35,6 +35,7 @@ namespace Conqueror::Editor
         glm::vec2 GetViewportSize() const { return m_ViewportSize; }
         void RequestScreenshot() { m_ScreenshotRequested = true; }
         std::shared_ptr<Framebuffer> GetFramebuffer() const { return m_Framebuffer; }
+        PostProcessStack& GetPostProcessStack() { return m_PostStack; }   // otomasyon: hareket vektörü dokusu (game_velocity_marks)
         const glm::vec2* GetImageBounds() const { return m_ViewportBounds; }   // ekrandaki görüntünün köşeleri (ImGui koordinatı)
         bool HasCamera() const { return m_HasCamera; }
         void SetStatsPanel(StatsPanel* stats) { m_StatsPanel = stats; }

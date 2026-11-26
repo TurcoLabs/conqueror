@@ -7503,6 +7503,42 @@ namespace Conqueror::Editor
             if (limit >= 0.0f && pct > limit) { err = std::string("difference over the limit: ") + line; return false; }
             return true;
         });
+        // game_velocity_marks <kare> [max% p]: sonraki N karede Game görünümünün hareket vektörü dokusunda "nesnenin eski yeri" işaretli
+        // (w = 2, hızı yazılmamış arka plan) piksellerin en büyük oranı. TAA / TAAU bu piksellerde geçmişi atar (334: zıplarken kameraya
+        // bağlı kolların eski yeri ekranın yarısına yakın bir alanı işaretliyordu)
+        Automation::RegisterCommand("game_velocity_marks", [this](const Args& a, std::string& err) {
+            if (a.size() < 2 || !m_GamePanel) { err = "game_velocity_marks <frames> [max% p]"; return false; }
+            const int frames = std::max(1, std::atoi(a[1].c_str()));
+            float maxPercent = -1.0f;
+            for (size_t k = 2; k + 1 < a.size(); k += 2)
+                if (a[k] == "max%") maxPercent = std::stof(a[k + 1]);
+            auto worst = std::make_shared<double>(0.0);
+            auto seen = std::make_shared<int>(0);
+            Automation::AddFrameCheck("game velocity marks", frames, [this, worst, seen, frames, maxPercent](uint32_t, uint32_t, std::string& e) {
+                PostProcessStack& st = m_GamePanel->GetPostProcessStack();
+                const uint32_t tex = st.GetObjectVelocityTexture();
+                const int w = (int)st.GetWidth(), h = (int)st.GetHeight();
+                double pct = 0.0;
+                if (tex && w > 0 && h > 0)
+                {
+                    std::vector<float> px((size_t)w * h * 4);
+                    glGetTextureImage(tex, 0, GL_RGBA, GL_FLOAT, (GLsizei)(px.size() * sizeof(float)), px.data());
+                    size_t marked = 0;
+                    for (size_t i = 0; i < (size_t)w * h; ++i)
+                        marked += (px[i * 4 + 3] > 1.5f && px[i * 4 + 3] < 2.5f && px[i * 4] >= 5000.0f) ? 1 : 0;
+                    pct = 100.0 * (double)marked / ((double)w * h);
+                }
+                *worst = std::max(*worst, pct);
+                if (++*seen < frames)
+                    return true;
+                char line[160];
+                std::snprintf(line, sizeof(line), "VELOCITY MARKS %d frames: at most %.3f%% of the Game view marked as an object's old place", frames, *worst);
+                Automation::Report(line);
+                if (maxPercent >= 0.0f && *worst > maxPercent) { e = std::string("over the limit: ") + line; return false; }
+                return true;
+            });
+            return true;
+        });
         Automation::RegisterCommand("game_region_change", [this](const Args& a, std::string& err) {
             static std::vector<uint8_t> s_Marked;
             static int s_W = 0, s_H = 0;

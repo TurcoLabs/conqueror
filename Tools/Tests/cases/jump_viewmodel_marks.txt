@@ -1,0 +1,110 @@
+# template: fps
+# matrix: AA=3 26
+# 334 / 351: zıplarken (ve yürürken) TAA + NIS ile yerel TAA'da gölge sınırları testere dişli, çizgiler kırık, hedef tahtaları çift
+# görünüyordu. Kameraya bağlı kolların ve silahın eski yeri (hareket vektörü geçişinde w = 2, TAA / TAAU orada geçmişi atar) bu karenin
+# kamerasıyla eski dünya konumlarında işaretleniyordu: kollar kamerayla birlikte gidip ekranda kıpırdamasa da yakında durduklarından
+# eski yerleri ekranın büyük bir bölümüne düşüyordu (TAAU'da zıplamanın tepesinde ekranın %44'ü geçmişsiz, ham iç çözünürlük karesi).
+# Artık kameraya göre yeri neredeyse değişmeyen nesnenin eski yeri önceki karedeki ekran yeridir (yalnız kolların kenarı). Ölçü: zıplama
+# boyunca işaretli (hızı yazılmamış) piksellerin en büyük oranı: eski %19.1, yeni %0.0
+timeout 400
+wait 60
+focus Game
+cvar r.AntiAliasing {matrix}
+cvar r.Upscaler 3
+wait 30
+play
+wait 2
+entity move Player 0 0.9 -5.2
+wait 4
+script set Player@FirstPersonShooter yaw float 0
+script set Player@FirstPersonShooter pitch float 2
+wait 100
+game_velocity_marks 40 max% 3
+entity move Player 0 0.9 -5.2
+wait 1
+entity move Player 0 0.9000 -5.2
+wait 1
+entity move Player 0 0.9999 -5.2
+wait 1
+entity move Player 0 1.0951 -5.2
+wait 1
+entity move Player 0 1.1856 -5.2
+wait 1
+entity move Player 0 1.2712 -5.2
+wait 1
+entity move Player 0 1.3521 -5.2
+wait 1
+entity move Player 0 1.4283 -5.2
+wait 1
+entity move Player 0 1.4997 -5.2
+wait 1
+entity move Player 0 1.5663 -5.2
+wait 1
+entity move Player 0 1.6282 -5.2
+wait 1
+entity move Player 0 1.6853 -5.2
+wait 1
+entity move Player 0 1.7376 -5.2
+wait 1
+entity move Player 0 1.7852 -5.2
+wait 1
+entity move Player 0 1.8281 -5.2
+wait 1
+entity move Player 0 1.8661 -5.2
+wait 1
+entity move Player 0 1.8995 -5.2
+wait 1
+entity move Player 0 1.9280 -5.2
+wait 1
+entity move Player 0 1.9518 -5.2
+wait 1
+entity move Player 0 1.9708 -5.2
+wait 1
+entity move Player 0 1.9851 -5.2
+wait 1
+entity move Player 0 1.9946 -5.2
+wait 1
+entity move Player 0 1.9994 -5.2
+wait 1
+entity move Player 0 1.9994 -5.2
+wait 1
+entity move Player 0 1.9946 -5.2
+wait 1
+entity move Player 0 1.9851 -5.2
+wait 1
+entity move Player 0 1.9708 -5.2
+wait 1
+entity move Player 0 1.9518 -5.2
+wait 1
+entity move Player 0 1.9280 -5.2
+wait 1
+entity move Player 0 1.8995 -5.2
+wait 1
+entity move Player 0 1.8661 -5.2
+wait 1
+entity move Player 0 1.8281 -5.2
+wait 1
+entity move Player 0 1.7852 -5.2
+wait 1
+entity move Player 0 1.7376 -5.2
+wait 1
+entity move Player 0 1.6853 -5.2
+wait 1
+entity move Player 0 1.6282 -5.2
+wait 1
+entity move Player 0 1.5663 -5.2
+wait 1
+entity move Player 0 1.4997 -5.2
+wait 1
+entity move Player 0 1.4283 -5.2
+wait 1
+entity move Player 0 1.3521 -5.2
+wait 1
+entity move Player 0 1.2712 -5.2
+wait 1
+entity move Player 0 1.1856 -5.2
+wait 1
+wait 10
+stop
+wait 5
+quit

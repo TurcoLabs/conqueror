@@ -390,12 +390,14 @@ namespace Conqueror
                 float AlphaClip = 0.5f;
                 glm::vec2 UVScale{ 1.0f }, UVOffset{ 0.0f };
                 bool SubPixel = false;           // ekranda çeyrek pikselden az kıpırdadı: eski yeri işaretlenmez
+                glm::mat4 Cover{ 1.0f };         // eski yerin işaretlendiği dönüşüm (CoverageTransform: kameraya bağlı nesnede önceki karedeki ekran yeri)
                 bool Replaced = false;           // yeni beliren / görseli değişen sprite: w = 3 (TAA geçmişi atar), eski yeri işaretlenmez
             };
             struct SkinnedVelocityDraw
             {
                 std::shared_ptr<Model> ModelRef;
                 glm::mat4 Cur{ 1.0f }, Prev{ 1.0f };
+                glm::mat4 Cover{ 1.0f };   // eski yerin işaretlendiği dönüşüm (CoverageTransform)
                 std::vector<glm::mat4> Bones;
                 std::vector<uint32_t> Morph;   // ağ başına blend shape fark dokusu
             };
@@ -423,10 +425,15 @@ namespace Conqueror
             std::vector<Footprint> LateReactive;
             std::unordered_map<const void*, uint32_t> SkinnedOccurrence;
             std::unordered_map<uint64_t, uint32_t> SkinnedIdentityOccurrence;
+            // Bu ve önceki çizimin görüş matrisi (kameraya bağlı nesnenin eski yeri için, CoverageTransform)
+            glm::mat4 View{ 1.0f }, LastView{ 1.0f };
+            bool HasView = false, HasLastView = false;
         };
         std::unordered_map<const void*, MotionTrack> s_Motion;
         MotionTrack* s_MotionCur = nullptr;
         glm::mat4 s_MotionViewProj{ 1.0f };
+        glm::mat4 s_MotionView{ 1.0f }, s_MotionPrevView{ 1.0f };   // bu ve önceki çizimin görüş matrisi (CoverageTransform)
+        bool s_MotionHasPrevView = false;
         // GBAA / SRAA geometri geçişi: görünüm başına bu karenin opak mesh çizimleri (yalnız istendiğinde toplanır)
         struct GeometryDraw
         {
@@ -561,6 +568,32 @@ namespace Conqueror
             }
             return maxPx;
         }
+
+        // 334 / 351: hareket eden nesnenin eski yerinin (açılan alan işareti, w = 2) çizileceği dönüşüm. Eski yer bu karenin kamerasıyla
+        // nesnenin önceki dünya dönüşümünde işaretlenir: kamera durgunken doğru. Kameraya bağlı nesne (birinci şahıs kollar ve silah)
+        // kamerayla birlikte dünyada yer değiştirir ama ekranda neredeyse kıpırdamaz; önceki dünya dönüşümü bu karenin kamerasıyla
+        // çizilince yakın duran kollar ekranın büyük bir bölümünde "eski yer" gibi görünüyordu: zıplarken / yürürken TAA ve TAAU orada
+        // geçmişi her karede atıyor, ham iç çözünürlük karesi (merdivenli gölge kenarı, kırık çizgiler, çift görünen hedefler) görünüyordu.
+        // Nesnenin kameraya göre yer değiştirmesi dünyadaki yer değiştirmesinin yarısından azsa (nesne kamerayla birlikte gidiyor) eski yer,
+        // nesnenin önceki karedeki kameraya göre duruşunun bu karenin kamerasındaki karşılığıdır (önceki karedeki ekran yeri)
+        glm::mat4 CoverageTransform(const glm::vec3& c, const glm::vec3& e, const glm::mat4& cur, const glm::mat4& prev)
+        {
+            if (!s_MotionHasPrevView)
+                return prev;
+            // Kamera uzayında (metre): kameraya göre yer değiştirme dünyadakinin yarısından azsa nesne kamerayla birlikte gidiyor.
+            // İzdüşümle ölçülmez: kameraya çok yakın kolların kutusunun köşeleri kameranın arkasında kalıyordu
+            float worldD = 0.0f, viewD = 0.0f;
+            for (int i = 0; i < 8; ++i)
+            {
+                const glm::vec4 p(c + glm::vec3((i & 1) ? e.x : -e.x, (i & 2) ? e.y : -e.y, (i & 4) ? e.z : -e.z), 1.0f);
+                const glm::vec4 wc = cur * p, wp = prev * p;
+                worldD = std::max(worldD, glm::length(glm::vec3(wc) - glm::vec3(wp)));
+                viewD = std::max(viewD, glm::length(glm::vec3(s_MotionView * wc) - glm::vec3(s_MotionPrevView * wp)));
+            }
+            if (worldD > 1e-5f && viewD < 0.5f * worldD)
+                return glm::inverse(s_MotionView) * s_MotionPrevView * prev;
+            return prev;
+        }
     }
 
     void Renderer3D::MarkMovingBounds(const glm::vec3& center, const glm::vec3& extents)
@@ -602,6 +635,7 @@ namespace Conqueror
         v.Draw = s_PlaneMesh.get();
         v.Cur = quadCur;
         v.Prev = replaced ? quadCur : quadPrev;
+        v.Cover = v.Prev;
         v.Cull = 0;
         v.Exact = !replaced;
         v.Replaced = replaced;
@@ -1051,8 +1085,8 @@ namespace Conqueror
                 // Yeni beliren sprite: önceki konumu yok (w = 3 işareti burada 2 ile ezilmesin)
                 if (d.Replaced)
                     continue;
-                sh->SetMat4("u_Transform", d.Prev);
-                sh->SetMat4("u_PrevTransform", d.Prev);
+                sh->SetMat4("u_Transform", d.Cover);
+                sh->SetMat4("u_PrevTransform", d.Cover);
                 RenderCommand::DrawIndexed(d.Draw->GetVertexArray(), d.Draw->GetIndexCount());
             }
             // Önceki karede çizilip bu karede çizilmeyen (silinen / gizlenen) opak nesnelerin eski yeri. Derinlik testiyle: yalnız
@@ -1087,8 +1121,8 @@ namespace Conqueror
             {
                 if (!d.ModelRef || d.Bones.empty())
                     continue;
-                sh->SetMat4("u_Transform", d.Prev);
-                sh->SetMat4("u_PrevTransform", d.Prev);
+                sh->SetMat4("u_Transform", d.Cover);
+                sh->SetMat4("u_PrevTransform", d.Cover);
                 SetBonePalette(sh, d.Bones.data(), (uint32_t)d.Bones.size());
                 for (size_t i = 0; i < d.ModelRef->SkinnedMeshes.size(); ++i)
                 {
@@ -1238,7 +1272,14 @@ namespace Conqueror
             track.SkinnedOccurrence.clear();
             track.SkinnedIdentityOccurrence.clear();
             s_MotionCur = &track;
+            track.LastView = track.View;
+            track.HasLastView = track.HasView;
+            track.View = s->Camera.View;
+            track.HasView = true;
             s_MotionViewProj = s->Camera.Projection * s->Camera.View;
+            s_MotionView = track.View;
+            s_MotionPrevView = track.LastView;
+            s_MotionHasPrevView = track.HasLastView;
         }
         // Proje kalite düzeyi: gölge atlası / kademe / mesafe üst sınırı (Unity Quality Settings)
         {
@@ -2295,6 +2336,7 @@ namespace Conqueror
             v.Wind = windy ? s->Wind : glm::vec4(0.0f);
             v.WindParams = windy ? s->WindParams : glm::vec2(0.0f);
             v.SubPixel = subPixel;
+            v.Cover = (meshIn->GetBoundsRadius() > 0.0f && !windy) ? CoverageTransform(meshIn->GetBoundsCenter(), meshIn->GetBoundsExtents(), transform, prevCopy) : prevCopy;
             if (material->Rendering == Material::RenderMode::Cutout && material->AlbedoMap)
             {
                 v.Cutout = material->AlbedoMap;
@@ -2864,6 +2906,12 @@ namespace Conqueror
                 v.ModelRef = model;
                 v.Cur = transform;
                 v.Prev = prev->second;
+                v.Cover = v.Prev;
+                {
+                    glm::vec3 center, extents;
+                    if (SkinnedModelBounds(*model, s_Scratch.data(), palette, palette, center, extents))
+                        v.Cover = CoverageTransform(center, extents, transform, v.Prev);
+                }
                 v.Bones.assign(s_Scratch.begin(), s_Scratch.begin() + palette);
                 if (morphTextures)
                     v.Morph = *morphTextures;
