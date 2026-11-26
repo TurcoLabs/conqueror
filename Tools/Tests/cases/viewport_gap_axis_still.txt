@@ -1,0 +1,18 @@
+# template: fps
+# 337 / 353: Viewport'ta TAA + NIS'te kamera dururken piramidin alt sırasındaki küplerin arasından görünen kırmızı / beyaz eksen çizgisi
+# bir görünüp bir kayboluyordu. Izgara ve eksenler kenar yumuşatmadan sonra çizilir; nesnelerin önünde / arkasında kalma payı sahnenin
+# titreşimli derinliğinden biriktirilir ve kamera dururken geçmiş bu karenin artı komşuluğunun en büyüğüne (yukarıdan) kırpılırdı. İç
+# çözünürlükte pikselden ince aralıkta titreşimin bazı karelerinde hiçbir derinlik örneği aralığa düşmüyor, kırpma birikmiş payı 0'a
+# atıyor, çizgi 18 karelik döngüyle kaybolup yavaşça geri geliyordu (101 -> 47 seviye). Kırpma karede bir gelip giden pikselde TAA'nın
+# titreme tutması gibi bir sayaçla yapılmaz; sürekli kırpılan pikselde (gerçekten beliren nesne) eskisi gibi hemen yapılır. Ölçü: piramidin
+# tabanında 60 karede 8 seviyeden çok değişen piksel oranı (eski %0.242, yeni %0.020; 16 seviyeden çok: %0.121 -> %0)
+wait_until 3000 layout_settled
+wait 10
+focus Viewport
+cvar r.AntiAliasing 3
+cvar r.Upscaler 3
+camera 24 6 0 -0.6 1.0 0
+wait 150
+viewport_flicker 60 0.397 0.418 0.572 0.511 max8% 0.1
+wait 70
+quit

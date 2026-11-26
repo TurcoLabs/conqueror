@@ -161,20 +161,41 @@ vec2 TemporalCoverage(vec3 world, float pull)
     vec2 puv = prev.xy / prev.w * 0.5 + 0.5;
     if (any(lessThan(puv, vec2(0.0))) || any(greaterThan(puv, vec2(1.0))))
         return vec2(c, 1.0);
-    vec2 hist = texture(u_CoverageHistory, puv).rg;
-    float h = hist.x;
-    // Kamera dururken geçmiş yalnız yukarıdan kırpılır (yeni beliren nesnenin arkasında ızgara hemen gizlenir). İnce nesne (hedef
-    // tahtasının direği) iç çözünürlükte pikselden incedir: titreşimin bazı karelerinde hiçbir derinlik örneğine düşmez, artı komşuluk
-    // tamamen "açık" görünür ve aşağıdan kırpma birikmiş payı 1'e atıyordu; direğin arkasından geçen eksen çizgisi kare kare görünüp
-    // kayboluyordu (TAA + NIS). Hareket eden / silinen / gizlenen nesne yukarıda hız tamponuyla zaten bu karenin payını alır
-    h = u_CoverageStill == 1 ? min(h, hi) : clamp(h, lo, hi);
-    // Dururken sıfırlanan (açılan / silinen nesnenin yeri) piksel önce kendi örneklerinin eşit ağırlıklı ortalamasıyla oturur, sonra %93
-    // geçmişle sürer. Daha uzun birikim (%98'e kadar) silinen küpün yerinde duvarın dibindeki çizgiyi bir saniye noktalı bırakıyordu;
-    // direğin titremesini gideren yukarıdaki tek yönlü kırpma. Hareket ederken sabit ağırlık (u_CoverageFeedback)
-    float n = max(hist.y, 1.0);
+    float h = texture(u_CoverageHistory, puv).r;
+    // g kanalı: örnek sayısı (en çok 63) + 64 x (2 x titreme sayacı + geçen karede yukarıdan kırpıldı); 16 bit kayan noktada 2048'e kadar tam.
+    // Paketli değer süzgeçsiz okunur (en yakın texel): çift doğrusal okuma komşu piksellerin sayaçlarını karıştırıyordu
+    ivec2 hsz = textureSize(u_CoverageHistory, 0);
+    float packed = texelFetch(u_CoverageHistory, clamp(ivec2(puv * vec2(hsz)), ivec2(0), hsz - 1), 0).g;
+    float bits = floor(packed / 64.0 + 1e-3);
+    float n = max(packed - bits * 64.0, 1.0);
+    float flicker = floor(bits * 0.5 + 1e-3);
+    bool clampedBefore = bits - flicker * 2.0 > 0.5;
     if (u_CoverageStill == 1)
-        return vec2(mix(c, h, min(n / (n + 1.0), 0.93)), min(n + 1.0, 64.0));
-    return vec2(mix(c, h, u_CoverageFeedback), min(n + 1.0, 1.0 / (1.0 - u_CoverageFeedback)));
+    {
+        // Kamera dururken geçmiş yalnız yukarıdan kırpılır (yeni beliren nesnenin arkasında ızgara hemen gizlenir). İnce nesne (hedef
+        // tahtasının direği) iç çözünürlükte pikselden incedir: titreşimin bazı karelerinde hiçbir derinlik örneğine düşmez, artı komşuluk
+        // tamamen "açık" görünür ve aşağıdan kırpma birikmiş payı 1'e atıyordu; direğin arkasından geçen eksen çizgisi kare kare görünüp
+        // kayboluyordu (TAA + NIS). Hareket eden / silinen / gizlenen nesne yukarıda hız tamponuyla zaten bu karenin payını alır.
+        // 337 / 353: ince açıklıkta (küplerin arası) tersi oluyordu: titreşimin bazı karelerinde aralığa hiçbir derinlik örneği düşmüyor,
+        // artı komşuluk tamamen "örtülü" görünüyor, yukarıdan kırpma birikmiş payı 0'a atıyordu; aralıktan görünen eksen çizgisi 18
+        // karelik titreşim döngüsüyle bir kaybolup yavaşça geri geliyordu (101 -> 47 seviye). Kırpma karede bir gelip giden pikselde
+        // (TAA'nın titreme tutması gibi sayaçla) yapılmaz; sürekli kırpılan pikselde (gerçekten yeni beliren nesne) eskisi gibi hemen yapılır
+        bool wouldClamp = h > hi + 0.02;
+        flicker = clamp(flicker - 1.0 + ((wouldClamp != clampedBefore) ? 6.0 : 0.0), 0.0, 12.0);
+        if (flicker < 6.0)
+            h = min(h, hi);
+        // Dururken sıfırlanan (açılan / silinen nesnenin yeri) piksel önce kendi örneklerinin eşit ağırlıklı ortalamasıyla oturur, sonra %93
+        // geçmişle sürer. Daha uzun birikim (%98'e kadar) silinen küpün yerinde duvarın dibindeki çizgiyi bir saniye noktalı bırakıyordu
+        return vec2(mix(c, h, min(n / (n + 1.0), 0.93)), min(n + 1.0, 63.0) + 64.0 * (flicker * 2.0 + (wouldClamp ? 1.0 : 0.0)));
+    }
+    // Hareket ederken artı komşuluğa iki yandan kırpılır ve sabit ağırlık (u_CoverageFeedback). 353: ileri geri giderken küplerin arasından
+    // görünen eksen çizgisi aynı nedenle kare kare kayboluyordu: kırpma karede bir gelip giden pikselde yapılmaz (yukarıdaki sayaç);
+    // kenarın gerçekten kaydığı pikselde (paralaks, sürekli kırpılır) yapılır
+    bool wouldClampM = h > hi + 0.02 || h < lo - 0.02;
+    flicker = clamp(flicker - 1.0 + ((wouldClampM != clampedBefore) ? 6.0 : 0.0), 0.0, 12.0);
+    if (flicker < 6.0)
+        h = clamp(h, lo, hi);
+    return vec2(mix(c, h, u_CoverageFeedback), min(n + 1.0, 1.0 / (1.0 - u_CoverageFeedback)) + 64.0 * (flicker * 2.0 + (wouldClampM ? 1.0 : 0.0)));
 }
 
 // Tek bir eksen çizgisi (piksel genişliği sabit). Piksel alanı kadar örtme (kutu süzgeci): çizgiye ekran uzayı uzaklık (türev vektörünün
