@@ -2530,9 +2530,12 @@ namespace Conqueror
             m_TAAULightingChanged = lightingChanged;
             m_LightChangeFrames = lightingChanged ? m_LightChangeFrames + 1 : 0;
             const bool lightingFreeze = lightingChanged && m_LightChangeFrames <= 6 && historyValid;
+            // 349: parçacık varken de gösterilen renk ayrı hedefe yazılır (parçacığın altındaki yüzeyin geçmişi korunur, TAAU.cqsh)
+            const bool particleFreeze = m_ReactiveUsed && historyValid;
+            const bool separateDisplay = lightingFreeze || particleFreeze;
             // Ek hedefler bağlamalardan önce kurulur (CreateTarget kendi çerçeve tamponunu ve dokusunu bağlar: sonra kurulunca ilk
             // dondurulan karede TAAU yanlış hedefe ve yanlış dokularla çizip görüntüyü siyah bırakıyordu)
-            if (lightingFreeze)
+            if (separateDisplay)
                 EnsureTarget(m_TAAUDisplay, outW, outH, GL_RGBA16F);
             if (taauDebug)
                 EnsureTarget(m_TAADebug, outW, outH, GL_RGBA16F);
@@ -2604,24 +2607,25 @@ namespace Conqueror
             BindTexture(4, m_FinalHasVelocity ? m_Velocity.Texture : 0);
             taau->SetInt("u_Debug", taauDebug ? 1 : 0);
             taau->SetInt("u_LightingFreeze", lightingFreeze ? 1 : 0);
+            taau->SetInt("u_ParticleFreeze", particleFreeze ? 1 : 0);
             if (taauDebug)
                 glNamedFramebufferTexture(m_TAAUHistory[ni].Framebuffer, GL_COLOR_ATTACHMENT1, m_TAADebug.Texture, 0);
-            if (lightingFreeze)
+            if (separateDisplay)
                 glNamedFramebufferTexture(m_TAAUHistory[ni].Framebuffer, GL_COLOR_ATTACHMENT2, m_TAAUDisplay.Texture, 0);
-            if (taauDebug || lightingFreeze)
+            if (taauDebug || separateDisplay)
             {
                 const GLenum buffers[3] = { GL_COLOR_ATTACHMENT0, taauDebug ? (GLenum)GL_COLOR_ATTACHMENT1 : (GLenum)GL_NONE,
-                                            lightingFreeze ? (GLenum)GL_COLOR_ATTACHMENT2 : (GLenum)GL_NONE };
-                glNamedFramebufferDrawBuffers(m_TAAUHistory[ni].Framebuffer, lightingFreeze ? 3 : 2, buffers);
+                                            separateDisplay ? (GLenum)GL_COLOR_ATTACHMENT2 : (GLenum)GL_NONE };
+                glNamedFramebufferDrawBuffers(m_TAAUHistory[ni].Framebuffer, separateDisplay ? 3 : 2, buffers);
             }
             PostProcess::DrawFullscreenQuad();
-            if (taauDebug || lightingFreeze)
+            if (taauDebug || separateDisplay)
             {
                 const GLenum buffers[1] = { GL_COLOR_ATTACHMENT0 };
                 glNamedFramebufferDrawBuffers(m_TAAUHistory[ni].Framebuffer, 1, buffers);
                 if (taauDebug)
                     glNamedFramebufferTexture(m_TAAUHistory[ni].Framebuffer, GL_COLOR_ATTACHMENT1, 0, 0);
-                if (lightingFreeze)
+                if (separateDisplay)
                     glNamedFramebufferTexture(m_TAAUHistory[ni].Framebuffer, GL_COLOR_ATTACHMENT2, 0, 0);
             }
             glTextureParameteri(cur, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
@@ -2632,7 +2636,7 @@ namespace Conqueror
                                         m_SpatialSharpener == UpscalerMode::CAS;
             // Keskinleştirme TAAU'nun kamera dururken kalan küçük titreşimini büyütür (285 / 288'deki gibi): önce FSR 2 / SGSR 2'deki duran
             // kamera tutucusu (owner 4), sonra keskinleştirici
-            uint32_t taauResult = lightingFreeze ? m_TAAUDisplay.Texture : m_TAAUHistory[ni].Texture;
+            uint32_t taauResult = separateDisplay ? m_TAAUDisplay.Texture : m_TAAUHistory[ni].Texture;
             uint32_t unsharpened = 0;
             // 292: geçmişi yeni reddedilen (açılan, nesnenin ayrıldığı) piksel ilk karelerde yalnız birkaç titreşimli düşük çözünürlüklü
             // örnekten oluşur: küp duvarın üstünden kaldırılınca duvar üstünün kenarı birkaç kare merdivenli kalıyordu. Yerel TAA'daki gibi

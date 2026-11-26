@@ -1,0 +1,181 @@
+# template: fps
+# 349: TAA + NIS'te köprünün altında nişan alıp seri ateş edince tavanda hilal / yay biçiminde sarımsı izler ve noktalı halkalar
+# kalıyordu (SSAA'da hiçbiri yok). Namlu dumanının soluk kenarı TAAU'nun parçacık maskesinde sayılmıyordu (yalnız merkez örnek, 0.02
+# eşik); alev ışığıyla sararmış duman geçmişe giriyor, titreme tutması onu duman çekildikten sonra da tutuyordu. Artık maske 3x3'ün en
+# büyüğü (0.003, yerel TAA gibi) ve parçacığın altındaki yüzeyin geçmişi korunur (yerel TAA'nın duman altındaki dondurması), parçacık
+# yalnız gösterilir. Ölçü: atışlar boyunca tavanın düz yerlerinde SSAA'dan 12 seviyeden çok sapan piksel, kare başına ortalama (rastgele
+# duman ve zamanla kayan bulutlar iki geçişte aynı olsun diye her geçiş ayrı Play'le başlar; gökyüzü bandı ve oyun başı yazısı ölçülmez).
+# Eski ~2000 piksel (en çok ~11700), yeni ~10
+timeout 900
+wait 60
+focus Game
+cvar r.AntiAliasing 7
+cvar r.Upscaler 0
+play
+wait 30
+script set Pistol@Weapon recoilPitch float 0
+script set Pistol@Weapon recoilYaw float 0
+script set Pistol@Weapon hipSpread float 0
+script set Pistol@Weapon aimSpread float 0
+script set Pistol@Weapon moveSpread float 0
+script set Pistol@Weapon infiniteAmmo bool true
+script set Pistol@Weapon magazine int 99
+script set Pistol@Weapon ammo int 99
+entity move Player 0 0.9 -11.8
+wait 4
+script set Player@FirstPersonShooter yaw float 0
+script set Player@FirstPersonShooter pitch float 12
+script set Player@FirstPersonShooter aimInput bool true
+wait 120
+record_start png fixed fps=60 out={work}/fire349_ref
+wait 4
+script set Player@FirstPersonShooter fireInput bool true
+wait 2
+script set Player@FirstPersonShooter fireInput bool false
+wait 9
+script set Player@FirstPersonShooter fireInput bool true
+wait 2
+script set Player@FirstPersonShooter fireInput bool false
+wait 9
+script set Player@FirstPersonShooter fireInput bool true
+wait 2
+script set Player@FirstPersonShooter fireInput bool false
+wait 9
+script set Player@FirstPersonShooter fireInput bool true
+wait 2
+script set Player@FirstPersonShooter fireInput bool false
+wait 9
+script set Player@FirstPersonShooter fireInput bool true
+wait 2
+script set Player@FirstPersonShooter fireInput bool false
+wait 9
+script set Player@FirstPersonShooter fireInput bool true
+wait 2
+script set Player@FirstPersonShooter fireInput bool false
+wait 9
+script set Player@FirstPersonShooter fireInput bool true
+wait 2
+script set Player@FirstPersonShooter fireInput bool false
+wait 9
+script set Player@FirstPersonShooter fireInput bool true
+wait 2
+script set Player@FirstPersonShooter fireInput bool false
+wait 9
+script set Player@FirstPersonShooter fireInput bool true
+wait 2
+script set Player@FirstPersonShooter fireInput bool false
+wait 9
+script set Player@FirstPersonShooter fireInput bool true
+wait 2
+script set Player@FirstPersonShooter fireInput bool false
+wait 9
+script set Player@FirstPersonShooter fireInput bool true
+wait 2
+script set Player@FirstPersonShooter fireInput bool false
+wait 9
+script set Player@FirstPersonShooter fireInput bool true
+wait 2
+script set Player@FirstPersonShooter fireInput bool false
+wait 9
+script set Player@FirstPersonShooter fireInput bool true
+wait 2
+script set Player@FirstPersonShooter fireInput bool false
+wait 9
+script set Player@FirstPersonShooter fireInput bool true
+wait 2
+script set Player@FirstPersonShooter fireInput bool false
+wait 9
+script set Player@FirstPersonShooter fireInput bool true
+wait 2
+script set Player@FirstPersonShooter fireInput bool false
+wait 9
+wait 60
+record_stop
+stop
+wait 30
+cvar r.AntiAliasing 3
+cvar r.Upscaler 3
+play
+wait 30
+script set Pistol@Weapon recoilPitch float 0
+script set Pistol@Weapon recoilYaw float 0
+script set Pistol@Weapon hipSpread float 0
+script set Pistol@Weapon aimSpread float 0
+script set Pistol@Weapon moveSpread float 0
+script set Pistol@Weapon infiniteAmmo bool true
+script set Pistol@Weapon magazine int 99
+script set Pistol@Weapon ammo int 99
+entity move Player 0 0.9 -11.8
+wait 4
+script set Player@FirstPersonShooter yaw float 0
+script set Player@FirstPersonShooter pitch float 12
+script set Player@FirstPersonShooter aimInput bool true
+wait 120
+record_start png fixed fps=60 out={work}/fire349_nis
+wait 4
+script set Player@FirstPersonShooter fireInput bool true
+wait 2
+script set Player@FirstPersonShooter fireInput bool false
+wait 9
+script set Player@FirstPersonShooter fireInput bool true
+wait 2
+script set Player@FirstPersonShooter fireInput bool false
+wait 9
+script set Player@FirstPersonShooter fireInput bool true
+wait 2
+script set Player@FirstPersonShooter fireInput bool false
+wait 9
+script set Player@FirstPersonShooter fireInput bool true
+wait 2
+script set Player@FirstPersonShooter fireInput bool false
+wait 9
+script set Player@FirstPersonShooter fireInput bool true
+wait 2
+script set Player@FirstPersonShooter fireInput bool false
+wait 9
+script set Player@FirstPersonShooter fireInput bool true
+wait 2
+script set Player@FirstPersonShooter fireInput bool false
+wait 9
+script set Player@FirstPersonShooter fireInput bool true
+wait 2
+script set Player@FirstPersonShooter fireInput bool false
+wait 9
+script set Player@FirstPersonShooter fireInput bool true
+wait 2
+script set Player@FirstPersonShooter fireInput bool false
+wait 9
+script set Player@FirstPersonShooter fireInput bool true
+wait 2
+script set Player@FirstPersonShooter fireInput bool false
+wait 9
+script set Player@FirstPersonShooter fireInput bool true
+wait 2
+script set Player@FirstPersonShooter fireInput bool false
+wait 9
+script set Player@FirstPersonShooter fireInput bool true
+wait 2
+script set Player@FirstPersonShooter fireInput bool false
+wait 9
+script set Player@FirstPersonShooter fireInput bool true
+wait 2
+script set Player@FirstPersonShooter fireInput bool false
+wait 9
+script set Player@FirstPersonShooter fireInput bool true
+wait 2
+script set Player@FirstPersonShooter fireInput bool false
+wait 9
+script set Player@FirstPersonShooter fireInput bool true
+wait 2
+script set Player@FirstPersonShooter fireInput bool false
+wait 9
+script set Player@FirstPersonShooter fireInput bool true
+wait 2
+script set Player@FirstPersonShooter fireInput bool false
+wait 9
+wait 60
+record_stop
+stop
+wait 30
+image_seq_trail {work}/fire349_ref {work}/fire349_nis 30 200 0 0 1034 255 diff 12 max 300
+quit
