@@ -404,6 +404,26 @@ namespace Conqueror
         bool m_TemporalRestarted = false;
         bool m_CameraCutFrame = false;
         void NoteTemporalStart(bool historyValid) { if (!historyValid) m_TemporalRestarted = true; }
+        // 345: sahnenin çizim yapılandırması (iç çözünürlük, titreşim, örnek sayıları, ekler) bir önceki karenin Render'ında belirlenir ve
+        // BeginScene'de uygulanır. Görünüm bir süre çizilmeyince (Play'de Game sekmesi arkadaydı) ya da ayar değişince ilk kare eski
+        // yapılandırmayla çizilir; Render'da istek değiştiyse kare bayatlamıştır, görünüm onu (TakeTemporalWarmup) hemen yeniden çizer
+        struct SceneConfig
+        {
+            float RenderScale = 1.0f;
+            uint32_t Samples = 1, CoverageSamples = 0;
+            int TAAVariant = 0;
+            bool Jitter = false, SampleShading = false, TXAA = false, MultisampleTAA = false, Stability = false, Normals = false, Albedo = false, Geometry = false;
+            bool operator==(const SceneConfig& o) const
+            {
+                return RenderScale == o.RenderScale && Samples == o.Samples && CoverageSamples == o.CoverageSamples && TAAVariant == o.TAAVariant &&
+                       Jitter == o.Jitter && SampleShading == o.SampleShading && TXAA == o.TXAA && MultisampleTAA == o.MultisampleTAA &&
+                       Stability == o.Stability && Normals == o.Normals && Albedo == o.Albedo && Geometry == o.Geometry;
+            }
+        };
+        SceneConfig WantedSceneConfig() const;
+        SceneConfig m_BeganConfig;
+        bool m_BeganConfigValid = false;
+        bool m_ConfigStale = false;
         bool m_TAAResolved = false;
     };
 

@@ -1231,6 +1231,7 @@ namespace Conqueror
         std::vector<uint32_t> dirty(m_Dirty.begin(), m_Dirty.end());
         m_Dirty.clear();
         bool anyJointEntity = false;
+        std::vector<uint32_t> rebuiltCharacters;
         for (uint32_t e : dirty)
         {
             if (!Valid(e))
@@ -1246,7 +1247,10 @@ namespace Conqueror
             Entity ent{ (entt::entity)e, m_Scene };
             const bool active = m_Scene->IsEntityActive((entt::entity)e);
             if (ent.HasComponent<CharacterControllerComponent>() && active)
+            {
                 RebuildCharacter(e);
+                rebuiltCharacters.push_back(e);
+            }
             else
                 RemoveCharacter(e);
 
@@ -1268,6 +1272,15 @@ namespace Conqueror
         }
         for (uint32_t owner : owners)
             RebuildOwner(owner, true);
+        // 345: karakter gövdelerden önce kurulur; o an zemin henüz yoktu, yer durumu ilk harekete kadar "havada" kalıyordu (oyunun ilk
+        // karesinde CharacterIsGrounded yanlış: FPS şablonunun nişangâhı havadaymış gibi açılıp oyun başında bir kare büyük görünüyordu).
+        // Gövdeler kurulduktan sonra yeni karakterlerin temasları yenilenir (Unreal'ın karakteri oyun başında zemini bulması gibi)
+        for (uint32_t e : rebuiltCharacters)
+        {
+            auto it = m_Characters.find(e);
+            if (it != m_Characters.end() && it->second.Character)
+                m_Backend->SetCharacterPosition(it->second.Character, m_Backend->GetCharacterState(it->second.Character).Position);
+        }
         // Gövdeler yeniden kurulduysa (eklem tutamaçları geçersiz) tüm eklemleri yeniden kur
         if (!owners.empty() || anyJointEntity)
         {

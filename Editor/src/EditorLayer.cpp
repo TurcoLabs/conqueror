@@ -7459,6 +7459,50 @@ namespace Conqueror::Editor
             if (limit >= 0.0f && sum / std::max(frames, 1) > limit) { err = std::string("trail over the limit: ") + line; return false; }
             return true;
         });
+        // image_diff <a.png> <b.png> u0 v0 u1 v1 [max% p] [diff n]: iki ekran görüntüsünün (screenshot / screenshot_frames) bölgede (0..1)
+        // n seviyeden çok farklı piksel oranı. Play'in ilk gösterilen karesi sonrakilerle aynı mı (345: pencerenin gösterdiği, Game
+        // görünümünün çerçeve tamponu değil; oyunun ilk karesi sekme öne gelmeden çizilir)
+        Automation::RegisterCommand("image_diff", [](const Args& a, std::string& err) {
+            if (a.size() < 7) { err = "image_diff <a.png> <b.png> u0 v0 u1 v1 [max% p] [diff n]"; return false; }
+            float limit = -1.0f;
+            int diffLimit = 8;
+            for (size_t k = 7; k + 1 < a.size(); k += 2)
+            {
+                if (a[k] == "max%") limit = (float)std::atof(a[k + 1].c_str());
+                else if (a[k] == "diff") diffLimit = std::max(1, std::atoi(a[k + 1].c_str()));
+            }
+            int wa = 0, ha = 0, wb = 0, hb = 0, n = 0;
+            unsigned char* da = stbi_load(a[1].c_str(), &wa, &ha, &n, 3);
+            unsigned char* db = stbi_load(a[2].c_str(), &wb, &hb, &n, 3);
+            if (!da || !db || wa != wb || ha != hb)
+            {
+                if (da) stbi_image_free(da);
+                if (db) stbi_image_free(db);
+                err = "missing or mismatched image";
+                return false;
+            }
+            auto toPx = [](const std::string& v, int size) { return std::clamp((int)(std::stof(v) * (float)size), 0, size); };
+            const int x0 = toPx(a[3], wa), y0 = toPx(a[4], ha), x1 = toPx(a[5], wa), y1 = toPx(a[6], ha);
+            long long count = 0, total = 0;
+            for (int y = std::min(y0, y1); y < std::max(y0, y1); ++y)
+                for (int x = std::min(x0, x1); x < std::max(x0, x1); ++x)
+                {
+                    const size_t i = ((size_t)y * wa + x) * 3;
+                    int d = 0;
+                    for (int c = 0; c < 3; ++c)
+                        d = std::max(d, std::abs((int)da[i + c] - (int)db[i + c]));
+                    count += d > diffLimit ? 1 : 0;
+                    ++total;
+                }
+            stbi_image_free(da);
+            stbi_image_free(db);
+            const float pct = total ? 100.0f * (float)count / (float)total : 0.0f;
+            char line[160];
+            std::snprintf(line, sizeof(line), "IMAGE DIFF %.3f%% of %lld pixels differ by more than %d levels", pct, total, diffLimit);
+            Automation::Report(line);
+            if (limit >= 0.0f && pct > limit) { err = std::string("difference over the limit: ") + line; return false; }
+            return true;
+        });
         Automation::RegisterCommand("game_region_change", [this](const Args& a, std::string& err) {
             static std::vector<uint8_t> s_Marked;
             static int s_W = 0, s_H = 0;

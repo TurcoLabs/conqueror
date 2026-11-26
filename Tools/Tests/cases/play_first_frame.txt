@@ -1,0 +1,24 @@
+# template: fps
+# matrix: AA=3 7 0 26
+# 345: oyun başlarken (Viewport öndeyken Play) ilk ~0.1 saniye görüntü farklıydı, bütün AA kiplerinde: kenarlar başka, ufkun üstündeki
+# bulut bandı başka, nişangâh büyük. Üç neden: (1) oyunun ilk karesi Game sekmesi öne gelmeden çizilir, zamansal geçmiş yeni başladığı
+# için ısıtılması gerekir; ısıtma (titreşim döngüsünün kalanı kadar ek çizim) bir sonraki karede yapılıyordu, ısıtılmamış ilk kare ısıtmanın
+# süresi boyunca ekranda kalıyordu. Artık sekme öne geldiği karede, görüntü gösterilmeden önce ısıtılır. (2) karakter denetleyicisi fizik
+# gövdelerinden önce kuruluyordu, temasları zemin yokken toplanıyordu: ilk karede karakter havada sayılıyor, FPS şablonunun nişangâhı (havadayken açılır) bir kare
+# büyük görünüyordu; yeni karakterlerin temasları gövdeler kurulduktan sonra yenilenir. Ölçü: pencerenin gösterdiği ilk karenin üç kare sonrakinden farkı
+# (Game görünümü bölgesi, 8 seviyeden çok değişen piksel). Eski: TAA %4.4, SSAA %4.0, AA yok %4.5, FSR AA %6.1; yeni %0.01-0.05.
+# (3) Görünüm bir süre çizilmeyince ilk karesi önceki karenin istediği yapılandırmayla çizilir (AA kapalıyken bile eski TAA titreşimiyle,
+# bir kare kaymış); yapılandırma o karede değişti ise görünüm kareyi hemen yeniden çizer
+wait_until 3000 layout_settled
+wait 10
+focus Viewport
+cvar r.AntiAliasing {matrix}
+cvar r.Upscaler 0
+wait 90
+play
+screenshot_frames {work}/play345_{matrix}/p 4
+wait 10
+image_diff {work}/play345_{matrix}/p_0.png {work}/play345_{matrix}/p_3.png 0.211 0.171 0.748 0.72 max% 1.5 diff 8
+stop
+wait 5
+quit

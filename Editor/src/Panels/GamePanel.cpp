@@ -441,6 +441,13 @@ namespace Conqueror::Editor
             m_ViewportSize = newViewportSize;
             RenderGameWarm(Timestep(0.0f), m_Playing, true);
         }
+        else if (m_PendingWarmup > 0)
+        {
+            // 345: sekme bu karede öne geldi (Play: oyunun ilk karesi Game sekmesi öne gelmeden çizildi, ısıtılmadı). Kalan titreşim
+            // örnekleri görüntü gösterilmeden önce bu karede doldurulur. Eskiden bir sonraki karede dolduruluyordu: ısıtılmamış ilk kare
+            // ısıtmanın süresi boyunca (~0.1 sn) ekranda kalıyor, oyun başlarken görüntü bir an farklı görünüyordu
+            RenderGameWarm(Timestep(0.0f), m_Playing, true);
+        }
 
         // Görüntü (alan dışına taşarsa kırp)
         ImGui::PushClipRect(areaPos, ImVec2(areaPos.x + area.x, areaPos.y + area.y), true);

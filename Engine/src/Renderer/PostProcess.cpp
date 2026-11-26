@@ -645,10 +645,30 @@ namespace Conqueror
         Renderer::GetStats().PostProcessPasses += 5;
     }
 
+    PostProcessStack::SceneConfig PostProcessStack::WantedSceneConfig() const
+    {
+        SceneConfig c;
+        c.RenderScale = m_PointUpscale ? 1.0f : m_WantRenderScale;
+        c.Samples = m_WantSamples;
+        c.CoverageSamples = m_WantCoverageSamples;
+        c.TAAVariant = m_WantTAAVariant;
+        c.Jitter = m_WantTAA && !m_HoldTemporalHistory;
+        c.SampleShading = m_WantSampleShading;
+        c.TXAA = m_WantTXAA;
+        c.MultisampleTAA = m_WantMultisampleTAA;
+        c.Stability = m_WantStability;
+        c.Normals = m_WantNormals;
+        c.Albedo = m_WantAlbedo;
+        c.Geometry = m_WantGeometry;
+        return c;
+    }
+
     void PostProcessStack::BeginScene(uint32_t width, uint32_t height)
     {
         width = std::max(width, 1u);
         height = std::max(height, 1u);
+        m_BeganConfig = WantedSceneConfig();
+        m_BeganConfigValid = true;
         // İç çözünürlük: süper örneklemede (SSAA / OGSSAA / FSAA) büyük, yükselticilerde (FSR / NIS / CAS) küçük; son geçiş çıktıya
         // süzer (küçültme ya da EASU / CAS büyütme)
         m_OutputWidth = width;
@@ -901,13 +921,17 @@ namespace Conqueror
     uint32_t PostProcessStack::TakeTemporalWarmup(bool* cameraCut)
     {
         const bool restarted = m_TemporalRestarted;
+        // Eski yapılandırmayla çizilen kare (345: Play'de AA kapalıyken bile önceki yöntemin titreşimiyle çizilip bir kare kaymış
+        // görünüyordu) en az bir kez yeni yapılandırmayla yeniden çizilir
+        const uint32_t stale = m_ConfigStale ? 1u : 0u;
         if (cameraCut)
             *cameraCut = m_CameraCutFrame;
         m_TemporalRestarted = false;
         m_CameraCutFrame = false;
+        m_ConfigStale = false;
         // Titreşimsiz zamansal yöntem (yalnız kararlılık katmanı) ısıtılmaz: aynı örnek tekrar birikir, yanıp sönme yok
         if (!restarted || !m_JitterActive || m_HoldTemporalHistory)
-            return 0;
+            return stale;
         uint32_t phases;
         if (m_TAAVariant == 1 || m_TAAVariant == 3)
             phases = 2u;   // TSAA, SMAA T2x: iki konum
@@ -918,7 +942,7 @@ namespace Conqueror
         else
             phases = JitterPhaseCount();
         // Bu kare ilk örnek; döngünün kalanı (en çok 31: %50 altı iç çözünürlükte süre sınırı, kalan örnekler normal birikir)
-        return std::min(phases, 32u) - 1u;
+        return std::max(std::min(phases, 32u) - 1u, stale);
     }
 
     void PostProcessStack::SetHoldTemporalHistory(bool hold)
@@ -3167,6 +3191,9 @@ namespace Conqueror
             if (!m_WantAlbedo)
                 m_GIHistoryValid = false;
         }
+        // 345: bu kare bir önceki karenin istediği yapılandırmayla çizildi (BeginScene); sonraki karenin isteği farklıysa kare bayattır,
+        // görünüm onu hemen yeni yapılandırmayla yeniden çizer (TakeTemporalWarmup)
+        m_ConfigStale = m_BeganConfigValid && !(WantedSceneConfig() == m_BeganConfig);
 
         glActiveTexture(GL_TEXTURE0);
         if (depthTest) glEnable(GL_DEPTH_TEST);
