@@ -45,8 +45,74 @@ namespace Conqueror
         glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
     }
 
+    namespace
+    {
+        // Panoramadan küp haritası karenin ortasında da oluşturulur (script Start'ında SceneSetSkybox: sahnenin framebuffer'ı bağlıyken).
+        // Dönüştürme kendi framebuffer'ını, viewport'unu, programını ve köşe dizisini bağlar; çağırana ait GL durumu aynen geri konur.
+        // Eskiden framebuffer 0'a ve 512x512 viewport'a bırakılıyordu: Play'in ilk karesi boş (siyah) çiziliyor, TAA bu kareyi geçmişe
+        // yazıp görüntüyü ~3 saniyede siyahtan açıyordu (Archviz şablonu)
+        struct CaptureStateGuard
+        {
+            GLint DrawFramebuffer{}, ReadFramebuffer{}, Renderbuffer{}, Viewport[4]{}, Program{}, VertexArray{}, ArrayBuffer{};
+            GLint ActiveTexture{}, Texture2D{}, TextureCube{};
+            GLboolean DepthTest{}, DepthMask{}, Cull{}, Blend{}, Scissor{}, StencilTest{};
+            GLboolean ColorMask[4]{};
+            CaptureStateGuard()
+            {
+                glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &DrawFramebuffer);
+                glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &ReadFramebuffer);
+                glGetIntegerv(GL_RENDERBUFFER_BINDING, &Renderbuffer);
+                glGetIntegerv(GL_VIEWPORT, Viewport);
+                glGetIntegerv(GL_CURRENT_PROGRAM, &Program);
+                glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &VertexArray);
+                glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &ArrayBuffer);
+                glGetIntegerv(GL_ACTIVE_TEXTURE, &ActiveTexture);
+                glActiveTexture(GL_TEXTURE0);
+                glGetIntegerv(GL_TEXTURE_BINDING_2D, &Texture2D);
+                glGetIntegerv(GL_TEXTURE_BINDING_CUBE_MAP, &TextureCube);
+                DepthTest = glIsEnabled(GL_DEPTH_TEST);
+                glGetBooleanv(GL_DEPTH_WRITEMASK, &DepthMask);
+                glGetBooleanv(GL_COLOR_WRITEMASK, ColorMask);
+                Cull = glIsEnabled(GL_CULL_FACE);
+                Blend = glIsEnabled(GL_BLEND);
+                Scissor = glIsEnabled(GL_SCISSOR_TEST);
+                StencilTest = glIsEnabled(GL_STENCIL_TEST);
+                // Dönüştürme her yüzün tamamını yazar: önceki çizimin kırpma / harmanlama / ayıklama / maske ayarları ona karışmasın
+                glDisable(GL_SCISSOR_TEST);
+                glDisable(GL_BLEND);
+                glDisable(GL_CULL_FACE);
+                glDisable(GL_STENCIL_TEST);
+                glDisable(GL_DEPTH_TEST);
+                glDepthMask(GL_TRUE);
+                glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+            }
+            ~CaptureStateGuard()
+            {
+                glBindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)DrawFramebuffer);
+                glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)ReadFramebuffer);
+                glBindRenderbuffer(GL_RENDERBUFFER, (GLuint)Renderbuffer);
+                glViewport(Viewport[0], Viewport[1], Viewport[2], Viewport[3]);
+                glUseProgram((GLuint)Program);
+                glBindVertexArray((GLuint)VertexArray);
+                glBindBuffer(GL_ARRAY_BUFFER, (GLuint)ArrayBuffer);
+                glActiveTexture(GL_TEXTURE0);
+                glBindTexture(GL_TEXTURE_2D, (GLuint)Texture2D);
+                glBindTexture(GL_TEXTURE_CUBE_MAP, (GLuint)TextureCube);
+                glActiveTexture((GLenum)ActiveTexture);
+                if (DepthTest) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
+                glDepthMask(DepthMask);
+                glColorMask(ColorMask[0], ColorMask[1], ColorMask[2], ColorMask[3]);
+                if (Cull) glEnable(GL_CULL_FACE); else glDisable(GL_CULL_FACE);
+                if (Blend) glEnable(GL_BLEND); else glDisable(GL_BLEND);
+                if (Scissor) glEnable(GL_SCISSOR_TEST); else glDisable(GL_SCISSOR_TEST);
+                if (StencilTest) glEnable(GL_STENCIL_TEST); else glDisable(GL_STENCIL_TEST);
+            }
+        };
+    }
+
     void OpenGLCubemap::ConvertEquirectangularToCubemap(const std::string& path, uint32_t resolution)
     {
+        const CaptureStateGuard stateGuard;
         // HDR texture yükle
         const StbFlipScope stbFlip(true);
         int width, height, channels;
@@ -219,6 +285,7 @@ namespace Conqueror
 
     void OpenGLCubemap::LoadFromFaces(const std::string faces[6])
     {
+        const CaptureStateGuard stateGuard;   // karenin ortasında oluşturulabilir: çağıranın doku bağlamaları korunur
         glGenTextures(1, &m_RendererID);
         glBindTexture(GL_TEXTURE_CUBE_MAP, m_RendererID);
         glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);

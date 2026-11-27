@@ -1,0 +1,25 @@
+# template: archviz
+# matrix: AA=3 7
+# Archviz şablonunda Game görünümü öndeyken Play'e basınca görüntü bir kare siyah geliyor, sonra ~3 saniyede siyahtan açılıyordu
+# (TAA'da da SSAA'da da). Şablonun script'i Start'ta SceneSetSkybox ile gökyüzünü yükler; panoramadan küp haritası dönüştürülürken framebuffer 0'a ve viewport 512x512'ye
+# bırakılıyordu. Start, Play'in ilk karesinde sahnenin framebuffer'ı bağlıyken çalıştığından o karenin sahnesi hiç çizilmiyor (yalnız
+# arka plan ve HUD), TAA bu boş kareyi geçmişe yazıp kamera dururken ancak yavaş yavaş unutuyordu (ortalama parlaklık 5 -> 101 -> 133,
+# 190 karede). Dönüştürme artık çağıranın GL durumunu (framebuffer, viewport, program, köşe dizisi, dokular, testler) geri koyar.
+# (Viewport öndeyken ilk kare sekmenin arkasında çizilir ve sekme öne gelince yeniden çizilir; hata görünmüyordu). Ölçü: Play'in ilk karesi
+# ile üç kare ve 90 kare sonrası arasındaki fark (8 seviyeden çok değişen piksel): eski TAA %85 / %95, SSAA %87 / %95; yeni %0-0.01
+wait_until 3000 layout_settled
+wait 10
+focus Game
+cvar r.AntiAliasing {matrix}
+cvar r.Upscaler 0
+wait 90
+play
+screenshot_frames {work}/playsky_{matrix}/p 4
+wait 90
+screenshot_frames {work}/playsky_{matrix}/q 1
+wait 5
+image_diff {work}/playsky_{matrix}/p_0.png {work}/playsky_{matrix}/p_3.png 0.211 0.171 0.748 0.72 max% 1.5 diff 8
+image_diff {work}/playsky_{matrix}/p_3.png {work}/playsky_{matrix}/q_0.png 0.211 0.171 0.748 0.72 max% 1.5 diff 8
+stop
+wait 5
+quit
