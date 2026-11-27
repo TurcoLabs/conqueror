@@ -28,6 +28,8 @@ namespace Conqueror::CQS
     void RegisterUINatives(Scripting::NativeRegistry* vm);
     // CQSNativeBridge_Render.cpp: sahne görüntü ayarları (sis, bloom, gölge...), kamera
     void RegisterRenderNatives(Scripting::NativeRegistry* vm);
+    // Sahnenin görüntü ayarını betikteki adıyla yazar (RenderSettingSet ile aynı tablo: "Post.AOIntensity" ...); bool / int / float
+    bool SetRenderSettingFromText(Conqueror::Scene& scene, const std::string& name, const std::string& value);
     // CQSNativeBridge_Gameplay.cpp: Gameplay Tags, Data Tables, Ability System
     void RegisterGameplayNatives(Scripting::NativeRegistry* vm);
     // CQSNativeBridge_Assets.cpp: State Graph, Behavior Tree, ses varlıkları ve diğer varlık türlerinin çağrıları

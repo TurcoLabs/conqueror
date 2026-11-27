@@ -1653,6 +1653,9 @@ namespace Conqueror
             ssao->SetFloat("u_Intensity", settings.AOIntensity);
             ssao->SetFloat("u_Power", settings.AOPower);
             ssao->SetFloat("u_Time", time);
+            // 340: örtüyü büyüten ayarlarda daha çok örnek (Intensity x Power 2'den 4'e: 1 -> 4 küme, 16 -> 64 örnek)
+            const float aoGain = std::max(settings.AOIntensity, 0.0f) * std::max(settings.AOPower, 0.0f);
+            ssao->SetInt("u_Sets", 1 + (int)std::round(3.0f * std::clamp((aoGain - 2.0f) / 2.0f, 0.0f, 1.0f)));
             BindTexture(0, GetSceneDepthTexture());
             PostProcess::DrawFullscreenQuad();
         }

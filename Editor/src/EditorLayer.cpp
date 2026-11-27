@@ -2,6 +2,7 @@
 #define GLFW_INCLUDE_NONE
 #include "Scene/GodotNodes.h"
 #include "Core/Math/Random.h"
+#include "Scripting/ConquerorScript/CQSNativeBridge.h"
 #include "Core/Localization/Localization.h"
 #include "Panels/OcclusionPanel.h"
 #include "Scene/OcclusionCulling.h"
@@ -6813,7 +6814,7 @@ namespace Conqueror::Editor
             // (u, v 0..1, sol alt köşe 0,0). Kanal: r g b a lum, red/green/blue = o kanalın diğerlerinden baskınlığı (r - max(g, b)).
             // detail: yatay komşu piksel farkının ortalaması (doku / bulut ayrıntısı; düz renk geçişinde ~0); vdetail: dikey komşu farkı
             // (yatay çizgiler: merdivenin basamak kenarları, 315); edgeres: bölgeden geçen yatay / yatık kenarın düz çizgiden sapması
-            // (piksel, merdivenlenme)
+            // (piksel, merdivenlenme); speckle: 3x3 medyanından 8 seviyeden çok sapan piksel yüzdesi (benekli gürültü)
             if (a.size() < 5 || !fb) { err = "region u0 v0 u1 v1 [channel stat cond]..."; return false; }
             const auto& spec = fb->GetSpecification();
             auto toPx = [](const std::string& v, uint32_t size) { return std::clamp((int)(std::stof(v) * (float)size), 0, (int)size - 1); };
@@ -6854,6 +6855,25 @@ namespace Conqueror::Editor
                 }
                 float have = stat == "min" ? mn : stat == "max" ? mx : stat == "detail" ? diff / (float)std::max<size_t>(1, n - (size_t)h)
                            : stat == "vdetail" ? vdiff / (float)std::max<size_t>(1, n - (size_t)w) : sum / (float)n;
+                if (stat == "speckle")
+                {
+                    // speckle: 3x3 medyanından 8 seviyeden çok sapan iç piksel oranı (%, 340: SSAO'nun benekli gürültüsü). İnce çizgiler
+                    // (ızgara) da sayılır; aynı görüntünün eski / yeni karşılaştırmasında sabit kalırlar
+                    size_t count = 0, total = 0;
+                    for (int r = 1; r + 1 < h; ++r)
+                        for (int c = 1; c + 1 < w; ++c)
+                        {
+                            float nb[9];
+                            int k2 = 0;
+                            for (int dy = -1; dy <= 1; ++dy)
+                                for (int dx = -1; dx <= 1; ++dx)
+                                    nb[k2++] = value((size_t)(r + dy) * w + (c + dx), ch);
+                            std::nth_element(nb, nb + 4, nb + 9);
+                            count += std::abs(value((size_t)r * w + c, ch) - nb[4]) > 8.0f ? 1 : 0;
+                            ++total;
+                        }
+                    have = total ? 100.0f * (float)count / (float)total : 0.0f;
+                }
                 if (stat == "edgeres")
                 {
                     // edgeres: bölgeden geçen yatay / yatık bir kenarın düz çizgiden ortalama sapması (piksel, karekök ortalama; 330): her
@@ -6902,7 +6922,7 @@ namespace Conqueror::Editor
                         }
                     }
                 }
-                if (stat == "detail" || stat == "vdetail" || stat == "edgeres")
+                if (stat == "detail" || stat == "vdetail" || stat == "edgeres" || stat == "speckle")
                 {
                     char buf[32];
                     std::snprintf(buf, sizeof(buf), "%.3f", have);
@@ -7458,6 +7478,13 @@ namespace Conqueror::Editor
             std::snprintf(line, sizeof(line), "SEQ TRAIL %d frames: mean %.1f, max %d pixels off the reference in flat areas", frames, sum / std::max(frames, 1), worst);
             Automation::Report(line);
             if (limit >= 0.0f && sum / std::max(frames, 1) > limit) { err = std::string("trail over the limit: ") + line; return false; }
+            return true;
+        });
+        // render_setting <ad> <değer>: etkin sahnenin görüntü ayarı (betiklerdeki RenderSettingSet adları: Post.AOIntensity ...).
+        // Testler şablonun varsayılanı dışındaki ayarlarla (kullanıcının projesindeki gibi) çalışabilsin
+        Automation::RegisterCommand("render_setting", [this](const Args& a, std::string& err) {
+            if (a.size() < 3 || !m_ActiveScene) { err = "render_setting <name> <value>"; return false; }
+            if (!CQS::SetRenderSettingFromText(*m_ActiveScene, a[1], a[2])) { err = "unknown setting or value: " + a[1]; return false; }
             return true;
         });
         // random_seed <n>: script'lerin ve motorun ortak rastgele sayı üretecini tohumlar (RandomRange, Random::Float). Rastgelelik içeren

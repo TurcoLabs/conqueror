@@ -1,0 +1,21 @@
+# template: fps
+# 340: SSAO en güçlü ayarlarda (Radius 5 m, Intensity 4, Power 4; Unity HDRP'nin üst sınırları) halelerde ve açık zeminde benekli
+# gürültü gösteriyordu (kullanıcının 18-19. resimleri). 16 örneğin gürültüsü Intensity x Power ile büyüyor, bulanıklaştırmadan sonra da
+# kalıyordu; üs 4 olduğundan gürültülü ortalama gerçekten ~10 seviye açık da çıkıyordu. Intensity x Power 2'den 4'e çıkarken 16'lık
+# çekirdek normal çevresinde 2-4 kez döndürülerek örneklenir (en çok 64 örnek; varsayılan ve şablon ayarlarında değişiklik yok).
+# 256 örnekli referansa göre AO görünümünde karekök ortalama hata 17.7 -> 2.2, 16 seviyeden çok sapan piksel %21.8 -> %0.04;
+# küplerin arasındaki ince örtü bulanıklaşmaz (geniş bir ikinci bulanıklaştırma denenip aralıkları açtığı için bırakıldı).
+# Ölçü: silindirlerin halelerinde 3x3 medyanından 8 seviyeden çok sapan piksel (eski %0.149 / %0.154, yeni %0.017 / %0.008)
+wait_until 3000 layout_settled
+wait 10
+focus Viewport
+cvar r.AntiAliasing 0
+render_setting Post.AORadius 5
+render_setting Post.AOIntensity 4
+render_setting Post.AOPower 4
+shading ao
+wait 60
+viewport_region 0.0 0.55 0.2 0.85 lum speckle <0.08
+viewport_region 0.8 0.55 1.0 0.85 lum speckle <0.08
+shading shaded
+quit

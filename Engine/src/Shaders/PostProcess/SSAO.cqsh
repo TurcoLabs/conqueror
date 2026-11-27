@@ -27,6 +27,11 @@ uniform float u_Radius = 0.6;
 uniform float u_Intensity = 1.0;
 uniform float u_Power = 1.5;
 uniform float u_Time = 0.0;
+// 340: örnek kümesi sayısı (1..4). Örtüyü büyüten ayarlarda (Intensity x Power yüksek; Unity HDRP'nin üst sınırı Intensity 4, Radius
+// 5 m) 16 örneğin gürültüsü büyütülüp bulanıklaştırmadan sonra da benekli kalıyordu (geniş halelerde ve açık zeminde noktalar). 16'lık
+// çekirdek normal çevresinde döndürülerek 2-4 kez örneklenir: gürültü kaynağında azalır, ince örtü (küplerin arası) bulanıklaşmaz.
+// Varsayılan ve şablon ayarlarında 1 (değişiklik yok)
+uniform int u_Sets = 1;
 
 vec3 ViewPos(vec2 uv)
 {
@@ -75,13 +80,17 @@ void main()
     vec3 n = ReconstructNormal(uv, p);
 
     float noise = InterleavedGradientNoise(gl_FragCoord.xy) * 6.2831853;
-    vec3 rnd = vec3(cos(noise), sin(noise), 0.0);
+    float radius = u_Radius;
+    float occlusion = 0.0;
+    int sets = clamp(u_Sets, 1, 4);
+    for (int set = 0; set < sets; ++set)
+    {
+    // Her küme çekirdeği normal çevresinde 2pi / küme sayısı kadar daha döndürür
+    float angle = noise + 6.2831853 * float(set) / float(sets);
+    vec3 rnd = vec3(cos(angle), sin(angle), 0.0);
     vec3 tangent = normalize(rnd - n * dot(rnd, n));
     vec3 bitangent = cross(n, tangent);
     mat3 tbn = mat3(tangent, bitangent, n);
-
-    float radius = u_Radius;
-    float occlusion = 0.0;
     for (int i = 0; i < 16; ++i)
     {
         float scale = float(i + 1) / 16.0;
@@ -105,6 +114,7 @@ void main()
         float rangeCheck = 1.0 - smoothstep(radius, 2.0 * radius, abs(p.z - sceneZ));
         occlusion += (sceneZ >= samplePos.z + 0.02 ? 1.0 : 0.0) * rangeCheck;
     }
-    float ao = 1.0 - (occlusion / 16.0) * u_Intensity;
+    }
+    float ao = 1.0 - (occlusion / (16.0 * float(sets))) * u_Intensity;
     FragAO = pow(clamp(ao, 0.0, 1.0), u_Power);
 }

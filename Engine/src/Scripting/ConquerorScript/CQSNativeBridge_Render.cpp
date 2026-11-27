@@ -335,6 +335,28 @@ namespace Conqueror::CQS
         }
     }
 
+    bool SetRenderSettingFromText(Conqueror::Scene& scene, const std::string& name, const std::string& value)
+    {
+        const SettingDef* d = FindSetting(name);
+        if (!d)
+            return false;
+        void* p = d->Ptr(scene.GetRenderSettings());
+        try
+        {
+            switch (d->K)
+            {
+                case Kind::Bool: *(bool*)p = value == "true" || value == "1"; return true;
+                case Kind::Int: *(int*)p = std::stoi(value); return true;
+                case Kind::Float: *(float*)p = std::stof(value); return true;
+                default: return false;
+            }
+        }
+        catch (...)
+        {
+            return false;
+        }
+    }
+
     void RegisterRenderNatives(Scripting::NativeRegistry* vm)
     {
         // Compute Shader (Unity ComputeShader.SetTexture / SetFloat / SetInt / SetVector / Dispatch)
