@@ -16,6 +16,7 @@
 #include "Renderer/RayTracing/RayTracedEffects.h"
 #include "Core/Console/ConsoleVariables.h"
 #include "Renderer/FSR2/FSR2Upscaler.h"
+#include "Renderer/FSR2/FSR2GL.h"
 #include "Renderer/Upscalers/DLSSUpscaler.h"
 #include "Renderer/Upscalers/XeSSUpscaler.h"
 #include "Renderer/Upscalers/MetalFXUpscaler.h"
@@ -170,6 +171,7 @@ namespace Conqueror
         LoadShader("RejectMix", "Engine/src/Shaders/PostProcess/RejectMix.cqsh");
         LoadShader("FSR2Reactive", "Engine/src/Shaders/PostProcess/FSR2Reactive.cqsh");
         LoadShader("FSR2Hold", "Engine/src/Shaders/PostProcess/FSR2Hold.cqsh");
+        LoadShader("FSR2FreezeMask", "Engine/src/Shaders/PostProcess/FSR2FreezeMask.cqsh");
         LoadShader("DepthOfField", "Engine/src/Shaders/PostProcess/DepthOfField.cqsh");
         LoadShader("MotionBlur", "Engine/src/Shaders/PostProcess/MotionBlur.cqsh");
         LoadShader("AutoExposure", "Engine/src/Shaders/PostProcess/AutoExposure.cqsh");
@@ -261,6 +263,8 @@ namespace Conqueror
         DestroyTarget(m_SpatialHold);
         DestroyTarget(m_FSR2HoldState[0]);
         DestroyTarget(m_FSR2HoldState[1]);
+        DestroyTarget(m_FSR2FreezeMask);
+        m_FSR2LightChangeFrames = 0;
         for (uint32_t& fb : m_FSR2HoldFramebuffer)
         {
             if (fb)
@@ -842,7 +846,11 @@ namespace Conqueror
         m_FSR2HoldOwner = owner;
         m_FSR2HoldFrame = m_FrameIndex;
         // TAA çıktısında (owner 3) ışık değişimini TAA bu karede zaten tüketti
-        const bool lightingChanged = owner == 3 ? m_TAALightingChanged : owner == 4 ? m_TAAULightingChanged : Renderer3D::ConsumeLightingChange(this);
+        // FSR AA'da (owner 1) FSR 2 bloğu değişimi girişten önce tüketti (354)
+        const bool lightingChanged = owner == 3 ? m_TAALightingChanged : owner == 4 ? m_TAAULightingChanged
+                                   : (owner == 1 && m_FSR2LightingState >= 0) ? m_FSR2LightingState == 1 : Renderer3D::ConsumeLightingChange(this);
+        if (owner == 1)
+            m_FSR2LightingState = -1;
         const uint32_t next = 1u - m_FSR2HoldIndex;
         EnsureTarget(m_FSR2Hold, w, h, GL_RGBA8);
         EnsureTarget(m_FSR2HoldState[0], w, h, GL_RGBA16F);
@@ -2361,6 +2369,36 @@ namespace Conqueror
                 }
             }
             prm.Reactive = fsrReactive;
+            // FSR AA (yerel çözünürlük): RCAS birikmiş görüntüdeki ince çizgileri (duvar ızgarası, uzak kenar) noktalı / benekli
+            // keskinleştiriyordu; yerel çözünürlükte keskinlik TAA'nınkiyle aynı (TAA Sharpness + hareket ederken artış)
+            const bool nativeFSR = m_AAMode == AntiAliasingMode::FSRAA && fsrW == m_Width && fsrH == m_Height;
+            // 354: yerel çözünürlükte kamera dururken FSR 2'nin geçmiş ağırlığı yüksek ve ince ayrıntı yalnız varyans kutusuyla kırpılıyor:
+            // namlu alevinin ışığı geçmişe girip tavan karolarının çizgilerinde ~1.5 saniye beyaz kalıyordu. En çok 6 kare süren ışık
+            // değişiminde FSR 2'nin birikim geçişi geçmişi dondurur, görüntüyü eskisi gibi gösterir (ffx_fsr2_accumulate.h; yerel TAA /
+            // TAAU'daki gibi); kendi hızıyla hareket eden nesneler (FSR2FreezeMask.cqsh) normal yoldan geçer
+            bool fsrFreeze = false;
+            m_FSR2LightingState = -1;
+            if (nativeFSR)
+            {
+                const bool lightingChanged = Renderer3D::ConsumeLightingChange(this);
+                m_FSR2LightingState = lightingChanged ? 1 : 0;
+                m_FSR2LightChangeFrames = lightingChanged ? m_FSR2LightChangeFrames + 1 : 0;
+                auto freezeMask = PostProcess::GetShader("FSR2FreezeMask");
+                if (lightingChanged && m_FSR2LightChangeFrames <= 6 && m_FSR2Valid && m_HasPrevViewProj && Valid(freezeMask))
+                {
+                    EnsureTarget(m_FSR2FreezeMask, m_Width, m_Height, GL_R8);
+                    glBindFramebuffer(GL_FRAMEBUFFER, m_FSR2FreezeMask.Framebuffer);
+                    glViewport(0, 0, (GLsizei)m_Width, (GLsizei)m_Height);
+                    freezeMask->Bind();
+                    freezeMask->SetInt("u_Velocity", 4);
+                    freezeMask->SetInt("u_HasVelocity", m_FinalHasVelocity ? 1 : 0);
+                    freezeMask->SetFloat2("u_Texel", glm::vec2(1.0f / (float)m_Width, 1.0f / (float)m_Height));
+                    BindTexture(4, m_FinalHasVelocity ? m_Velocity.Texture : 0);
+                    PostProcess::DrawFullscreenQuad();
+                    Renderer::GetStats().PostProcessPasses++;
+                    fsrFreeze = true;
+                }
+            }
             prm.Output = m_FSR2Output.Texture;
             prm.OutputFormat = GL_RGBA8;
             prm.RenderWidth = m_Width;
@@ -2374,15 +2412,15 @@ namespace Conqueror
             prm.FrameTimeMs = m_DeltaTime * 1000.0f;
             prm.Reset = !m_FSR2Valid;
             NoteTemporalStart(m_FSR2Valid);
-            // FSR AA (yerel çözünürlük): RCAS birikmiş görüntüdeki ince çizgileri (duvar ızgarası, uzak kenar) noktalı / benekli
-            // keskinleştiriyordu; yerel çözünürlükte keskinlik TAA'nınkiyle aynı (TAA Sharpness + hareket ederken artış)
-            const bool nativeFSR = m_AAMode == AntiAliasingMode::FSRAA && fsrW == m_Width && fsrH == m_Height;
             // 310: FSR AA + uzamsal yükseltici: FSR 2 büyütür ve kendi RCAS'ıyla keskinleştirir (Unreal'in FSR eklentisi gibi); üstüne NIS /
             // CAS eklenmez: NIS'in keskinleştirmesi her ölçüde RCAS'tan kötüydü (0.25 keskinlikte ayrıntı %76 / 58 / 62, küplerin arası 0.180 /
             // 0.167, duran görüntü %0.083; RCAS %84 / 67 / 72, 0.176 / 0.162, %0.081; eski FSR AA + NIS %74 / 61 / 65, 0.198 / 0.173, %0.101)
             prm.Sharpen = !nativeFSR && upSharp > 0.0f;
             prm.Sharpness = upSharp;
-            if (m_FSR2->Dispatch(prm))
+            FSR2GL::SetLightingFreeze(fsrFreeze, m_FSR2FreezeMask.Texture);
+            const bool fsrDispatched = m_FSR2->Dispatch(prm);
+            FSR2GL::SetLightingFreeze(false, 0);
+            if (fsrDispatched)
             {
                 m_FSR2Valid = true;
                 // 260: FSR AA'da kamera dururken ince boşluklar (küplerin arası) jitter yüzünden yanıp sönüyordu (FSR 2 boşluktaki

@@ -1,6 +1,7 @@
 // glad diğer başlıklardan (GLFW) önce: gpu_probe GL geri okuma çağrıları
 #define GLFW_INCLUDE_NONE
 #include "Scene/GodotNodes.h"
+#include "Core/Math/Random.h"
 #include "Core/Localization/Localization.h"
 #include "Panels/OcclusionPanel.h"
 #include "Scene/OcclusionCulling.h"
@@ -7457,6 +7458,13 @@ namespace Conqueror::Editor
             std::snprintf(line, sizeof(line), "SEQ TRAIL %d frames: mean %.1f, max %d pixels off the reference in flat areas", frames, sum / std::max(frames, 1), worst);
             Automation::Report(line);
             if (limit >= 0.0f && sum / std::max(frames, 1) > limit) { err = std::string("trail over the limit: ") + line; return false; }
+            return true;
+        });
+        // random_seed <n>: script'lerin ve motorun ortak rastgele sayı üretecini tohumlar (RandomRange, Random::Float). Rastgelelik içeren
+        // sahneler (namlu alevinin dönüşü / boyu, duman) iki koşuda aynı kareleri verir; eski / yeni build kare kare karşılaştırılabilir
+        Automation::RegisterCommand("random_seed", [](const Args& a, std::string& err) {
+            if (a.size() < 2) { err = "random_seed <n>"; return false; }
+            Math::Random::SetSeed((uint32_t)std::stoul(a[1]));
             return true;
         });
         // image_diff <a.png> <b.png> u0 v0 u1 v1 [max% p] [diff n]: iki ekran görüntüsünün (screenshot / screenshot_frames) bölgede (0..1)

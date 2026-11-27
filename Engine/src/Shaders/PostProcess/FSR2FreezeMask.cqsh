@@ -1,0 +1,37 @@
+#language GLSL
+// 354: FSR AA (FSR 2 yerel çözünürlükte) kısa ışık değişimi (namlu alevinin ışığı, en çok 6 kare). Yerel çözünürlükte kamera dururken
+// FSR 2'nin geçmiş ağırlığı yüksektir ve ince ayrıntılar (tavan karolarının çizgileri) yalnız varyans kutusuyla kırpılır: alevin
+// aydınlattığı kare geçmişe girip çizgilerde ~1.5 saniye beyaz kalıyordu. Yerel TAA ve TAAU'daki gibi (338) kısa ışık değişimi geçmişe
+// yazılmaz: FSR 2'nin birikim geçişi o karelerde duran, var olan, açılmamış, tepkisiz pikselin geçmişini değiştirmeden saklar, görüntüyü
+// eskisi gibi gösterir (ffx_fsr2_accumulate.h). Bu geçiş, donmayacak pikselleri işaretler: kendi hızıyla hareket eden nesneler (silah,
+// hedef); onların yansıması ve konumu ışıktan bağımsız değişir
+#type vertex
+#version 450 core
+layout(location = 0) in vec2 a_Position;
+layout(location = 1) in vec2 a_TexCoord;
+out vec2 v_UV;
+void main()
+{
+    v_UV = a_TexCoord;
+    gl_Position = vec4(a_Position, 0.0, 1.0);
+}
+
+#type fragment
+#version 450 core
+layout(location = 0) out vec4 o_Color;
+in vec2 v_UV;
+uniform sampler2D u_Velocity;   // nesne hız tamponu (xy uv: şimdiki - önceki; x >= 5000 hızı yok)
+uniform int u_HasVelocity = 0;
+uniform vec2 u_Texel;
+
+void main()
+{
+    float moving = 0.0;
+    if (u_HasVelocity == 1)
+    {
+        vec4 v = texture(u_Velocity, v_UV);
+        if (v.x < 5000.0 && length(v.xy / u_Texel) > 0.02)
+            moving = 1.0;
+    }
+    o_Color = vec4(moving, 0.0, 0.0, 1.0);
+}

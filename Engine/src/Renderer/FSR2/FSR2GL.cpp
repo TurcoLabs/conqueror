@@ -25,7 +25,10 @@ namespace Conqueror::FSR2GL
     namespace
     {
         constexpr int kMaxResources = 64;
-        constexpr GLuint kUniformBufferBase = 24;   // motorun UBO bağlamalarıyla (0 kare, 1 ışık, 7 son geçiş) çakışmaz
+        constexpr GLuint kUniformBufferBase = 24;
+        constexpr GLuint kCqUniformBinding = kUniformBufferBase + 6;   // 354: motorun birikim geçişine bayrağı (cbCq)
+        bool s_CqFreeze = false;
+        GLuint s_CqFreezeMask = 0;   // motorun UBO bağlamalarıyla (0 kare, 1 ışık, 7 son geçiş) çakışmaz
 
         struct FormatInfo
         {
@@ -109,6 +112,8 @@ namespace Conqueror::FSR2GL
             std::vector<GLuint> Cbs;                  // FSR 2 sabit tampon sırası -> UBO bağlama noktası
             GLint MaxTextureUnit = -1;
             GLint MaxImageUnit = -1;
+            GLint CqMaskUnit = -1;   // 354: r_cq_freeze_mask (yalnız birikim geçişi)
+            bool HasCq = false;      // 354: cbCq bloğu
         };
 
         struct Context
@@ -122,6 +127,7 @@ namespace Conqueror::FSR2GL
             GLuint SamplerPoint = 0;
             GLuint SamplerLinear = 0;
             GLuint Ubos[FFX_MAX_NUM_CONST_BUFFERS] = {};
+            GLuint CqUbo = 0;
         };
 
         Context* Ctx(FfxFsr2Interface* backendInterface)
@@ -485,6 +491,9 @@ namespace Conqueror::FSR2GL
             if (c->SamplerPoint) glDeleteSamplers(1, &c->SamplerPoint);
             if (c->SamplerLinear) glDeleteSamplers(1, &c->SamplerLinear);
             glDeleteBuffers(FFX_MAX_NUM_CONST_BUFFERS, c->Ubos);
+            if (c->CqUbo)
+                glDeleteBuffers(1, &c->CqUbo);
+            c->CqUbo = 0;
             c->SamplerPoint = c->SamplerLinear = 0;
             std::memset(c->Ubos, 0, sizeof(c->Ubos));
             c->Jobs.clear();
@@ -624,6 +633,15 @@ namespace Conqueror::FSR2GL
                 {
                     const char kind = uname.back();
                     const std::string image = uname.substr(7, uname.size() - 7 - 3);
+                    if (image == "r_cq_freeze_mask")
+                    {
+                        // 354: motorun maskesi, SDK'nın kaynak tablosunda yok
+                        const GLint unit = nextTexture++;
+                        glProgramUniform1i(program, values[1], unit);
+                        p->CqMaskUnit = unit;
+                        p->MaxTextureUnit = std::max(p->MaxTextureUnit, unit);
+                        continue;
+                    }
                     auto it = std::find(srvNames.begin(), srvNames.end(), image);
                     size_t idx = (size_t)(it - srvNames.begin());
                     if (it == srvNames.end())
@@ -654,6 +672,12 @@ namespace Conqueror::FSR2GL
                 std::string bname = nameBuf;
                 if (bname.size() > 2 && bname.compare(bname.size() - 2, 2, "_t") == 0)
                     bname.resize(bname.size() - 2);   // cbFSR2_t -> cbFSR2 (SDK'nın aradığı ad)
+                if (bname == "cbCq")
+                {
+                    glUniformBlockBinding(program, (GLuint)b, kCqUniformBinding);
+                    p->HasCq = true;
+                    continue;
+                }
                 const GLuint binding = kUniformBufferBase + (GLuint)b;
                 glUniformBlockBinding(program, (GLuint)b, binding);
                 cbNames.push_back(bname);
@@ -781,6 +805,22 @@ namespace Conqueror::FSR2GL
                     glNamedBufferSubData(c->Ubos[k], 0, bytes, job.cbs[k].data);
                 glBindBufferBase(GL_UNIFORM_BUFFER, p->Cbs[k], c->Ubos[k]);
             }
+            if (p->CqMaskUnit >= 0)
+            {
+                glBindTextureUnit((GLuint)p->CqMaskUnit, s_CqFreeze ? s_CqFreezeMask : 0);
+                glBindSampler((GLuint)p->CqMaskUnit, c->SamplerPoint);
+            }
+            if (p->HasCq)
+            {
+                if (!c->CqUbo)
+                {
+                    glCreateBuffers(1, &c->CqUbo);
+                    glNamedBufferData(c->CqUbo, 16, nullptr, GL_DYNAMIC_DRAW);
+                }
+                const int32_t data[4] = { s_CqFreeze ? 1 : 0, 0, 0, 0 };
+                glNamedBufferSubData(c->CqUbo, 0, sizeof(data), data);
+                glBindBufferBase(GL_UNIFORM_BUFFER, kCqUniformBinding, c->CqUbo);
+            }
             glDispatchCompute(std::max(job.dimensions[0], 1u), std::max(job.dimensions[1], 1u), std::max(job.dimensions[2], 1u));
             glMemoryBarrier(GL_ALL_BARRIER_BITS);
             maxTex = std::max(maxTex, p->MaxTextureUnit);
@@ -813,6 +853,7 @@ namespace Conqueror::FSR2GL
                 glBindImageTexture((GLuint)u, 0, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8);
             for (GLuint k = 0; k < FFX_MAX_NUM_CONST_BUFFERS; ++k)
                 glBindBufferBase(GL_UNIFORM_BUFFER, kUniformBufferBase + k, 0);
+            glBindBufferBase(GL_UNIFORM_BUFFER, kCqUniformBinding, 0);
             glUseProgram(0);
             return FFX_OK;
         }
@@ -873,5 +914,11 @@ namespace Conqueror::FSR2GL
             r.name[n] = 0;
         }
         return r;
+    }
+
+    void SetLightingFreeze(bool freeze, uint32_t mask)
+    {
+        s_CqFreeze = freeze;
+        s_CqFreezeMask = freeze ? (GLuint)mask : 0;
     }
 }

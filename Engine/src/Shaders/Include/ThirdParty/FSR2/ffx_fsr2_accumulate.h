@@ -22,6 +22,54 @@
 #ifndef FFX_FSR2_ACCUMULATE_H
 #define FFX_FSR2_ACCUMULATE_H
 
+// Conqueror Engine change (354): a short lighting change that the renderer reports (a muzzle flash light, at most 6 frames) is not
+// written into the history, as in the engine's TAA and TAAU (338): at a 1:1 ratio with a still camera the history weight is high and
+// thin details are only clipped by the variance box, so the flash frame stayed in the tile lines of a ceiling and faded over ~1.5 s.
+// In those frames an existing, still, non-disoccluded, non-reactive pixel that is not on an object moving on its own (r_cq_freeze_mask)
+// keeps its reprojected history, lock and luma history unchanged, while the output shows the frame exactly as before (the flash
+// included). Showing the frozen history plus the light's low-frequency contribution instead left outlines where frozen and normal
+// pixels met (smoke puffs, the flame's quad, the weapon's vacated area)
+#if defined(FFX_GLSL)
+layout (set = 1, binding = 60, std140) uniform cbCq_t
+{
+    FfxInt32 iCqLightingFreeze;
+    FfxInt32 iCqPad0;
+    FfxInt32 iCqPad1;
+    FfxInt32 iCqPad2;
+} cbCq;
+layout (set = 1, binding = 61) uniform texture2D r_cq_freeze_mask;
+
+// How much of the pixel is frozen (0..1), smooth in the reactive and depth clip factors and in the motion. A sprite of this frame
+// (flame, smoke) takes the normal path: frozen under it, the display had to show the raw sprite pixels and its outline (with the
+// ceiling's lines aliased inside it) stayed visible for a few frames. A moving pixel (the camera kicked by recoil) is not frozen: its
+// history would only be resampled for those frames, softening the floor's lines afterwards; with motion the history weight is low
+// and the flash fades quickly anyway
+FfxFloat32 CqFreezeWeight(const AccumulationPassCommonParams params)
+{
+    if (cbCq.iCqLightingFreeze == 0 || !params.bIsExistingSample || params.bIsResetFrame)
+        return 0.0f;
+    const FfxInt32x2 iRenderPos = FfxInt32x2(params.fHrUv * FfxFloat32x2(RenderSize()));
+    if (texelFetch(r_cq_freeze_mask, iRenderPos, 0).r > 0.5f)
+        return 0.0f;
+    return (1.0f - smoothstep(0.02f, 0.3f, params.fDilatedReactiveFactor)) * (1.0f - smoothstep(0.02f, 0.3f, params.fDepthClipFactor))
+         * (1.0f - smoothstep(0.02f, 0.1f, params.fHrVelocity));
+}
+FfxBoolean CqLightingFreezeFrame()
+{
+    return cbCq.iCqLightingFreeze != 0;
+}
+#else
+FfxFloat32 CqFreezeWeight(const AccumulationPassCommonParams params)
+{
+    return 0.0f;
+}
+FfxBoolean CqLightingFreezeFrame()
+{
+    return FFX_FALSE;
+}
+#endif
+
+
 FfxFloat32 GetPxHrVelocity(FfxFloat32x2 fMotionVector)
 {
     return length(fMotionVector * DisplaySize());
@@ -170,7 +218,7 @@ FfxFloat32x3 ComputeBaseAccumulationWeight(const AccumulationPassCommonParams pa
     return fBaseAccumulation.xxx;
 }
 
-FfxFloat32 ComputeLumaInstabilityFactor(const AccumulationPassCommonParams params, RectificationBox clippingBox, FfxFloat32 fThisFrameReactiveFactor, FfxFloat32 fLuminanceDiff)
+FfxFloat32 ComputeLumaInstabilityFactor(const AccumulationPassCommonParams params, RectificationBox clippingBox, FfxFloat32 fThisFrameReactiveFactor, FfxFloat32 fLuminanceDiff, FfxBoolean bCqFreeze)
 {
     const FfxFloat32 fUnormThreshold = 1.0f / 255.0f;
     const FfxInt32 N_MINUS_1 = 0;
@@ -234,7 +282,10 @@ FfxFloat32 ComputeLumaInstabilityFactor(const AccumulationPassCommonParams param
     fCurrentFrameLumaHistory[N_MINUS_2] = fCurrentFrameLumaHistory[N_MINUS_1];
     fCurrentFrameLumaHistory[N_MINUS_1] = fCurrentFrameLuma;
 
-    StoreLumaHistory(params.iPxHrPos, fCurrentFrameLumaHistory);
+    // Conqueror Engine change (354): a frozen pixel keeps its luma history (the flash frame is not a flicker)
+    if (!bCqFreeze) {
+        StoreLumaHistory(params.iPxHrPos, fCurrentFrameLumaHistory);
+    }
 
     return fLumaInstability * FfxFloat32(fCurrentFrameLumaHistory[N_MINUS_4] != 0);
 }
@@ -307,15 +358,38 @@ void Accumulate(FfxInt32x2 iPxHrPos)
 
     FfxFloat32 fThisFrameReactiveFactor = ffxMax(params.fDilatedReactiveFactor, fTemporalReactiveFactor);
 
+    // A history that was reactive in the last frames (a flame or tracer sprite that is gone now) is not frozen: freezing kept the
+    // vanished sprite in the history, and its outline stayed on the wall for several frames
+    // Read without filtering, so that the still-frame count survives exactly
+    const FfxFloat32 fCqReprojectedAlpha = LoadHistory(clamp(FfxInt32x2(params.fReprojectedHrUv * FfxFloat32x2(DisplaySize())), FfxInt32x2(0, 0), FfxInt32x2(DisplaySize()) - 1)).w;
+    // The temporal reactive fraction of the history pixel (read without filtering: a filtered read mixes the still-frame counts of
+    // neighbouring pixels into the fraction). In RGBA16F it keeps only strong recent reactivity once a pixel has been still for a while
+    // (0.25 steps above 256 still frames), which is what is wanted here: thin smoke that drifted over the surface does not stop it from
+    // freezing, a sprite that covered the pixel a frame ago does
+    FfxFloat32 fCqHistoryReactive = 0.0f;
+    if (CqLightingFreezeFrame() && params.bIsExistingSample) {
+        const FfxFloat32 fEncoded = abs(fCqReprojectedAlpha);
+        fCqHistoryReactive = ffxSaturate(fEncoded - floor(fEncoded));
+    }
+    const FfxFloat32 fCqFreeze = CqFreezeWeight(params) * (1.0f - smoothstep(0.005f, 0.02f, fCqHistoryReactive));
+    // Locks, luma history and the stored alpha follow the dominant side; the colour is blended
+    const FfxBoolean bCqFreeze = fCqFreeze > 0.5f;
+    const FfxFloat32x3 fCqFrozenColor = YCoCgToRGB(fHistoryColor);
+    // Conqueror Engine change (354): the alpha the history had, stored back unchanged for a frozen pixel
+    const FfxFloat32x2 fCqLockStatusBefore = fLockStatus;
+
     FfxFloat32 fLuminanceDiff = 0.0f;
     FfxFloat32 fLockContributionThisFrame = 0.0f;
     UpdateLockStatus(params, fThisFrameReactiveFactor, lockState, fLockStatus, fLockContributionThisFrame, fLuminanceDiff);
+    if (bCqFreeze) {
+        fLockStatus = fCqLockStatusBefore;
+    }
 
     // Load upsampled input color
     RectificationBox clippingBox;
     FfxFloat32x4 fUpsampledColorAndWeight = ComputeUpsampledColorAndWeight(params, clippingBox, fThisFrameReactiveFactor);
     
-    const FfxFloat32 fLumaInstabilityFactor = ComputeLumaInstabilityFactor(params, clippingBox, fThisFrameReactiveFactor, fLuminanceDiff);
+    const FfxFloat32 fLumaInstabilityFactor = ComputeLumaInstabilityFactor(params, clippingBox, fThisFrameReactiveFactor, fLuminanceDiff, bCqFreeze);
 
 
     FfxFloat32x3 fAccumulation = ComputeBaseAccumulationWeight(params, fThisFrameReactiveFactor, bInMotionLastFrame, fUpsampledColorAndWeight.w, lockState, fLumaInstabilityFactor, fStillFrames);
@@ -328,8 +402,15 @@ void Accumulate(FfxInt32x2 iPxHrPos)
 
         Accumulate(params, fHistoryColor, fAccumulation, fUpsampledColorAndWeight);
     }
+    // Conqueror Engine change (354): shown as accumulated; stored with the reprojected history unchanged (no rectification, no blend)
+    // as far as the pixel is frozen
+    FfxFloat32x3 fCqOutputColor = fHistoryColor;
+    if (!params.bIsNewSample) {
+        fHistoryColor = ffxLerp(fHistoryColor, fCqFrozenColor, fCqFreeze);
+    }
 
     fHistoryColor = UnprepareRgb(fHistoryColor, Exposure());
+    fCqOutputColor = UnprepareRgb(fCqOutputColor, Exposure());
 
     FinalizeLockStatus(params, fLockStatus, fUpsampledColorAndWeight.w);
 
@@ -338,11 +419,15 @@ void Accumulate(FfxInt32x2 iPxHrPos)
 
     // Conqueror Engine change: alpha = sign (in motion) x (still frames + reactive factor), see ReprojectHistoryColor
     const FfxFloat32 fStillNow = FfxFloat32(params.fHrVelocity < 0.001f && DownscaleFactor().x > 0.7f) * ffxMin(fStillFrames + 1.0f, 400.0f);
-    StoreInternalColorAndWeight(iPxHrPos, FfxFloat32x4(fHistoryColor, (fTemporalReactiveFactor < 0.0f ? -1.0f : 1.0f) * (ffxMin(abs(fTemporalReactiveFactor), 0.99f) + fStillNow)));
+    FfxFloat32 fStoredAlpha = (fTemporalReactiveFactor < 0.0f ? -1.0f : 1.0f) * (ffxMin(abs(fTemporalReactiveFactor), 0.99f) + fStillNow);
+    if (bCqFreeze) {
+        fStoredAlpha = fCqReprojectedAlpha;   // frozen: the history's alpha unchanged
+    }
+    StoreInternalColorAndWeight(iPxHrPos, FfxFloat32x4(fHistoryColor, fStoredAlpha));
 
     // Output final color when RCAS is disabled
 #if FFX_FSR2_OPTION_APPLY_SHARPENING == 0
-    WriteUpscaledOutput(iPxHrPos, fHistoryColor);
+    WriteUpscaledOutput(iPxHrPos, fCqOutputColor);
 #endif
     StoreNewLocks(iPxHrPos, 0);
 }

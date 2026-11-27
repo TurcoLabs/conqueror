@@ -250,6 +250,10 @@ namespace Conqueror
         RenderTarget m_FSR2HoldState[2];       // FSR AA kenar ortalaması (rgb)
         uint32_t m_FSR2HoldIndex = 0;
         uint32_t m_FSR2HoldFramebuffer[2] = { 0, 0 };
+        // 354: FSR AA'da kısa ışık değişimi (namlu alevi) FSR 2'nin geçmişine yazılmaz (ffx_fsr2_accumulate.h, FSR2FreezeMask.cqsh)
+        RenderTarget m_FSR2FreezeMask;  // donmayan pikseller: kendi hızıyla hareket eden nesneler (iç çözünürlük, R8)
+        int m_FSR2LightChangeFrames = 0;
+        int m_FSR2LightingState = -1;   // -1: bu karede tüketilmedi; 0 / 1: FSR 2 bloğu tüketti (tutucu aynı değeri kullanır)
         bool m_FSR2HoldValid = false;
         int m_FSR2HoldOwner = 0;
         uint32_t m_FSR2HoldFrame = 0;

@@ -1,0 +1,53 @@
+# template: fps
+# 354: FSR AA'da (yerel çözünürlükte FSR 2) köprünün altında nişan alıp ateş edince tavan karolarının çizgileri beyazlıyor, ~1.5
+# saniyede sönüyordu (TAA + NIS'teki 338'in FSR 2 karşılığı). Yerel çözünürlükte kamera dururken FSR 2'nin geçmiş ağırlığı yüksek ve
+# ince ayrıntı yalnız varyans kutusuyla kırpılıyor: alevin ışığı geçmişe girip çizgilerde kalıyordu. En çok 6 kare süren ışık
+# değişiminde FSR 2'nin birikim geçişi duran, açılmamış, tepkisiz pikselin geçmişini değiştirmeden saklar, görüntüyü eskisi gibi
+# gösterir (ffx_fsr2_accumulate.h; kendi hızıyla hareket eden nesneler FSR2FreezeMask.cqsh ile dışarıda). random_seed: alevin dönüşü /
+# boyu iki geçişte aynı. Ölçü: alevden sonraki 31 karede SSAA'nın düz olduğu yerde 12 seviyeden çok sapan piksel, kare başına
+# (eski ortalama 12298, en çok 22347; yeni 0)
+timeout 400
+wait 60
+focus Game
+play
+wait 30
+script set Pistol@Weapon recoilPitch float 0
+script set Pistol@Weapon recoilYaw float 0
+script set Pistol@Weapon hipSpread float 0
+script set Pistol@Weapon aimSpread float 0
+script set Pistol@Weapon moveSpread float 0
+cvar r.AntiAliasing 7
+cvar r.Upscaler 0
+entity move Player 0 0.9 -11.8
+wait 4
+script set Player@FirstPersonShooter yaw float 0
+script set Player@FirstPersonShooter pitch float 12
+wait 120
+random_seed 7
+record_start png fixed fps=60 out={work}/fire354_ref
+wait 6
+script set Player@FirstPersonShooter fireInput bool true
+wait 2
+script set Player@FirstPersonShooter fireInput bool false
+wait 40
+record_stop
+wait 30
+cvar r.AntiAliasing 26
+cvar r.Upscaler 0
+entity move Player 0 0.9 -11.8
+wait 4
+script set Player@FirstPersonShooter yaw float 0
+script set Player@FirstPersonShooter pitch float 12
+wait 120
+random_seed 7
+record_start png fixed fps=60 out={work}/fire354_fsr
+wait 6
+script set Player@FirstPersonShooter fireInput bool true
+wait 2
+script set Player@FirstPersonShooter fireInput bool false
+wait 40
+record_stop
+image_seq_trail {work}/fire354_ref {work}/fire354_fsr 9 39 0 0 1034 170 max 500 diff 12
+stop
+wait 5
+quit
