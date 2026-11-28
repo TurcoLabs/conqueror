@@ -1,0 +1,158 @@
+#language GLSL
+// 354: kısa süren ışık değişiminin (namlu alevinin nokta ışığı: bir-birkaç kare) katkısı. FSR AA'da FSR 2'nin girdisinden çıkarılır
+// (Composite bu HDR görüntüyle bir kez daha çalışır), gösterilen çıktıya ışıklı ve ışıksız LDR görüntünün farkı geri eklenir: FSR 2'nin geçmişi
+// alevli kareyi hiç görmez. Kamera geri tepmeyle kıpırdadığında da (pikseller hareketli, birikim geçişinin ışık dondurması onlara uygulanmaz)
+// tavanın karo çizgileri bir buçuk saniye beyaz kalıyordu.
+// Katkı ileri gölgelendiricinin kendi BRDF'siyle (Lighting.glsl, CQ_EvaluateBRDF) G-buffer'dan bulunur: normal / pürüzlülük / metaliklik
+// (ek 1), yayınık albedo (ek 2), konum sahnenin titreşimli derinliğinden. Nokta ve spot ışıkların gölgesi yok; sis ileri gölgelendiricideki
+// gibi uygulanır. u_*Color ışığın bu karedeki fazlası (ışık / renk x şiddet - kararlı değeri; sönen ışıkta negatif).
+// u_Mode 1: gösterim = u_Scene (FSR 2'nin ışıksız girdiden çıktısı) + u_Lit - u_Unlit (bu karenin ışıklı / ışıksız LDR görüntüsü)
+#type vertex
+#version 450 core
+layout(location = 0) in vec2 a_Position;
+layout(location = 1) in vec2 a_TexCoord;
+out vec2 v_UV;
+void main()
+{
+    v_UV = a_TexCoord;
+    gl_Position = vec4(a_Position, 0.0, 1.0);
+}
+
+#type fragment
+#version 450 core
+#include "Include/Common.glsl"
+#include "Include/FrameData.glsl"
+#include "Include/Lighting.glsl"
+
+layout(location = 0) out vec4 FragColor;
+in vec2 v_UV;
+
+#define CQ_MAX_TRANSIENT 8
+uniform int u_Mode = 0;
+uniform sampler2D u_Lit;        // mod 1
+uniform sampler2D u_Unlit;      // mod 1
+uniform sampler2D u_Scene;      // sahnenin HDR rengi (mod 1: FSR 2'nin çıktısı)
+uniform sampler2D u_Depth;      // sahne derinliği (titreşimli)
+uniform sampler2D u_GNormal;    // xy oktahedral normal, z pürüzlülük, w 2 + hareket bayrağı + metaliklik (0: opak yüzey yok)
+uniform sampler2D u_GAlbedo;    // yayınık albedo (albedo x (1 - metaliklik))
+uniform mat4 u_InvViewProj;     // titreşimli
+uniform vec3 u_CameraPos;
+uniform int u_PointCount = 0;
+uniform vec4 u_PointPosRange[CQ_MAX_TRANSIENT];
+uniform vec4 u_PointColor[CQ_MAX_TRANSIENT];
+uniform vec4 u_PointAtten[CQ_MAX_TRANSIENT];
+uniform vec4 u_PointProfile0[CQ_MAX_TRANSIENT];
+uniform vec4 u_PointProfile1[CQ_MAX_TRANSIENT];
+uniform int u_SpotCount = 0;
+uniform vec4 u_SpotPosRange[CQ_MAX_TRANSIENT];
+uniform vec4 u_SpotColor[CQ_MAX_TRANSIENT];
+uniform vec4 u_SpotDirCos[CQ_MAX_TRANSIENT];          // xyz yön, w dış koninin kosinüsü
+uniform vec4 u_SpotAttenCosInner[CQ_MAX_TRANSIENT];   // xyz sönüm, w iç koninin kosinüsü
+uniform vec4 u_SpotProfile0[CQ_MAX_TRANSIENT];
+uniform vec4 u_SpotProfile1[CQ_MAX_TRANSIENT];
+
+vec3 OctDecode(vec2 e)
+{
+    vec3 n = vec3(e, 1.0 - abs(e.x) - abs(e.y));
+    if (n.z < 0.0)
+        n.xy = (1.0 - abs(n.yx)) * vec2(n.x >= 0.0 ? 1.0 : -1.0, n.y >= 0.0 ? 1.0 : -1.0);
+    return normalize(n);
+}
+
+float FogKeep(vec3 worldPos)
+{
+    // CQ_ApplyFog: renk = mix(renk, sis, f); ışığın katkısından (1 - f) kalır
+    if (CQ_Frame.FogColor.a < 0.5)
+        return 1.0;
+    float dist = length(worldPos - u_CameraPos);
+    int mode = int(CQ_Frame.FogParams.x + 0.5);
+    float density = CQ_Frame.FogParams.y;
+    float f;
+    if (mode == 0)
+        f = Saturate((dist - CQ_Frame.FogParams.z) / max(CQ_Frame.FogParams.w - CQ_Frame.FogParams.z, 1e-3));
+    else if (mode == 1)
+        f = 1.0 - exp(-density * dist);
+    else
+        f = 1.0 - exp(-Pow2(density * dist));
+    float heightFalloff = CQ_Frame.FogParams2.x;
+    if (heightFalloff > 0.0)
+        f *= exp(-heightFalloff * max(worldPos.y - CQ_Frame.FogParams2.y, 0.0));
+    return 1.0 - Saturate(f);
+}
+
+void main()
+{
+    ivec2 p = ivec2(gl_FragCoord.xy);
+    vec4 scene = texelFetch(u_Scene, p, 0);
+    if (u_Mode == 1)
+    {
+        FragColor = vec4(clamp(scene.rgb + texelFetch(u_Lit, p, 0).rgb - texelFetch(u_Unlit, p, 0).rgb, 0.0, 1.0), scene.a);
+        return;
+    }
+    vec4 gn = texelFetch(u_GNormal, p, 0);
+    float depth = texelFetch(u_Depth, p, 0).r;
+    if (gn.w < 1.5 || depth >= 1.0)
+    {
+        FragColor = scene;   // gökyüzü / opak yüzey verisi yok
+        return;
+    }
+    vec4 world = u_InvViewProj * vec4(v_UV * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
+    world /= world.w;
+
+    float flags = gn.w - 2.0;
+    float metallic = clamp(flags >= 1.5 ? flags - 2.0 : flags, 0.0, 1.0);
+    vec3 diffuseAlbedo = texelFetch(u_GAlbedo, p, 0).rgb;
+
+    CQ_Surface s;
+    s.Position = world.xyz;
+    s.Normal = OctDecode(gn.xy);
+    s.GeometricNormal = s.Normal;
+    // G-buffer yayınık albedoyu tutar (albedo x (1 - metaliklik)); tam metalde yansıma rengi bilinmez, gri kabul edilir
+    s.Albedo = metallic < 0.95 ? diffuseAlbedo / (1.0 - metallic) : vec3(0.56);
+    s.Metallic = metallic;
+    s.Roughness = clamp(gn.z, 0.045, 1.0);
+    s.AO = 1.0;
+    s.Emission = vec3(0.0);
+    s.Alpha = 1.0;
+    s.LightmapUV = vec2(0.0);
+    s.ShadingModel = 0;
+    s.SubsurfaceColor = vec3(0.0);
+    s.SubsurfaceAmount = 0.0;
+    s.Tangent = vec3(1.0, 0.0, 0.0);
+
+    vec3 V = normalize(u_CameraPos - s.Position);
+    vec3 F0 = mix(vec3(0.04), s.Albedo, s.Metallic);
+    float NdotV = max(dot(s.Normal, V), 1e-4);
+    vec2 envBRDF = texture(u_BRDFLUT, vec2(NdotV, s.Roughness)).rg;
+    vec3 energyCompensation = 1.0 + F0 * (1.0 / max(envBRDF.x + envBRDF.y, 1e-3) - 1.0);
+
+    vec3 Lo = vec3(0.0);
+    for (int i = 0; i < u_PointCount; ++i)
+    {
+        vec3 toLight = u_PointPosRange[i].xyz - s.Position;
+        float dist = length(toLight);
+        if (dist >= u_PointPosRange[i].w)
+            continue;
+        vec3 L = toLight / max(dist, 1e-4);
+        float att = CQ_Attenuation(dist, u_PointPosRange[i].w, u_PointAtten[i].xyz);
+        att *= CQ_LightProfile(u_PointProfile0[i], u_PointProfile1[i], acos(clamp(-L.y, -1.0, 1.0)) / 3.14159265);
+        Lo += CQ_EvaluateBRDF(s, V, L, u_PointColor[i].rgb * att, F0, energyCompensation);
+    }
+    for (int i = 0; i < u_SpotCount; ++i)
+    {
+        vec3 toLight = u_SpotPosRange[i].xyz - s.Position;
+        float dist = length(toLight);
+        if (dist >= u_SpotPosRange[i].w)
+            continue;
+        vec3 L = toLight / max(dist, 1e-4);
+        float cosTheta = dot(-L, normalize(u_SpotDirCos[i].xyz));
+        float cone = smoothstep(u_SpotDirCos[i].w, u_SpotAttenCosInner[i].w, cosTheta);
+        if (cone <= 0.0)
+            continue;
+        float att = CQ_Attenuation(dist, u_SpotPosRange[i].w, u_SpotAttenCosInner[i].xyz) * cone;
+        att *= CQ_LightProfile(u_SpotProfile0[i], u_SpotProfile1[i],
+                               acos(clamp(cosTheta, -1.0, 1.0)) / max(acos(clamp(u_SpotDirCos[i].w, -1.0, 1.0)), 1e-3));
+        Lo += CQ_EvaluateBRDF(s, V, L, u_SpotColor[i].rgb * att, F0, energyCompensation);
+    }
+    FragColor = vec4(max(scene.rgb - Lo * FogKeep(s.Position), vec3(0.0)), scene.a);
+}

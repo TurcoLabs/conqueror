@@ -3286,6 +3286,7 @@ namespace Conqueror
                 continue;
             auto [transform, pointLight] = pointLightView.get<TransformComponent, PointLightComponent>(entity);
             Renderer3D::AddPointLight(glm::vec3(transform.WorldTransform[3]), pointLight);
+            Renderer3D::SetLastPointLightId((uint64_t)(uint32_t)entity + 1);
             if (auto* profile = m_Registry.try_get<LightProfileComponent>(entity))
             {
                 glm::vec4 p0, p1;
@@ -3301,6 +3302,7 @@ namespace Conqueror
                 continue;
             auto [transform, spotLight] = spotLightView.get<TransformComponent, SpotLightComponent>(entity);
             Renderer3D::AddSpotLight(glm::vec3(transform.WorldTransform[3]), spotLight);
+            Renderer3D::SetLastSpotLightId((uint64_t)(uint32_t)entity + 1);
             if (auto* profile = m_Registry.try_get<LightProfileComponent>(entity))
             {
                 glm::vec4 p0, p1;

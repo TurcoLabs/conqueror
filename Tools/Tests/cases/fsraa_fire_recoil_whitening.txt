@@ -1,0 +1,49 @@
+# template: fps
+# 354 (geri tepmeyle): FSR AA'da köprünün altında ateş edince tavan karolarının çizgileri ~1.5 saniye beyaz kalıyordu. Geri tepme
+# kamerayı her atışta kıpırdattığı için pikseller hareketli sayılıyor, FSR 2'nin birikim geçişindeki ışık dondurması onlara
+# uygulanmıyordu (fsraa_fire_whitening kamera dururken). Namlu alevinin nokta ışığının katkısı artık FSR 2'nin girdisinden
+# çıkarılıp gösterilen görüntüye eklenir (TransientLight.cqsh). Ölçü: alevden sonraki 31 karede SSAA'nın düz olduğu yerde 12
+# seviyeden çok sapan piksel, kare başına (eski ortalama 26.3 / 27.8, en çok 471 / 488; yeni 2.8 / 1.5, en çok 18 / 15)
+timeout 400
+wait 60
+focus Game
+play
+wait 30
+script set Pistol@Weapon hipSpread float 0
+script set Pistol@Weapon aimSpread float 0
+script set Pistol@Weapon moveSpread float 0
+cvar r.AntiAliasing 7
+cvar r.Upscaler 0
+entity move Player 0 0.9 -11.8
+wait 4
+script set Player@FirstPersonShooter yaw float 0
+script set Player@FirstPersonShooter pitch float 12
+wait 120
+random_seed 7
+record_start png fixed fps=60 out={work}/fire354r_ref
+wait 6
+script set Player@FirstPersonShooter fireInput bool true
+wait 2
+script set Player@FirstPersonShooter fireInput bool false
+wait 40
+record_stop
+wait 30
+cvar r.AntiAliasing 26
+cvar r.Upscaler 0
+entity move Player 0 0.9 -11.8
+wait 4
+script set Player@FirstPersonShooter yaw float 0
+script set Player@FirstPersonShooter pitch float 12
+wait 120
+random_seed 7
+record_start png fixed fps=60 out={work}/fire354r_fsr
+wait 6
+script set Player@FirstPersonShooter fireInput bool true
+wait 2
+script set Player@FirstPersonShooter fireInput bool false
+wait 40
+record_stop
+image_seq_trail {work}/fire354r_ref {work}/fire354r_fsr 9 39 0 0 1034 170 max 60 diff 12
+stop
+wait 5
+quit

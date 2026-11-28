@@ -173,6 +173,7 @@ namespace Conqueror
         LoadShader("FSR2Reactive", "Engine/src/Shaders/PostProcess/FSR2Reactive.cqsh");
         LoadShader("FSR2Hold", "Engine/src/Shaders/PostProcess/FSR2Hold.cqsh");
         LoadShader("FSR2FreezeMask", "Engine/src/Shaders/PostProcess/FSR2FreezeMask.cqsh");
+        LoadShader("TransientLight", "Engine/src/Shaders/PostProcess/TransientLight.cqsh");
         LoadShader("DepthOfField", "Engine/src/Shaders/PostProcess/DepthOfField.cqsh");
         LoadShader("MotionBlur", "Engine/src/Shaders/PostProcess/MotionBlur.cqsh");
         LoadShader("AutoExposure", "Engine/src/Shaders/PostProcess/AutoExposure.cqsh");
@@ -265,6 +266,9 @@ namespace Conqueror
         DestroyTarget(m_FSR2HoldState[0]);
         DestroyTarget(m_FSR2HoldState[1]);
         DestroyTarget(m_FSR2FreezeMask);
+        DestroyTarget(m_TransientHDR);
+        DestroyTarget(m_LDRUnlit);
+        DestroyTarget(m_FSR2Display);
         m_FSR2LightChangeFrames = 0;
         for (uint32_t& fb : m_FSR2HoldFramebuffer)
         {
@@ -1743,12 +1747,15 @@ namespace Conqueror
         Renderer::GetStats().PostProcessPasses += (uint32_t)(m_BloomMips.size() * 2);
     }
 
-    void PostProcessStack::RunComposite(const PostProcessSettings& settings, float time)
+    void PostProcessStack::RunComposite(const PostProcessSettings& settings, float time, RenderTarget* target, uint32_t source)
     {
         CQ_PROFILE_GPU("Composite");
         auto composite = PostProcess::GetShader("Composite");
-        glBindFramebuffer(GL_FRAMEBUFFER, m_LDR.Framebuffer);
-        glViewport(0, 0, m_LDR.Width, m_LDR.Height);
+        RenderTarget& dst = target ? *target : m_LDR;
+        if (!target)
+            m_CompositeTime = time;
+        glBindFramebuffer(GL_FRAMEBUFFER, dst.Framebuffer);
+        glViewport(0, 0, dst.Width, dst.Height);
         if (!Valid(composite))
             return;
 
@@ -1789,7 +1796,7 @@ namespace Conqueror
         composite->SetFloat("u_Time", time);
         composite->SetFloat2("u_ScreenSize", glm::vec2((float)m_Width, (float)m_Height));
 
-        BindTexture(0, m_Source ? m_Source : GetSceneColorTexture());
+        BindTexture(0, source ? source : (m_Source ? m_Source : GetSceneColorTexture()));
         BindTexture(1, m_BloomResult);
         BindTexture(2, m_AOBlur.Texture);
         BindTexture(3, GetSceneDepthTexture());
@@ -2382,6 +2389,69 @@ namespace Conqueror
             // namlu alevinin ışığı geçmişe girip tavan karolarının çizgilerinde ~1.5 saniye beyaz kalıyordu. En çok 6 kare süren ışık
             // değişiminde FSR 2'nin birikim geçişi geçmişi dondurur, görüntüyü eskisi gibi gösterir (ffx_fsr2_accumulate.h; yerel TAA /
             // TAAU'daki gibi); kendi hızıyla hareket eden nesneler (FSR2FreezeMask.cqsh) normal yoldan geçer
+            // 354: kısa ışık değişimi (namlu alevinin nokta ışığı) FSR 2'nin girdisinden çıkarılır: katkısı ileri gölgelendiricinin BRDF'siyle
+            // G-buffer'dan bulunur (TransientLight.cqsh), Composite ışıksız HDR ile bir kez daha çalışır; FSR 2'nin çıktısına bu karenin ışıklı /
+            // ışıksız LDR farkı eklenir. Geçmiş alevli kareyi hiç görmez: geri tepmeyle kamera kıpırdarken de (pikseller hareketli, aşağıdaki
+            // dondurma onlara uygulanmaz) tavanın karo çizgileri bir buçuk saniye beyaz kalıyordu. Yalnız yerel FSR AA'da (FSR 2'nin çıktısı
+            // doğrudan gösterilir) ve G-buffer (normal, albedo) varken
+            bool transientSplit = false;
+            uint32_t fsrInput = cur;
+            {
+                auto transientPass = PostProcess::GetShader("TransientLight");
+                Renderer3D::TransientLights transient;
+                const bool canSplit = nativeFSR && fsrW == outW && fsrH == outH && cur == m_LDR.Texture && m_HasAlbedo && m_LitScene
+                                      && Valid(transientPass) && GetSceneNormalTexture() && GetSceneAlbedoTexture();
+                if (canSplit && Renderer3D::GetTransientLights(this, m_FSR2Valid, transient))
+                {
+                    EnsureTarget(m_TransientHDR, m_Width, m_Height, GL_RGBA16F);
+                    EnsureTarget(m_LDRUnlit, m_LDR.Width, m_LDR.Height, GL_RGBA8);
+                    glBindFramebuffer(GL_FRAMEBUFFER, m_TransientHDR.Framebuffer);
+                    glViewport(0, 0, (GLsizei)m_Width, (GLsizei)m_Height);
+                    transientPass->Bind();
+                    transientPass->SetInt("u_Mode", 0);
+                    transientPass->SetInt("u_Scene", 0);
+                    transientPass->SetInt("u_Depth", 1);
+                    transientPass->SetInt("u_GNormal", 2);
+                    transientPass->SetInt("u_GAlbedo", 3);
+                    transientPass->SetInt("u_BRDFLUT", 4);
+                    transientPass->SetMat4("u_InvViewProj", m_FinalInvViewProj);
+                    transientPass->SetFloat3("u_CameraPos", m_FinalCameraPos);
+                    transientPass->SetInt("u_PointCount", transient.PointCount);
+                    transientPass->SetInt("u_SpotCount", transient.SpotCount);
+                    for (int i = 0; i < transient.PointCount; ++i)
+                    {
+                        const auto& l = transient.Points[i];
+                        const std::string k = "[" + std::to_string(i) + "]";
+                        transientPass->SetFloat4("u_PointPosRange" + k, l.PositionRange);
+                        transientPass->SetFloat4("u_PointColor" + k, l.Color);
+                        transientPass->SetFloat4("u_PointAtten" + k, l.Attenuation);
+                        transientPass->SetFloat4("u_PointProfile0" + k, l.Profile0);
+                        transientPass->SetFloat4("u_PointProfile1" + k, l.Profile1);
+                    }
+                    for (int i = 0; i < transient.SpotCount; ++i)
+                    {
+                        const auto& l = transient.Spots[i];
+                        const std::string k = "[" + std::to_string(i) + "]";
+                        transientPass->SetFloat4("u_SpotPosRange" + k, l.PositionRange);
+                        transientPass->SetFloat4("u_SpotColor" + k, l.Color);
+                        transientPass->SetFloat4("u_SpotDirCos" + k, l.Direction);
+                        transientPass->SetFloat4("u_SpotAttenCosInner" + k, l.Attenuation);
+                        transientPass->SetFloat4("u_SpotProfile0" + k, l.Profile0);
+                        transientPass->SetFloat4("u_SpotProfile1" + k, l.Profile1);
+                    }
+                    BindTexture(0, m_Source ? m_Source : GetSceneColorTexture());
+                    BindTexture(1, GetSceneDepthTexture());
+                    BindTexture(2, GetSceneNormalTexture());
+                    BindTexture(3, GetSceneAlbedoTexture());
+                    BindTexture(4, EnvironmentMap::GetBRDFLUT());
+                    PostProcess::DrawFullscreenQuad();
+                    RunComposite(settings, m_CompositeTime, &m_LDRUnlit, m_TransientHDR.Texture);
+                    Renderer::GetStats().PostProcessPasses += 2;
+                    fsrInput = m_LDRUnlit.Texture;
+                    transientSplit = true;
+                }
+            }
+            prm.Color = fsrInput;
             bool fsrFreeze = false;
             m_FSR2LightingState = -1;
             if (nativeFSR)
@@ -2440,9 +2510,28 @@ namespace Conqueror
                 // tutucudan geçmiş küçük kıpırtıyı yeniden büyütüyordu: kamera dururken mavi küplerin arası beyazlayıp sönüyordu
                 // (piramit bölgesinde >8 seviye değişen piksel %0.59, yerel FSR AA %0.016)
                 const bool spatialAfter = (fsrW != outW || fsrH != outH) && up != UpscalerMode::SGSR2 && up != UpscalerMode::TAAU;
-                const uint32_t fsrResult = spatialAfter ? m_FSR2Output.Texture
-                                                        : RunStillHold(1, m_FSR2Output.Texture, fsrW, fsrH, fsrReactive, m_MotionVectors.Texture,
-                                                                       m_CameraStill || m_CameraNearlyStill, prm.Reset);
+                uint32_t fsrResult = spatialAfter ? m_FSR2Output.Texture
+                                                  : RunStillHold(1, m_FSR2Output.Texture, fsrW, fsrH, fsrReactive, m_MotionVectors.Texture,
+                                                                 m_CameraStill || m_CameraNearlyStill, prm.Reset);
+                auto transientPass = PostProcess::GetShader("TransientLight");
+                if (transientSplit && !spatialAfter && Valid(transientPass))
+                {
+                    // 354: gösterilen görüntü = FSR 2'nin ışıksız çıktısı + bu karenin ışıklı / ışıksız LDR farkı
+                    EnsureTarget(m_FSR2Display, fsrW, fsrH, GL_RGBA8);
+                    glBindFramebuffer(GL_FRAMEBUFFER, m_FSR2Display.Framebuffer);
+                    glViewport(0, 0, (GLsizei)fsrW, (GLsizei)fsrH);
+                    transientPass->Bind();
+                    transientPass->SetInt("u_Mode", 1);
+                    transientPass->SetInt("u_Scene", 0);
+                    transientPass->SetInt("u_Lit", 1);
+                    transientPass->SetInt("u_Unlit", 2);
+                    BindTexture(0, fsrResult);
+                    BindTexture(1, cur);
+                    BindTexture(2, m_LDRUnlit.Texture);
+                    PostProcess::DrawFullscreenQuad();
+                    Renderer::GetStats().PostProcessPasses++;
+                    fsrResult = m_FSR2Display.Texture;
+                }
                 if (fsrW != outW || fsrH != outH)
                 {
                     // FSR AA + uzamsal yükseltici: kenar yumuşatılmış iç çözünürlük görüntüsü aşağıda büyütülür (NIS / FSR 1 / CAS ...)
@@ -3076,6 +3165,7 @@ namespace Conqueror
             m_FinalInvViewProj = glm::inverse(JitteredProjection(camera) * camera.View);
             m_FinalViewProj = camera.Projection * camera.View;
             m_FinalProjection = camera.Projection;
+            m_FinalCameraPos = glm::vec3(glm::inverse(camera.View)[3]);
             const glm::mat4 now = camera.Projection * camera.View;
             const bool still = IsCameraStill(now);
             m_CameraStill = still;

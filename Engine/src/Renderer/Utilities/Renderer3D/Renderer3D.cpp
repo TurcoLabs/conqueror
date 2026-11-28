@@ -119,6 +119,10 @@ namespace Conqueror
             int PointCount = 0;
             int SpotCount = 0;
             int AreaCount = 0;
+            // 354: ışıkların kimliği (0: yok) ve son Add çağrısının ışığı ekleyip eklemediği
+            uint64_t PointIds[kMaxPointLights]{};
+            uint64_t SpotIds[kMaxSpotLights]{};
+            bool LastPointAdded = false, LastSpotAdded = false;
             DirectionalLightComponent Sun;
             bool HasSun = false;
 
@@ -743,6 +747,104 @@ namespace Conqueror
                 return 1.0f;
             return glm::clamp((float)(last.SinceChange - 2) / 10.0f, 0.0f, 1.0f);
         }
+    }
+
+    namespace
+    {
+        struct TransientRecord
+        {
+            glm::vec3 Stable{ 0.0f }, Last{ 0.0f };
+            int SameRun = 0;
+            uint64_t Seen = 0;
+        };
+        struct TransientTracker
+        {
+            std::unordered_map<uint64_t, TransientRecord> Lights;
+            uint64_t Frame = 0;
+        };
+        std::unordered_map<const void*, TransientTracker>& TransientTrackers()
+        {
+            static std::unordered_map<const void*, TransientTracker> s_Trackers;
+            return s_Trackers;
+        }
+    }
+
+    bool Renderer3D::GetTransientLights(const void* view, bool historyValid, TransientLights& out)
+    {
+        out.PointCount = out.SpotCount = 0;
+        if (!s)
+            return false;
+        TransientTracker& t = TransientTrackers()[view];
+        if (!historyValid)
+            t.Lights.clear();
+        const bool fresh = t.Lights.empty() && t.Frame == 0;
+        ++t.Frame;
+        // Kısa değişim: 6 kareden kısa (namlu alevi bir-birkaç kare yanar, şiddeti söner); sonra kararlı değer 30 karede yaklaşır
+        constexpr int kSteadyFrames = 6;
+        constexpr int kRampFrames = 30;
+        auto update = [&](uint64_t id, const glm::vec3& color) -> glm::vec3 {
+            auto it = t.Lights.find(id);
+            if (it == t.Lights.end())
+            {
+                TransientRecord r;
+                // Görünüm geçmişi yokken var olan ışık kararlı; geçmiş varken yeni görünen ışık kısa değişim
+                r.Stable = (!historyValid || fresh) ? color : glm::vec3(0.0f);
+                r.Last = color;
+                it = t.Lights.emplace(id, r).first;
+            }
+            else
+            {
+                TransientRecord& r = it->second;
+                const float scale = std::max(std::max(std::abs(color.r), std::abs(color.g)), std::max(std::abs(color.b), 1e-3f));
+                const bool same = glm::all(glm::lessThanEqual(glm::abs(color - r.Last), glm::vec3(0.01f * scale + 1e-4f)));
+                r.SameRun = same ? r.SameRun + 1 : 0;
+                r.Last = color;
+            }
+            TransientRecord& r = it->second;
+            r.Seen = t.Frame;
+            if (r.SameRun >= kSteadyFrames)
+            {
+                const int left = std::max(1, kSteadyFrames + kRampFrames - r.SameRun);
+                r.Stable += (color - r.Stable) / (float)left;
+            }
+            return color - r.Stable;
+        };
+        auto significant = [](const glm::vec3& d) { return std::max(std::max(std::abs(d.r), std::abs(d.g)), std::abs(d.b)) > 1e-3f; };
+        for (int i = 0; i < s->PointCount; ++i)
+        {
+            if (!s->PointIds[i])
+                continue;
+            const auto& gpu = s->Lights.PointLights[i];
+            const glm::vec3 d = update(s->PointIds[i], glm::vec3(gpu.ColorIntensity));
+            if (!significant(d) || out.PointCount >= kMaxTransientLights)
+                continue;
+            TransientLight& l = out.Points[out.PointCount++];
+            l.PositionRange = gpu.PositionRange;
+            l.Color = glm::vec4(d, 0.0f);
+            l.Attenuation = gpu.Attenuation;
+            l.Profile0 = gpu.Profile0;
+            l.Profile1 = gpu.Profile1;
+        }
+        for (int i = 0; i < s->SpotCount; ++i)
+        {
+            if (!s->SpotIds[i])
+                continue;
+            const auto& gpu = s->Lights.SpotLights[i];
+            // Spot ve nokta ışık kimlikleri aynı varlıkta olabilir: ayrı kayıt
+            const glm::vec3 d = update(s->SpotIds[i] ^ (1ull << 63), glm::vec3(gpu.ColorIntensity));
+            if (!significant(d) || out.SpotCount >= kMaxTransientLights)
+                continue;
+            TransientLight& l = out.Spots[out.SpotCount++];
+            l.PositionRange = gpu.PositionRange;
+            l.Color = glm::vec4(d, 0.0f);
+            l.Direction = gpu.DirectionCosOuter;
+            l.Attenuation = gpu.AttenuationCosInner;
+            l.Profile0 = gpu.Profile0;
+            l.Profile1 = gpu.Profile1;
+        }
+        for (auto it = t.Lights.begin(); it != t.Lights.end();)
+            it = it->second.Seen == t.Frame ? std::next(it) : t.Lights.erase(it);
+        return out.PointCount + out.SpotCount > 0;
     }
 
     bool Renderer3D::ConsumeLightingChange(const void* view)
@@ -1561,6 +1663,18 @@ namespace Conqueror
         s->FrameDirty = true;
     }
 
+    void Renderer3D::SetLastPointLightId(uint64_t id)
+    {
+        if (s && s->LastPointAdded && s->PointCount > 0)
+            s->PointIds[s->PointCount - 1] = id;
+    }
+
+    void Renderer3D::SetLastSpotLightId(uint64_t id)
+    {
+        if (s && s->LastSpotAdded && s->SpotCount > 0)
+            s->SpotIds[s->SpotCount - 1] = id;
+    }
+
     void Renderer3D::SetLastPointLightProfile(const glm::vec4& p0, const glm::vec4& p1)
     {
         if (s->PointCount <= 0)
@@ -1583,8 +1697,11 @@ namespace Conqueror
 
     void Renderer3D::AddPointLight(const glm::vec3& position, const PointLightComponent& light)
     {
+        s->LastPointAdded = false;
         if (s->PointCount >= kMaxPointLights || LightIsBakedAway(light.Mode))
             return;
+        s->PointIds[s->PointCount] = 0;
+        s->LastPointAdded = true;
         auto& gpu = s->Lights.PointLights[s->PointCount++];
         gpu.PositionRange = glm::vec4(position, std::max(light.Range, 0.01f));
         gpu.ColorIntensity = glm::vec4(light.Color * light.Intensity, 0.0f);
@@ -1600,8 +1717,11 @@ namespace Conqueror
 
     void Renderer3D::AddSpotLight(const glm::vec3& position, const glm::vec3& direction, const SpotLightComponent& light)
     {
+        s->LastSpotAdded = false;
         if (s->SpotCount >= kMaxSpotLights || LightIsBakedAway(light.Mode))
             return;
+        s->SpotIds[s->SpotCount] = 0;
+        s->LastSpotAdded = true;
         glm::vec3 dir = glm::dot(direction, direction) > 1e-8f ? glm::normalize(direction) : glm::vec3(0.0f, -1.0f, 0.0f);
         float inner = std::min(light.InnerConeAngle, light.OuterConeAngle);
         float outer = std::max(light.InnerConeAngle, light.OuterConeAngle);

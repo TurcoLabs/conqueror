@@ -173,7 +173,8 @@ namespace Conqueror
         void ResolveMultisampleColor();
         void RunSSAO(const PostProcessSettings& settings, const RenderCamera& camera, float time);
         void RunBloom(const PostProcessSettings& settings);
-        void RunComposite(const PostProcessSettings& settings, float time);
+        // target / source: başka hedefe başka HDR girdisiyle (354: kısa ışık değişimi çıkarılmış görüntü); varsayılan m_LDR ve sahne
+        void RunComposite(const PostProcessSettings& settings, float time, RenderTarget* target = nullptr, uint32_t source = 0);
         void RunFinal(const PostProcessSettings& settings, uint32_t outputFramebuffer, const int outputViewport[4]);
         // Zamansal yükselticinin çıktısı için kamera dururken titreşim tutucu (FSR2Hold.cqsh); sonuç dokusu. owner: 1 FSR 2, 2 SGSR 2, 3 TAA (NIS'ten önce)
         uint32_t RunStillHold(int owner, uint32_t source, uint32_t w, uint32_t h, uint32_t reactive, uint32_t motion, bool still, bool reset);
@@ -209,6 +210,10 @@ namespace Conqueror
         std::vector<RenderTarget> m_BloomMips;   // aşağı örnekleme zinciri
         std::vector<RenderTarget> m_BloomUp;     // yukarı örnekleme zinciri (geri besleme döngüsü olmasın)
         RenderTarget m_LDR;
+        // 354: FSR AA'da kısa ışık değişiminin (namlu alevi) katkısı çıkarılmış HDR sahne ve onun Composite çıktısı (FSR 2'nin girdisi),
+        // FSR 2 çıktısına ışıklı / ışıksız farkı eklenmiş gösterim
+        RenderTarget m_TransientHDR, m_LDRUnlit, m_FSR2Display;
+        float m_CompositeTime = 0.0f;
         RenderTarget m_SMAAEdges;
         RenderTarget m_SMAAWeights;    // SMAA / MLAA karışım ağırlıkları
         RenderTarget m_Temp;
@@ -227,6 +232,7 @@ namespace Conqueror
         bool m_T2xValid = false;
         bool m_FinalHasVelocity = false;
         glm::mat4 m_FinalInvViewProj{ 1.0f };
+        glm::vec3 m_FinalCameraPos{ 0.0f };
         // AMD FSR 2 (Upscaling > FSR 2, Anti-Aliasing > FSR AA): bağlam, tam ekran hareket vektörleri, çıktı ve kamera bilgisi
         std::unique_ptr<FSR2Upscaler> m_FSR2;
         // NVIDIA DLSS / DLAA (isteğe bağlı eklenti, Upscalers/DLSSUpscaler): FSR 2 ile aynı girdiler

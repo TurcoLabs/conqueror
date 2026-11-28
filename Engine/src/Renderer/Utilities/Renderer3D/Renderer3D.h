@@ -114,6 +114,9 @@ namespace Conqueror
         static void AddPointLight(const glm::vec3& position, const PointLightComponent& light);
         // Son eklenen ışığın Light Profile örnekleri (8 örnek, 2 vec4)
         static void SetLastPointLightProfile(const glm::vec4& p0, const glm::vec4& p1);
+        // 354: son eklenen nokta / spot ışığın kimliği (varlık): kısa süren ışık değişimi (namlu alevi) kararlı ışıktan ayrılır
+        static void SetLastPointLightId(uint64_t id);
+        static void SetLastSpotLightId(uint64_t id);
         static void SetLastSpotLightProfile(const glm::vec4& p0, const glm::vec4& p1);
         static void AddSpotLight(const glm::vec3& position, const SpotLightComponent& light);
         static void AddSpotLight(const glm::vec3& position, const glm::vec3& direction, const SpotLightComponent& light);
@@ -269,6 +272,21 @@ namespace Conqueror
         // Bu görünümde nokta / spot ışıkların toplam gücü önceki çağrıdan beri değişti mi (namlu alevi ışığı yanıp söner):
         // TAA yalnız böyle karelerde aydınlığı değişen piksellerde geçmişe az güvenir
         static bool ConsumeLightingChange(const void* view);
+        // 354: bu karenin kısa süren ışık değişimleri: kimliği olan nokta / spot ışığın renk x şiddetinin kararlı değerinden farkı. Yeni
+        // görünen ışığın kararlı değeri 0 (görünüm geçmişi geçerliyse); 6 kare değişmeden kalan ışığın kararlı değeri 30 karede ona
+        // yaklaşır (sürekli yanan ışık zamansal geçmişe basamaksız girer). Renk alanı farkı taşır (sönen ışıkta negatif). Görünüm başına
+        // karede bir kez çağrılır; historyValid false: her ışık kararlı sayılır
+        static constexpr int kMaxTransientLights = 8;
+        struct TransientLight
+        {
+            glm::vec4 PositionRange{ 0.0f }, Color{ 0.0f }, Attenuation{ 0.0f }, Direction{ 0.0f }, Profile0{ 1.0f }, Profile1{ 1.0f };
+        };
+        struct TransientLights
+        {
+            int PointCount = 0, SpotCount = 0;
+            TransientLight Points[kMaxTransientLights], Spots[kMaxTransientLights];
+        };
+        static bool GetTransientLights(const void* view, bool historyValid, TransientLights& out);
         // Sonraki çizimlerin nesnesi gölge düşürüyor mu (Mesh Renderer / Model Cast Shadows): düşürmeyenin gölge kutusu yok
         static void SetDrawCastsShadows(bool castsShadows);
         // Sonraki çizimler View Model mi (first person kollar / silah): kameraya doğru bu oranda yaklaştırılmış konumla
