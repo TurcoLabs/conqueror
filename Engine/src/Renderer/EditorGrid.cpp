@@ -303,7 +303,7 @@ namespace Conqueror
                 };
                 const uint32_t k = (h.ExactFrame++ % 16u) + 1u;
                 // Alt örnek hücresinin içinde (-0.5..0.5) / Factor piksel
-                exactJitter = glm::vec2(halton(k, 2) - 0.5f, halton(k, 3) - 0.5f) / (float)ExactDepth::Factor();
+                exactJitter = glm::vec2(halton(k, 2) - 0.5f, halton(k, 3) - 0.5f) / (float)h.Exact->Factor();
                 glm::mat4 projection = camera.Projection;
                 const glm::vec2 ndc(2.0f * exactJitter.x / (float)width, 2.0f * exactJitter.y / (float)height);
                 for (int c = 0; c < 4; ++c)
@@ -361,7 +361,7 @@ namespace Conqueror
             glBindTextureUnit(5, h.Exact->WideTexture());
             s_GridShader->SetInt("u_ExactDepth", 4);
             s_GridShader->SetInt("u_ExactWide", 5);
-            s_GridShader->SetInt("u_ExactFactor", ExactDepth::Factor());
+            s_GridShader->SetInt("u_ExactFactor", h.Exact->Factor());
             s_GridShader->SetFloat2("u_ExactJitter", exactJitter);
             s_GridShader->SetFloat2("u_ProjZ", ExactDepth::ProjZ(camera.Projection));
         }

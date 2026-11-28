@@ -7,7 +7,8 @@
 namespace Conqueror
 {
     // 355 / 334: exact, unjittered depth of a view at output resolution. The view's recorded opaque draws (Renderer3D::RenderGeometryDepth)
-    // are rendered again at Factor() x the output resolution per axis (Factor()^2 samples per output pixel at known positions: sample s
+    // are rendered again at Factor() x the output resolution per axis (Factor()^2 samples per output pixel at known positions; the editor grid
+    // uses 3 x 3, TAAU 4 x 4: with 3 x 3 the share of a 1-2 pixel sky sliver's edge rows was off by up to a third, 334; sample s
     // of pixel p is texel p * Factor() + (s % Factor(), s / Factor()) of DepthTexture(), centred at (sub + 0.5) / Factor() inside the pixel).
     // RangeTexture() (RG32F) holds, per output pixel, the nearest and farthest view distance (eye depth) of its samples (1e30: sky /
     // nothing), ShareTexture() (R32F) the share of the samples on the nearest surface. WideTexture() (RG32F, only when Render was asked
@@ -19,7 +20,7 @@ namespace Conqueror
     class CQ_API ExactDepth
     {
     public:
-        ExactDepth() = default;
+        explicit ExactDepth(int factor = 3) : m_Factor(factor < 2 ? 2 : (factor > 4 ? 4 : factor)) {}
         ~ExactDepth();
         ExactDepth(const ExactDepth&) = delete;
         ExactDepth& operator=(const ExactDepth&) = delete;
@@ -38,7 +39,7 @@ namespace Conqueror
         uint32_t WideTexture() const { return m_Wide; }
         uint32_t Width() const { return m_Width; }
         uint32_t Height() const { return m_Height; }
-        static constexpr int Factor() { return kFactor; }
+        int Factor() const { return m_Factor; }
         // Shared GL objects (the range resolve program); Renderer::Shutdown calls this while the context is still current
         static void ShutdownShared();
         // (2,2) and (3,2) elements of the projection: eye depth = y / (z_ndc + x)
@@ -47,7 +48,7 @@ namespace Conqueror
     private:
         bool EnsureTargets(uint32_t width, uint32_t height);
 
-        static constexpr int kFactor = 3;
+        int m_Factor = 3;
         uint32_t m_Depth = 0, m_DepthFramebuffer = 0;
         uint32_t m_Range = 0, m_RangeFramebuffer = 0, m_Share = 0;
         uint32_t m_Wide = 0, m_WideFramebuffer = 0;

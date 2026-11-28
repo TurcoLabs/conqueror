@@ -1,0 +1,140 @@
+#language GLSL
+// 334: TAAU'nun tam derinlikli yeniden kurulumu için iki yüzeyli çıktı pikselinin uzak yüzeyinin rengi, o yüzey bu karenin 3x3 iç örneğine
+// düşmediyse. TAAU'nun içinde hesaplanınca gölgelendiricinin yazmaç ihtiyacı eşiği aşıyor, geçiş 3.1 ms'den 4.3 ms'ye çıkıyordu; burada
+// yalnız iki yüzeyli pikseller çalışır.
+// Önce 5x5'in dış halkasındaki (8 nokta) aynı yüzeyin iç örneklerinden: ince gökyüzü şeridi yatay bir bant, 3x3 onu ıskalasa da yanlardaki
+// sütunlarda genellikle bir örnek ona düşer. Yoksa yüzeyin önceki yerindeki geçmişten (önceki tam derinlikte yalnız o yüzeyi gören piksel).
+// Gökyüzü sonsuzdadır: zıplarken köprü ve duvar ekranda kayar, gökyüzü kaymaz, şeridin bu karedeki yeri önceki karede duvardı; gökyüzünün
+// rengi yavaş değişir, önceki karede gökyüzü olan en yakın piksel dikeyde ±3 piksel içinde aranır.
+// Çıktı: rgb uzak yüzeyin rengi, a 1 (bulundu) / 0 (3x3'te örneği var ya da bulunamadı ya da tek yüzeyli piksel)
+#type vertex
+#version 450 core
+layout(location = 0) in vec2 a_Position;
+layout(location = 1) in vec2 a_TexCoord;
+out vec2 v_UV;
+void main()
+{
+    v_UV = a_TexCoord;
+    gl_Position = vec4(a_Position, 0.0, 1.0);
+}
+
+#type fragment
+#version 450 core
+layout(location = 0) out vec4 FragColor;
+in vec2 v_UV;
+
+uniform sampler2D u_Current;         // iç çözünürlükte titreşimli kare (LDR)
+uniform sampler2D u_Depth;           // iç çözünürlükte derinlik (titreşimli)
+uniform sampler2D u_History;         // TAAU'nun önceki çıktısı (çıktı çözünürlüğünde)
+uniform sampler2D u_ExactRange;      // bu karenin tam derinliği: piksel başına en yakın / en uzak uzaklık (1e30 gökyüzü)
+uniform sampler2D u_ExactPrevRange;  // önceki karenin
+uniform int u_HasExactPrev = 0;
+uniform mat4 u_InvViewProj;          // titreşimli ters görüş-izdüşüm (iç derinlik)
+uniform mat4 u_InvViewProjNow;       // titreşimsiz ters görüş-izdüşüm
+uniform mat4 u_PrevViewProj;         // önceki karenin titreşimsiz görüş-izdüşümü
+uniform vec2 u_ProjZ;                // uzaklık = y / (z_ndc + x)
+uniform vec2 u_InTexel;
+uniform vec2 u_OutTexel;
+uniform vec2 u_JitterUV;
+
+float ViewW(vec2 uv, float depth)
+{
+    vec4 w = u_InvViewProj * vec4(uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
+    return 1.0 / max(abs(w.w), 1e-8);
+}
+
+bool OnSurface(ivec2 t, float dist, bool sky)
+{
+    float dep = texelFetch(u_Depth, t, 0).r;
+    return sky ? dep >= 1.0 : (dep < 1.0 && abs(ViewW((vec2(t) + 0.5) * u_InTexel, dep) - dist) < 0.03 * dist + 0.02);
+}
+
+void main()
+{
+    ivec2 outPix = ivec2(gl_FragCoord.xy);
+    vec2 r = texelFetch(u_ExactRange, outPix, 0).rg;
+    if (r.x > 1e29 || r.y <= r.x * 1.02 + 0.02)
+    {
+        FragColor = vec4(0.0);
+        return;
+    }
+    float dF = r.y;
+    bool fSky = dF > 1e29;
+    vec2 inSize = 1.0 / u_InTexel;
+    ivec2 inMax = ivec2(inSize) - 1;
+    vec2 inPos = (v_UV + u_JitterUV) * inSize - 0.5;
+    ivec2 base = ivec2(floor(inPos + 0.5));
+    // 3x3'te örneği varsa TAAU onu kullanır
+    for (int k = 0; k < 9; ++k)
+        if (OnSurface(clamp(base + ivec2(k % 3 - 1, k / 3 - 1), ivec2(0), inMax), dF, fSky))
+        {
+            FragColor = vec4(0.0);
+            return;
+        }
+    vec3 sum = vec3(0.0);
+    float wsum = 0.0;
+    for (int k = 0; k < 8; ++k)
+    {
+        ivec2 o = k < 4 ? ivec2((k & 1) * 4 - 2, (k >> 1) * 4 - 2) : ((k & 1) == 0 ? ivec2((k & 2) - 1, 0) * 2 : ivec2(0, (k & 2) - 1) * 2);
+        ivec2 t = clamp(base + o, ivec2(0), inMax);
+        if (!OnSurface(t, dF, fSky))
+            continue;
+        vec2 d = (vec2(t) - inPos) * (u_InTexel / u_OutTexel);
+        float w = exp(-0.7 * dot(d, d));
+        sum += max(texelFetch(u_Current, t, 0).rgb, vec3(0.0)) * w;
+        wsum += w;
+    }
+    if (wsum > 0.0)
+    {
+        FragColor = vec4(sum / wsum, 1.0);
+        return;
+    }
+    if (u_HasExactPrev == 0)
+    {
+        FragColor = vec4(0.0);
+        return;
+    }
+    // Yüzeyin önceki yeri
+    float zNdc = fSky ? 0.999999 : u_ProjZ.y / dF - u_ProjZ.x;
+    vec4 wp = u_InvViewProjNow * vec4(v_UV * 2.0 - 1.0, zNdc, 1.0);
+    wp /= wp.w;
+    vec4 pc = u_PrevViewProj * wp;
+    vec2 puv = pc.xy / pc.w * 0.5 + 0.5;
+    if (pc.w <= 0.0 || any(lessThan(puv, vec2(0.0))) || any(greaterThan(puv, vec2(1.0))))
+    {
+        FragColor = vec4(0.0);
+        return;
+    }
+    ivec2 psz = textureSize(u_ExactPrevRange, 0);
+    vec2 pp = puv * vec2(psz) - 0.5;
+    ivec2 p0 = ivec2(floor(pp));
+    float best = 1e9;
+    vec3 color = vec3(0.0);
+    for (int k = 0; k < 4; ++k)
+    {
+        ivec2 q = clamp(p0 + ivec2(k & 1, k >> 1), ivec2(0), psz - 1);
+        vec2 rr = texelFetch(u_ExactPrevRange, q, 0).rg;
+        bool single = rr.x > 1e29 || rr.y <= rr.x * 1.02 + 0.02;
+        bool match = fSky ? rr.x > 1e29 : (single && abs(rr.x - pc.w) < 0.03 * pc.w + 0.02);
+        float dq = length(vec2(q) - pp);
+        if (match && dq < best)
+        {
+            best = dq;
+            color = max(texelFetch(u_History, q, 0).rgb, vec3(0.0));
+        }
+    }
+    if (best > 1e8 && fSky)
+        for (int k = 0; k < 7; ++k)
+        {
+            ivec2 q = clamp(p0 + ivec2(0, k - 3), ivec2(0), psz - 1);
+            if (texelFetch(u_ExactPrevRange, q, 0).r <= 1e29)
+                continue;
+            float dq = length(vec2(q) - pp);
+            if (dq < best)
+            {
+                best = dq;
+                color = max(texelFetch(u_History, q, 0).rgb, vec3(0.0));
+            }
+        }
+    FragColor = best < 1e8 ? vec4(color, 1.0) : vec4(0.0);
+}

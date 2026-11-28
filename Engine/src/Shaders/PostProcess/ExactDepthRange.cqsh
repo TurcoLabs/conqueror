@@ -14,6 +14,7 @@ void main()
 
 #type fragment
 #version 450 core
+#include "Include/GatherCompat.glsl"
 
 layout(location = 0) out vec2 Range;
 layout(location = 1) out float Share;   // mod 0: örneklerin en yakın yüzeye düşen payı
@@ -53,12 +54,30 @@ void main()
     float farthest = 0.0;
     float dist[16];
     int n = min(u_Factor * u_Factor, 16);
-    for (int s = 0; s < n; ++s)
+    if (u_Factor == 4)
     {
-        dist[s] = SampleDistance(p, s);
-        nearest = min(nearest, dist[s]);
-        farthest = max(farthest, dist[s]);
+        // 4 x 4: dört textureGather (her biri bir 2 x 2 öbek), 16 ayrı okuma yerine
+        vec2 texel = 1.0 / vec2(textureSize(u_Depth, 0));
+        for (int b = 0; b < 4; ++b)
+        {
+            vec2 c = (vec2(p * 4) + vec2(float((b & 1) * 2 + 1), float((b >> 1) * 2 + 1))) * texel;
+            vec4 g = textureGather(u_Depth, c, 0);
+            for (int k = 0; k < 4; ++k)
+            {
+                float d = g[k];
+                dist[b * 4 + k] = d >= 1.0 ? 1e30 : u_ProjZ.y / (d * 2.0 - 1.0 + u_ProjZ.x);
+                nearest = min(nearest, dist[b * 4 + k]);
+                farthest = max(farthest, dist[b * 4 + k]);
+            }
+        }
     }
+    else
+        for (int s = 0; s < n; ++s)
+        {
+            dist[s] = SampleDistance(p, s);
+            nearest = min(nearest, dist[s]);
+            farthest = max(farthest, dist[s]);
+        }
     // En yakın yüzeyin payı (TAAU: iki yüzeyli pikselde yakın yüzeyin kapsaması)
     int nearCount = 0;
     for (int s = 0; s < n; ++s)

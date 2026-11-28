@@ -174,6 +174,7 @@ namespace Conqueror
         LoadShader("FSR2Hold", "Engine/src/Shaders/PostProcess/FSR2Hold.cqsh");
         LoadShader("FSR2FreezeMask", "Engine/src/Shaders/PostProcess/FSR2FreezeMask.cqsh");
         LoadShader("TransientLight", "Engine/src/Shaders/PostProcess/TransientLight.cqsh");
+        LoadShader("ExactFill", "Engine/src/Shaders/PostProcess/ExactFill.cqsh");
         LoadShader("DepthOfField", "Engine/src/Shaders/PostProcess/DepthOfField.cqsh");
         LoadShader("MotionBlur", "Engine/src/Shaders/PostProcess/MotionBlur.cqsh");
         LoadShader("AutoExposure", "Engine/src/Shaders/PostProcess/AutoExposure.cqsh");
@@ -267,6 +268,7 @@ namespace Conqueror
         DestroyTarget(m_FSR2HoldState[1]);
         DestroyTarget(m_FSR2FreezeMask);
         DestroyTarget(m_TransientHDR);
+        DestroyTarget(m_TAAUExactFar);
         DestroyTarget(m_LDRUnlit);
         DestroyTarget(m_FSR2Display);
         m_FSR2LightChangeFrames = 0;
@@ -2732,7 +2734,7 @@ namespace Conqueror
             const int exactNow = m_TAAUExactIndex ^ 1;
             for (auto& e : m_TAAUExact)
                 if (!e)
-                    e = std::make_unique<ExactDepth>();
+                    e = std::make_unique<ExactDepth>(4);
             if (!m_CameraStill)
             {
                 m_TAAUExactValid[exactNow] = m_TAAUExact[exactNow]->Render(this, m_FinalViewProj, m_FinalProjection, outW, outH, 2);
@@ -2746,6 +2748,38 @@ namespace Conqueror
             const ExactDepth* exactPrev = m_TAAUExact[m_TAAUExactIndex].get();
             const bool exactPrevOk = historyValid && m_TAAUExactValid[exactNow] && exactPrev && m_TAAUExactValid[m_TAAUExactIndex]
                                      && exactPrev->Width() == outW && exactPrev->Height() == outH;
+            // 334: iki yüzeyli pikselin 3x3'e düşmeyen uzak yüzeyinin rengi ayrı geçişte (ExactFill.cqsh; TAAU'nun yazmaç ihtiyacı artmasın)
+            bool exactFar = false;
+            auto exactFill = PostProcess::GetShader("ExactFill");
+            if (m_TAAUExactValid[exactNow] && Valid(exactFill))
+            {
+                CQ_PROFILE_GPU("Exact Fill");
+                EnsureTarget(m_TAAUExactFar, outW, outH, GL_RGBA16F);
+                glBindFramebuffer(GL_FRAMEBUFFER, m_TAAUExactFar.Framebuffer);
+                glViewport(0, 0, (GLsizei)outW, (GLsizei)outH);
+                exactFill->Bind();
+                exactFill->SetInt("u_Current", 0);
+                exactFill->SetInt("u_Depth", 1);
+                exactFill->SetInt("u_History", 2);
+                exactFill->SetInt("u_ExactRange", 3);
+                exactFill->SetInt("u_ExactPrevRange", 4);
+                exactFill->SetInt("u_HasExactPrev", exactPrevOk ? 1 : 0);
+                exactFill->SetMat4("u_InvViewProj", m_FinalInvViewProj);
+                exactFill->SetMat4("u_InvViewProjNow", glm::inverse(m_FinalViewProj));
+                exactFill->SetMat4("u_PrevViewProj", m_PrevViewProj);
+                exactFill->SetFloat2("u_ProjZ", ExactDepth::ProjZ(m_FinalProjection));
+                exactFill->SetFloat2("u_InTexel", invSize);
+                exactFill->SetFloat2("u_OutTexel", glm::vec2(1.0f / (float)outW, 1.0f / (float)outH));
+                exactFill->SetFloat2("u_JitterUV", m_JitterNDC * 0.5f);
+                BindTexture(0, cur);
+                BindTexture(1, GetSceneDepthTexture());
+                BindTexture(2, m_TAAUHistory[m_TAAUIndex].Texture);
+                BindTexture(3, m_TAAUExact[exactNow]->RangeTexture());
+                BindTexture(4, exactPrevOk ? exactPrev->RangeTexture() : 0);
+                PostProcess::DrawFullscreenQuad();
+                Renderer::GetStats().PostProcessPasses++;
+                exactFar = true;
+            }
             CQ_PROFILE_GPU("TAAU");
             glBindFramebuffer(GL_FRAMEBUFFER, m_TAAUHistory[ni].Framebuffer);
             glViewport(0, 0, (GLsizei)outW, (GLsizei)outH);
@@ -2786,6 +2820,8 @@ namespace Conqueror
             BindTexture(13, m_TAAUExactValid[exactNow] ? m_TAAUExact[exactNow]->WideTexture() : 0);
             taau->SetInt("u_ExactShare", 14);
             BindTexture(14, m_TAAUExactValid[exactNow] ? m_TAAUExact[exactNow]->ShareTexture() : 0);
+            taau->SetInt("u_ExactFar", 15);
+            BindTexture(15, exactFar ? m_TAAUExactFar.Texture : 0);
             taau->SetMat4("u_InvViewProjNow", glm::inverse(m_FinalViewProj));
             taau->SetFloat2("u_ProjZ", ExactDepth::ProjZ(m_FinalProjection));
             BindTexture(5, m_ReactiveUsed ? m_Reactive.Texture : 0);

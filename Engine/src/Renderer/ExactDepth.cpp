@@ -78,13 +78,13 @@ namespace Conqueror
         m_Height = height;
         GLint maxSize = 4096;
         glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxSize);
-        if ((GLint)(width * kFactor) > maxSize || (GLint)(height * kFactor) > maxSize)
+        if ((GLint)(width * m_Factor) > maxSize || (GLint)(height * m_Factor) > maxSize)
         {
             m_Failed = true;
             return false;
         }
         glCreateTextures(GL_TEXTURE_2D, 1, &m_Depth);
-        glTextureStorage2D(m_Depth, 1, GL_DEPTH_COMPONENT32F, (GLsizei)(width * kFactor), (GLsizei)(height * kFactor));
+        glTextureStorage2D(m_Depth, 1, GL_DEPTH_COMPONENT32F, (GLsizei)(width * m_Factor), (GLsizei)(height * m_Factor));
         glTextureParameteri(m_Depth, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
         glTextureParameteri(m_Depth, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
         glTextureParameteri(m_Depth, GL_TEXTURE_COMPARE_MODE, GL_NONE);
@@ -161,7 +161,7 @@ namespace Conqueror
         glActiveTexture((GLenum)activeUnit);
 
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, m_DepthFramebuffer);
-        glViewport(0, 0, (GLsizei)(width * kFactor), (GLsizei)(height * kFactor));
+        glViewport(0, 0, (GLsizei)(width * m_Factor), (GLsizei)(height * m_Factor));
         glDisable(GL_SCISSOR_TEST);
         glDisable(GL_BLEND);
         glDisable(GL_POLYGON_OFFSET_FILL);
@@ -188,7 +188,7 @@ namespace Conqueror
             glViewport(0, 0, (GLsizei)width, (GLsizei)height);
             s_RangeShader->Bind();
             s_RangeShader->SetInt("u_Mode", 0);
-            s_RangeShader->SetInt("u_Factor", kFactor);
+            s_RangeShader->SetInt("u_Factor", m_Factor);
             s_RangeShader->SetFloat2("u_ProjZ", ProjZ(projection));
             glBindTextureUnit(0, m_Depth);
             glBindTextureUnit(1, 0);   // u_RangeIn: hedefin kendisi bağlı kalmasın (geri besleme döngüsü)
