@@ -1,0 +1,43 @@
+# template: fps
+# 290: MSAA'da vurulup yere yatan hedef tahtasının sağ / alt kenarı boyunca mavimsi, bulanık bir gölge halesi kalıyordu (kullanıcının
+# 544 / 545 resimleri). Gölgenin kendisi yol izlemeli referansla aynı yerde ve genişlikteydi; hale ekran uzayı AO'sundandı: AO bütün
+# rengi, güneşin doğrudan ışığı dahil karartıyordu (tahtanın yanındaki güneşli zeminde 22 seviyeye kadar). AO artık
+# yalnız dolaylı aydınlığa uygulanır (Unreal / HDRP; ileri gölgelendiricinin dolaylı payı sahnenin 4. ekinde). Ölçü: aynı görüntü AO
+# açık / kapalı; tahtanın gölgesinin sağındaki güneşli zeminde 8 seviyeden (eski %36.3, yeni %1.8), tahtanın solundaki zeminde 5
+# seviyeden çok değişen piksel oranı (eski %11.0, yeni %0)
+timeout 400
+wait 60
+focus Game
+cvar r.AntiAliasing 5
+cvar r.Upscaler 0
+play
+wait 30
+script set Pistol@Weapon recoilPitch float 0
+script set Pistol@Weapon recoilYaw float 0
+script set Pistol@Weapon hipSpread float 0
+script set Pistol@Weapon aimSpread float 0
+script set Pistol@Weapon moveSpread float 0
+entity move Player -2.4 0.9 -21.0
+wait 4
+script set Player@FirstPersonShooter yaw float 0
+script set Player@FirstPersonShooter pitch float 0
+wait 12
+script set Player@FirstPersonShooter fireInput bool true
+wait 2
+script set Player@FirstPersonShooter fireInput bool false
+wait 45
+focus Viewport
+view_option gizmos off
+view_option grid off
+camera 2.6 38 0 -2.4 0.05 -28.0
+wait 30
+screenshot {work}/ao290_on.png
+render_setting Post.AmbientOcclusion false
+wait 30
+screenshot {work}/ao290_off.png
+image_diff {work}/ao290_on.png {work}/ao290_off.png 0.5354 0.3682 0.5563 0.3912 max% 5 diff 8
+image_diff {work}/ao290_on.png {work}/ao290_off.png 0.3646 0.3682 0.4167 0.3912 max% 1 diff 5
+render_setting Post.AmbientOcclusion true
+stop
+wait 5
+quit

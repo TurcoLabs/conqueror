@@ -445,6 +445,10 @@ namespace Conqueror
         combine->SetInt("u_UseGI", giDone ? 1 : 0);
         combine->SetFloat("u_GIIntensity", std::max(settings.SSGIIntensity, 0.0f));
         combine->SetInt("u_UseAO", ao ? 1 : 0);
+        // 290: AO yalnız dolaylı aydınlığa (SceneFX.cqsh)
+        const uint32_t indirectTex = GetSceneIndirectTexture();
+        combine->SetInt("u_Indirect", 9);
+        combine->SetInt("u_AOIndirectOnly", indirectTex ? 1 : 0);
         combine->SetFloat2("u_AONearFar", m_AONearFar);
         combine->SetInt("u_UseSSR", ssrDone ? 1 : 0);
         combine->SetInt("u_UseClouds", cloudsDone ? 1 : 0);
@@ -463,6 +467,7 @@ namespace Conqueror
         BindTexture(6, fogDone ? m_Fog.Texture : 0);
         BindTexture(7, giDone ? m_GI.Texture : 0);
         BindTexture(8, giDone ? GetSceneAlbedoTexture() : 0);
+        BindTexture(9, indirectTex);
         PostProcess::DrawFullscreenQuad();
         Renderer::GetStats().PostProcessPasses++;
         m_Source = out.Texture;

@@ -50,6 +50,8 @@ void main()
 #include "Include/Lighting.glsl"
 
 layout(location = 0) out vec4 FragColor;
+// 290: dolaylı aydınlık (ekran uzayı AO yalnız buna uygulanır; PBRForwardFragment.glsl)
+layout(location = 4) out vec4 CQ_GBufferIndirect;
 
 in VS_OUT {
     vec3 FragPos;
@@ -118,6 +120,7 @@ void main()
     surface.Tangent = vec3(1.0, 0.0, 0.0);
 
     int debugView = CQ_Frame.DebugParams.x;
+    CQ_GBufferIndirect = vec4(0.0, 0.0, 0.0, 1.0);
     if (debugView == 1) { FragColor = CQ_FinalizeOutput(vec4(surface.Albedo, 1.0)); return; }
     if (debugView == 2) { FragColor = CQ_FinalizeOutput(vec4(SRGBToLinear(N * 0.5 + 0.5), 1.0)); return; }
     if (debugView == 3) { surface.Albedo = vec3(0.75); surface.Metallic = 0.0; }
@@ -126,4 +129,5 @@ void main()
     else if (debugView == 6 || debugView == 7) { FragColor = CQ_FinalizeOutput(vec4(SRGBToLinear(vec3(debugView == 6 ? surface.Metallic : surface.Roughness)), 1.0)); return; }
 
     FragColor = CQ_FinalizeOutput(CQ_ShadeSurface(surface));
+    CQ_GBufferIndirect = vec4(g_CQIndirect, 1.0);
 }

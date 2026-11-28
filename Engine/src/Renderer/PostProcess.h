@@ -135,6 +135,11 @@ namespace Conqueror
         uint32_t GetSceneNormalTexture() const;
         // Güneş gölgesi (0 gölge .. 1 aydınlık), TAA açıkken: gölgesi değişen yüzey geçmişe güvenmez
         uint32_t GetSceneShadowMaskTexture() const;
+        // 290: sahnenin dolaylı aydınlığı (4. ek, AO açıkken; PBRForwardFragment.glsl): AO yalnız buna uygulanır
+        uint32_t GetSceneIndirectTexture() const;
+        // Renderer3D::BeginScene (sahne hedefi bağlı, görünümün temizlemesinden sonra): dolaylı aydınlık ekini 0'a temizler (onu yazmayan
+        // gölgelendiricilerin pikseline AO uygulanmaz; genel temizleme arka plan rengini yazıyordu)
+        static void PrepareCurrentScene();
         // SSGI albedo tamponu (yoksa 0)
         uint32_t GetSceneAlbedoTexture() const;
 
@@ -398,6 +403,9 @@ namespace Conqueror
         bool m_WantAlbedo = false;      // SSGI albedo eki (normal ekiyle birlikte)
         bool m_HasAlbedo = false;
         bool m_HasShadowMask = false;
+        bool m_WantIndirect = false;    // 290: AO açık: dolaylı aydınlık eki (4)
+        bool m_HasIndirect = false;
+        bool m_IndirectClearPending = false;
         RenderTarget m_GI, m_GITemp, m_GIHistory[2];
         int m_GIHistoryIndex = 0;
         bool m_GIHistoryValid = false;
@@ -435,12 +443,13 @@ namespace Conqueror
             float RenderScale = 1.0f;
             uint32_t Samples = 1, CoverageSamples = 0;
             int TAAVariant = 0;
-            bool Jitter = false, SampleShading = false, TXAA = false, MultisampleTAA = false, Stability = false, Normals = false, Albedo = false, Geometry = false;
+            bool Jitter = false, SampleShading = false, TXAA = false, MultisampleTAA = false, Stability = false, Normals = false, Albedo = false, Geometry = false,
+                 Indirect = false;
             bool operator==(const SceneConfig& o) const
             {
                 return RenderScale == o.RenderScale && Samples == o.Samples && CoverageSamples == o.CoverageSamples && TAAVariant == o.TAAVariant &&
                        Jitter == o.Jitter && SampleShading == o.SampleShading && TXAA == o.TXAA && MultisampleTAA == o.MultisampleTAA &&
-                       Stability == o.Stability && Normals == o.Normals && Albedo == o.Albedo && Geometry == o.Geometry;
+                       Stability == o.Stability && Normals == o.Normals && Albedo == o.Albedo && Geometry == o.Geometry && Indirect == o.Indirect;
             }
         };
         SceneConfig WantedSceneConfig() const;

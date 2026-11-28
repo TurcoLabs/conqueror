@@ -218,9 +218,13 @@ namespace Conqueror
 
         if (m_ColorAttachments.size() > 1)
         {
-            CQ_CORE_ASSERT(m_ColorAttachments.size() <= 4, "Too many color attachments!");
-            GLenum buffers[4] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2, GL_COLOR_ATTACHMENT3 };
-            glDrawBuffers((GLsizei)m_ColorAttachments.size(), buffers);
+            // Sahne hedefi AO açıkken 5 renk eki taşır (renk, normal, albedo, güneş gölgesi, dolaylı aydınlık; 290)
+            CQ_CORE_ASSERT(m_ColorAttachments.size() <= 8, "Too many color attachments!");
+            GLenum buffers[8];
+            const size_t count = std::min<size_t>(m_ColorAttachments.size(), 8);
+            for (size_t i = 0; i < count; ++i)
+                buffers[i] = (GLenum)(GL_COLOR_ATTACHMENT0 + i);
+            glDrawBuffers((GLsizei)count, buffers);
         }
         else if (m_ColorAttachments.empty())
         {

@@ -15,6 +15,9 @@ layout(location = 3) out float CQ_GBufferShadow;
 uniform float u_MotionFlag = 0.0;   // 2: bu karede hareket etti (Renderer3D)
 // SSGI için: doğrusal albedo (rgb) + ortam örtmesi (a); şeffaflar 0 (alttaki opak korunur)
 layout(location = 2) out vec4 CQ_GBufferAlbedo;
+// 290: dolaylı aydınlık (rgb, doğrusal HDR, sisten sonra): ekran uzayı AO yalnız buna uygulanır; şeffaflar 0 (alttaki opak korunur),
+// ışıksız / hata ayıklama görünümü 0 (AO uygulanmaz)
+layout(location = 4) out vec4 CQ_GBufferIndirect;
 
 vec2 CQ_OctEncode(vec3 n)
 {
@@ -176,6 +179,7 @@ void main()
     CQ_GBufferNormal = u_RenderMode == 2 ? vec4(0.0) : vec4(CQ_OctEncode(surface.Normal), unlit ? 1.0 : surface.Roughness, 2.0 + u_MotionFlag + clamp(surface.Metallic, 0.0, 1.0));
     CQ_GBufferAlbedo = u_RenderMode == 2 ? vec4(0.0) : vec4(surface.Albedo * (1.0 - surface.Metallic), surface.AO);
     CQ_GBufferShadow = 1.0;   // gölgelendirme (aşağıda) güneş gölgesini yazar; hata ayıklama / ışıksız yolda aydınlık
+    CQ_GBufferIndirect = u_RenderMode == 2 ? vec4(0.0) : vec4(0.0, 0.0, 0.0, 1.0);
 
     // Editör hata ayıklama görünümleri
     int debugView = CQ_Frame.DebugParams.x;
@@ -219,4 +223,6 @@ void main()
     }
     FragColor = CQ_FinalizeOutput(CQ_ShadeSurface(surface));
     CQ_GBufferShadow = g_CQSunShadow;
+    if (u_RenderMode != 2)
+        CQ_GBufferIndirect = vec4(g_CQIndirect, 1.0);
 }

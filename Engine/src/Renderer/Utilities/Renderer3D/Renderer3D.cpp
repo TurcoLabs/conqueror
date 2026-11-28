@@ -1455,6 +1455,7 @@ namespace Conqueror
         // hareket bayrağı, hareket eden nesnenin önceki yeri
         // Yükseltici iç çözünürlükte çiziyorsa malzeme dokularının mip sapması (gölge geçişi başka hedef bağlamadan önce, şimdi)
         s->TextureLodBias = PostProcessStack::GetCurrentTextureLodBias();
+        PostProcessStack::PrepareCurrentScene();
         s->FrameDirty = true;
         if (PostProcessStack::WantsMotionData())
         {

@@ -497,10 +497,11 @@ vec3 CQ_APVIrradiance(vec3 worldPos, vec3 n, out bool found)
 
 // ---------------------------------------------------------------- Sis
 
-vec3 CQ_ApplyFog(vec3 color, vec3 worldPos)
+// Sisin bu noktadaki payı (0: sis yok, 1: tamamen sis)
+float CQ_FogAmount(vec3 worldPos)
 {
     if (CQ_Frame.FogColor.a < 0.5)
-        return color;
+        return 0.0;
     float dist = length(worldPos - CQ_CameraPosition());
     int mode = int(CQ_Frame.FogParams.x + 0.5);
     float density = CQ_Frame.FogParams.y;
@@ -515,8 +516,14 @@ vec3 CQ_ApplyFog(vec3 color, vec3 worldPos)
     float heightFalloff = CQ_Frame.FogParams2.x;
     if (heightFalloff > 0.0)
         f *= exp(-heightFalloff * max(worldPos.y - CQ_Frame.FogParams2.y, 0.0));
+    return Saturate(f);
+}
 
-    return mix(color, CQ_Frame.FogColor.rgb, Saturate(f));
+vec3 CQ_ApplyFog(vec3 color, vec3 worldPos)
+{
+    if (CQ_Frame.FogColor.a < 0.5)
+        return color;
+    return mix(color, CQ_Frame.FogColor.rgb, CQ_FogAmount(worldPos));
 }
 
 // ---------------------------------------------------------------- Alan ışıkları
@@ -640,6 +647,10 @@ vec3 CQ_AreaLightContribution(CQ_Surface s, CQ_AreaLight al, vec3 V, vec3 F0, ve
 
 // Son gölgelendirilen yüzeyin güneş gölgesi (G-buffer gölge eki / TAA gölge değişimi)
 float g_CQSunShadow = 1.0;
+// 290: yüzeyin dolaylı (ortam / IBL / ışık probu / lightmap) aydınlığı, sisten sonra. Ekran uzayı AO yalnız buna uygulanır (Unreal ve
+// HDRP'deki gibi): eskiden AO bütün rengi, güneşin doğrudan ışığı dahil karartıyordu; yere yatan hedef tahtasının çevresinde güneşli
+// zeminde bulanık bir hale kalıyordu
+vec3 g_CQIndirect = vec3(0.0);
 
 // Light Profile: 8 örnek arasında doğrusal (t: 0..1)
 float CQ_LightProfile(vec4 p0, vec4 p1, float t)
@@ -774,6 +785,7 @@ vec4 CQ_ShadeSurface(CQ_Surface s)
     vec3 indirect = kD * irradiance * s.Albedo * s.AO + specularIndirect * specOcclusion;
 
     vec3 color = Lo + indirect + s.Emission;
+    g_CQIndirect = indirect * (1.0 - CQ_FogAmount(s.Position));
     color = CQ_ApplyFog(color, s.Position);
     return vec4(color, s.Alpha);
 }

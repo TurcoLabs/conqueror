@@ -27,6 +27,9 @@ uniform sampler2D u_Depth;
 uniform vec2 u_AONearFar = vec2(0.1, 1000.0);   // AO büyütmesi için izdüşümün yakın / uzak düzlemi (326)
 uniform int u_UseBloom = 0;
 uniform int u_UseAO = 0;
+// 290: AO yalnız dolaylı aydınlığa (sahnenin 4. eki, PBRForwardFragment.glsl): renk - dolaylı x (1 - AO). Ek yoksa eski yol (bütün renk)
+uniform sampler2D u_Indirect;
+uniform int u_AOIndirectOnly = 0;
 uniform float u_BloomIntensity = 0.6;
 uniform vec3 u_BloomTint = vec3(1.0);
 uniform float u_Exposure = 1.0;        // doğrusal çarpan
@@ -148,7 +151,13 @@ void main()
         color = vec3(0.0);
 
     if (u_UseAO == 1)
-        color *= SampleAOUpsampled(u_AO, u_Depth, uv, u_AONearFar);
+    {
+        float ao = SampleAOUpsampled(u_AO, u_Depth, uv, u_AONearFar);
+        if (u_AOIndirectOnly == 1)
+            color = max(color - max(texture(u_Indirect, uv).rgb, vec3(0.0)) * (1.0 - ao), vec3(0.0));
+        else
+            color *= ao;
+    }
     if (u_UseBloom == 1)
         color += texture(u_Bloom, uv).rgb * u_BloomIntensity * u_BloomTint;
 

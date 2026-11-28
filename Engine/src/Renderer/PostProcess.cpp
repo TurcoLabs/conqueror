@@ -355,13 +355,24 @@ namespace Conqueror
         samples = std::min<uint32_t>(samples, (uint32_t)std::max(1, AntiAliasing::GetRealCaps().MaxSamples));
         // Albedo eki normal ekini gerektirir (ek sırası sabit: 1 normal, 2 albedo). Temporal AA da normal ekinin w'sindeki
         // hareket bayrağını okur (hareket eden nesne iz bırakmasın)
-        const bool wantNormals = m_WantNormals || m_WantAlbedo || m_WantTAA || m_WantGeometry;
+        // 290: AO açıkken dolaylı aydınlık eki (4); ek sırası sabit olduğundan 1-3 de oluşturulur. 5 renk eki çizemeyen sistemde (ES 3.0 /
+        // WebGL 2'nin alt sınırı 4) AO eskisi gibi bütün renge uygulanır
+        static GLint s_MaxDrawBuffers = 0;
+        if (s_MaxDrawBuffers == 0)
+        {
+            GLint attachments = 0;
+            glGetIntegerv(GL_MAX_DRAW_BUFFERS, &s_MaxDrawBuffers);
+            glGetIntegerv(GL_MAX_COLOR_ATTACHMENTS, &attachments);
+            s_MaxDrawBuffers = std::max<GLint>(std::min(s_MaxDrawBuffers, attachments), 1);
+        }
+        const bool wantIndirect = m_WantIndirect && s_MaxDrawBuffers >= 5;
+        const bool wantNormals = m_WantNormals || m_WantAlbedo || m_WantTAA || m_WantGeometry || wantIndirect;
         // TAA: güneş gölgesi eki (3) de yazılır; ek sırası sabit olduğundan albedo eki (2) de oluşturulur
-        const bool wantShadowMask = m_WantTAA;
+        const bool wantShadowMask = m_WantTAA || wantIndirect;
         const bool wantAlbedo = m_WantAlbedo || wantShadowMask;
         const bool coverageOk = m_CoverageSamples == m_WantCoverageSamples;
         if (m_SceneFramebuffer && m_Width == width && m_Height == height && m_Samples == samples && m_HasNormals == wantNormals &&
-            m_HasAlbedo == wantAlbedo && m_HasShadowMask == wantShadowMask && coverageOk)
+            m_HasAlbedo == wantAlbedo && m_HasShadowMask == wantShadowMask && m_HasIndirect == wantIndirect && coverageOk)
             return;
 
         // Sahne hedefleri yeniden kuruluyor (boyut, örnek sayısı ya da ek değişti): zamansal geçmişler eski hedeflere aittir, hepsi baştan
@@ -375,12 +386,16 @@ namespace Conqueror
         m_HasNormals = wantNormals;
         m_HasAlbedo = wantAlbedo;
         m_HasShadowMask = wantShadowMask;
+        m_HasIndirect = wantIndirect;
 
         FramebufferSpecification spec;
         spec.Width = width;
         spec.Height = height;
         // SSR / SSGI açıkken ek renk ekleri: PBR shader'ları normal / pürüzlülük / metaliklik ve albedo yazar
-        if (m_HasShadowMask)
+        if (m_HasIndirect)
+            spec.Attachments = { FramebufferTextureFormat::RGBA16F, FramebufferTextureFormat::RGBA16F, FramebufferTextureFormat::RGBA8, FramebufferTextureFormat::R8,
+                                 FramebufferTextureFormat::RGBA16F, FramebufferTextureFormat::Depth };
+        else if (m_HasShadowMask)
             spec.Attachments = { FramebufferTextureFormat::RGBA16F, FramebufferTextureFormat::RGBA16F, FramebufferTextureFormat::RGBA8, FramebufferTextureFormat::R8,
                                  FramebufferTextureFormat::Depth };
         else if (m_HasAlbedo)
@@ -460,6 +475,7 @@ namespace Conqueror
         if (m_HasNormals) formats.push_back(GL_RGBA16F);
         if (m_HasAlbedo) formats.push_back(GL_RGBA8);
         if (m_HasShadowMask) formats.push_back(GL_R8);
+        if (m_HasIndirect) formats.push_back(GL_RGBA16F);
         glCreateFramebuffers(1, &m_CoverageFramebuffer);
         std::vector<GLenum> drawBuffers;
         for (size_t i = 0; i <= formats.size(); ++i)
@@ -669,6 +685,7 @@ namespace Conqueror
         c.Normals = m_WantNormals;
         c.Albedo = m_WantAlbedo;
         c.Geometry = m_WantGeometry;
+        c.Indirect = m_WantIndirect;
         return c;
     }
 
@@ -678,6 +695,7 @@ namespace Conqueror
         height = std::max(height, 1u);
         m_BeganConfig = WantedSceneConfig();
         m_BeganConfigValid = true;
+        m_IndirectClearPending = true;
         // İç çözünürlük: süper örneklemede (SSAA / OGSSAA / FSAA) büyük, yükselticilerde (FSR / NIS / CAS) küçük; son geçiş çıktıya
         // süzer (küçültme ya da EASU / CAS büyütme)
         m_OutputWidth = width;
@@ -1164,6 +1182,30 @@ namespace Conqueror
         return m_SceneFramebuffer ? m_SceneFramebuffer->GetColorAttachmentRendererID(3) : 0;
     }
 
+    uint32_t PostProcessStack::GetSceneIndirectTexture() const
+    {
+        if (!m_HasIndirect)
+            return 0;
+        if (m_ResolvedFramebuffer)
+            return m_ResolvedFramebuffer->GetColorAttachmentRendererID(4);
+        return m_SceneFramebuffer ? m_SceneFramebuffer->GetColorAttachmentRendererID(4) : 0;
+    }
+
+    void PostProcessStack::PrepareCurrentScene()
+    {
+        if (!s_Current || !s_Current->m_HasIndirect || !s_Current->m_IndirectClearPending || !s_Current->m_SceneFramebuffer)
+            return;
+        GLint drawFBO = 0;
+        glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &drawFBO);
+        const GLuint scene = (s_Current->m_CoverageFramebuffer && s_Current->m_CoverageSamples > 0) ? s_Current->m_CoverageFramebuffer
+                                                                                                      : s_Current->m_SceneFramebuffer->GetRendererID();
+        if ((GLuint)drawFBO != scene)
+            return;
+        s_Current->m_IndirectClearPending = false;
+        const float zero[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+        glClearBufferfv(GL_COLOR, 4, zero);
+    }
+
     uint32_t PostProcessStack::GetSceneNormalTexture() const
     {
         if (!m_HasNormals)
@@ -1208,7 +1250,7 @@ namespace Conqueror
         {
             // EQAA / CSAA çözümü: kapsam örnekli renderbuffer'lardan sahne hedefinin (tek örnek) eklerine
             const GLuint src = m_CoverageFramebuffer, dst = m_SceneFramebuffer->GetRendererID();
-            const int count = 1 + (m_HasNormals ? 1 : 0) + (m_HasAlbedo ? 1 : 0) + (m_HasShadowMask ? 1 : 0);
+            const int count = 1 + (m_HasNormals ? 1 : 0) + (m_HasAlbedo ? 1 : 0) + (m_HasShadowMask ? 1 : 0) + (m_HasIndirect ? 1 : 0);
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
             for (int a = 0; a < count; ++a)
             {
@@ -1218,7 +1260,7 @@ namespace Conqueror
             }
             glBlitNamedFramebuffer(src, dst, 0, 0, m_Width, m_Height, 0, 0, m_Width, m_Height, GL_DEPTH_BUFFER_BIT, GL_NEAREST);
             glNamedFramebufferReadBuffer(src, GL_COLOR_ATTACHMENT0);
-            const GLenum all[4] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2, GL_COLOR_ATTACHMENT3 };
+            const GLenum all[5] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2, GL_COLOR_ATTACHMENT3, GL_COLOR_ATTACHMENT4 };
             glNamedFramebufferDrawBuffers(dst, count, all);
             return;
         }
@@ -1236,7 +1278,7 @@ namespace Conqueror
             {
                 // SSR / SSGI ekleri de çözülür (en yakın örnek)
                 const GLuint src = m_SceneFramebuffer->GetRendererID(), dst = m_ResolvedFramebuffer->GetRendererID();
-                const int extra = m_HasShadowMask ? 3 : (m_HasAlbedo ? 2 : 1);
+                const int extra = m_HasIndirect ? 4 : (m_HasShadowMask ? 3 : (m_HasAlbedo ? 2 : 1));
                 for (int a = 1; a <= extra; ++a)
                 {
                     glNamedFramebufferReadBuffer(src, GL_COLOR_ATTACHMENT0 + a);
@@ -1244,7 +1286,7 @@ namespace Conqueror
                     glBlitNamedFramebuffer(src, dst, 0, 0, m_Width, m_Height, 0, 0, m_Width, m_Height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
                 }
                 glNamedFramebufferReadBuffer(src, GL_COLOR_ATTACHMENT0);
-                const GLenum all[4] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2, GL_COLOR_ATTACHMENT3 };
+                const GLenum all[5] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2, GL_COLOR_ATTACHMENT3, GL_COLOR_ATTACHMENT4 };
                 glNamedFramebufferDrawBuffers(dst, extra + 1, all);
             }
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -1770,6 +1812,10 @@ namespace Conqueror
         composite->SetInt("u_UseBloom", (on && settings.Bloom && m_BloomResult) ? 1 : 0);
         // AO yalnızca bu karede hesaplandıysa (ortografik kamerada atlanır; eski sonuç kullanılmaz)
         composite->SetInt("u_UseAO", ((on || m_AOView) && settings.AmbientOcclusion && m_AOBlur.Texture && m_AOValid && !m_AOApplied) ? 1 : 0);
+        // 290: AO yalnız dolaylı aydınlığa (Unreal / HDRP); ek yoksa (AO görünümü, ortografik ...) bütün renge
+        const uint32_t indirect = GetSceneIndirectTexture();
+        composite->SetInt("u_Indirect", 5);
+        composite->SetInt("u_AOIndirectOnly", indirect && !m_AOView ? 1 : 0);
         composite->SetInt("u_AutoExposure", 4);
         composite->SetInt("u_UseAutoExposure", m_UseAutoExposure ? 1 : 0);
         composite->SetFloat2("u_AutoExposureRange", glm::vec2(settings.AutoExposureMin, std::max(settings.AutoExposureMax, settings.AutoExposureMin)));
@@ -1801,6 +1847,7 @@ namespace Conqueror
         BindTexture(2, m_AOBlur.Texture);
         BindTexture(3, GetSceneDepthTexture());
         BindTexture(4, m_UseAutoExposure ? m_Adapt[m_AdaptIndex].Texture : 0);
+        BindTexture(5, indirect);
         PostProcess::DrawFullscreenQuad();
         Renderer::GetStats().PostProcessPasses++;
     }
@@ -3364,6 +3411,8 @@ namespace Conqueror
             const bool ssgi = settings.ScreenSpaceGI && !settings.RayTracedGI;   // Ray Traced GI açıkken ekran izli GI yok
             m_WantNormals = fx && (settings.ScreenSpaceReflections || ssgi) && !camera.Orthographic;
             m_WantAlbedo = fx && ssgi && !camera.Orthographic;
+            // 290: AO (ekran uzayı ya da ışın izlemeli) yalnız dolaylı aydınlığa uygulanır: o eki iste (ortografik kamerada AO yok)
+            m_WantIndirect = fx && settings.AmbientOcclusion && !camera.Orthographic;
             if (!m_WantAlbedo)
                 m_GIHistoryValid = false;
         }
