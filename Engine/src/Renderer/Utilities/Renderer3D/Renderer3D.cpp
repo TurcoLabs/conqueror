@@ -434,13 +434,27 @@ namespace Conqueror
         glm::mat4 s_MotionViewProj{ 1.0f };
         glm::mat4 s_MotionView{ 1.0f }, s_MotionPrevView{ 1.0f };   // bu ve önceki çizimin görüş matrisi (CoverageTransform)
         bool s_MotionHasPrevView = false;
-        // GBAA / SRAA geometri geçişi: görünüm başına bu karenin opak mesh çizimleri (yalnız istendiğinde toplanır)
+        // GBAA / SRAA geometri geçişi ve editör ızgarasının tam derinliği (355): görünüm başına bu karenin opak çizimleri (yalnız
+        // istendiğinde toplanır). GBAA / SRAA yalnız Edge kayıtlarını (Opaque kipli, rüzgârsız, tek örnekli mesh) çizer; ızgaranın
+        // derinlik geçişi derinlik yazan her opak / alfa kesmeli çizimi (rüzgârlı ağaç, MultiMesh örnekleri, iskeletli model, arazi)
         struct GeometryDraw
         {
+            enum class Kind : uint8_t { Mesh, Instanced, Skinned };
             std::shared_ptr<Mesh> MeshRef;
             const Mesh* Draw = nullptr;
             glm::mat4 Transform{ 1.0f };
             int Cull = 1;   // 0 kapalı, 1 arka, 2 ön
+            bool Edge = true;
+            Kind Type = Kind::Mesh;
+            glm::vec4 Wind{ 0.0f };         // ağaç rüzgârı (u_TreeWind) ve parametreleri (WindParams.y > 0: açık)
+            glm::vec2 WindParams{ 0.0f };
+            std::shared_ptr<Texture2D> Cutout;   // alfa kesmeli: doku alfası x Alpha < AlphaClip atılır
+            float AlphaClip = 0.0f, Alpha = 1.0f;
+            glm::vec2 UVScale{ 1.0f }, UVOffset{ 0.0f };
+            uint32_t InstanceBuffer = 0, FirstInstance = 0, InstanceCount = 0;
+            std::shared_ptr<std::vector<glm::mat4>> Bones;   // iskeletli: modelin bu karedeki kemik paleti (meshleri paylaşır)
+            std::shared_ptr<SkinnedMesh> SkinnedRef;
+            uint32_t Morph = 0;
         };
         std::unordered_map<const void*, std::vector<GeometryDraw>> s_Geometry;
         std::vector<GeometryDraw>* s_GeometryCur = nullptr;
@@ -923,7 +937,7 @@ namespace Conqueror
         bool drew = false;
         for (const auto& d : it->second)
         {
-            if (!d.Draw || !d.Draw->GetVertexArray())
+            if (!d.Edge || d.Type != GeometryDraw::Kind::Mesh || !d.Draw || !d.Draw->GetVertexArray())
                 continue;
             if (d.Cull == 0)
                 glDisable(GL_CULL_FACE);
@@ -943,6 +957,103 @@ namespace Conqueror
         glDepthFunc((GLenum)depthFunc);
         glCullFace((GLenum)cullMode);
         glDepthMask(depthMask);
+        return drew;
+    }
+
+    bool Renderer3D::RenderGeometryDepth(const void* view, const glm::mat4& viewProj)
+    {
+        auto it = s_Geometry.find(view);
+        if (it == s_Geometry.end() || it->second.empty() || (s && s->Wireframe))
+            return false;
+        const std::shared_ptr<Shader> depth = s_ShadowPass.GetDepthShader();
+        const std::shared_ptr<Shader> skinned = s_ShadowPass.GetSkinnedDepthShader();
+        const std::shared_ptr<Shader> instanced = s_ShadowPass.GetInstancedDepthShader();
+        if (!depth)
+            return false;
+        const GLboolean cullFace = glIsEnabled(GL_CULL_FACE);
+        GLint cullMode = GL_BACK;
+        glGetIntegerv(GL_CULL_FACE_MODE, &cullMode);
+        auto setCull = [](int c) {
+            if (c == 0)
+                glDisable(GL_CULL_FACE);
+            else
+            {
+                glEnable(GL_CULL_FACE);
+                glCullFace(c == 2 ? GL_FRONT : GL_BACK);
+            }
+        };
+        // Program yalnız değişince bağlanır; alfa kesmeli çizim kendi programını bağlar
+        const Shader* bound = nullptr;
+        auto use = [&](const std::shared_ptr<Shader>& sh) {
+            if (bound == sh.get())
+                return;
+            sh->Bind();
+            sh->SetMat4("u_LightSpaceMatrix", viewProj);
+            bound = sh.get();
+        };
+        const float windTime = GetWindTime();
+        const std::vector<glm::mat4>* lastBones = nullptr;
+        bool drew = false;
+        for (const auto& d : it->second)
+        {
+            if (d.Type == GeometryDraw::Kind::Mesh)
+            {
+                if (!d.Draw || !d.Draw->GetVertexArray())
+                    continue;
+                setCull(d.Cull);
+                // Ana çizimdeki gibi: rüzgâr açıkken (zaman, 1, parametreler)
+                const glm::vec4 windUniform = d.WindParams.y > 0.0f ? glm::vec4(windTime, 1.0f, d.WindParams.x, d.WindParams.y) : glm::vec4(0.0f);
+                if (d.Cutout && s_ShadowPass.CutoutReady())
+                {
+                    s_ShadowPass.DrawCutout(*d.Draw, d.Transform, viewProj, *d.Cutout, d.AlphaClip, d.Alpha, d.UVScale, d.UVOffset, d.Wind, windUniform);
+                    bound = nullptr;
+                }
+                else
+                {
+                    use(depth);
+                    depth->SetMat4("u_Transform", d.Transform);
+                    depth->SetFloat4("u_TreeWind", d.Wind);
+                    depth->SetFloat4("u_TreeWindParams", windUniform);
+                    RenderCommand::DrawIndexed(d.Draw->GetVertexArray(), d.Draw->GetIndexCount());
+                }
+                drew = true;
+            }
+            else if (d.Type == GeometryDraw::Kind::Instanced)
+            {
+                if (!instanced || !d.Draw || !d.Draw->GetVertexArray() || !d.InstanceBuffer || d.InstanceCount == 0)
+                    continue;
+                setCull(d.Cull);
+                use(instanced);
+                instanced->SetMat4("u_Transform", d.Transform);
+                BindInstanceAttributes(*d.Draw, d.InstanceBuffer, d.FirstInstance);
+                glDrawElementsInstanced(GL_TRIANGLES, (GLsizei)d.Draw->GetIndexCount(), GL_UNSIGNED_INT, nullptr, (GLsizei)d.InstanceCount);
+                UnbindInstanceAttributes(*d.Draw);
+                drew = true;
+            }
+            else if (d.Type == GeometryDraw::Kind::Skinned)
+            {
+                if (!skinned || !d.SkinnedRef || !d.SkinnedRef->GetVertexArray() || !d.Bones || d.Bones->empty())
+                    continue;
+                setCull(d.Cull);
+                use(skinned);
+                skinned->SetMat4("u_Transform", d.Transform);
+                if (lastBones != d.Bones.get())
+                {
+                    SetBonePalette(skinned, d.Bones->data(), (uint32_t)d.Bones->size());
+                    lastBones = d.Bones.get();
+                }
+                SetMorphDeltas(skinned, d.Morph);
+                RenderCommand::DrawIndexed(d.SkinnedRef->GetVertexArray(), d.SkinnedRef->GetIndexCount());
+                drew = true;
+            }
+        }
+        // Uniform'lar bağlı programa yazılır: blend shape yalnız iskeletli program hâlâ bağlıyken kapatılır (başka program bağlıyken
+        // onun konumuna yazmak GL_INVALID_OPERATION verir; sonraki iskeletli çizim zaten kendi değerini yazar)
+        if (skinned && bound == skinned.get())
+            SetMorphDeltas(skinned, 0u);
+        glBindVertexArray(0);
+        if (cullFace) glEnable(GL_CULL_FACE); else glDisable(GL_CULL_FACE);
+        glCullFace((GLenum)cullMode);
         return drew;
     }
 
@@ -2316,10 +2427,38 @@ namespace Conqueror
         }
         // GBAA / SRAA geometri listesi (yalnız Opaque kipi: alfa kesmeli yüzeyin görünen kenarı üçgen kenarı değildir; rüzgârda
         // salınan ağaç geometrisi bu geçişte salınmadığından eklenmez)
-        if (!fromQueue && s_GeometryCur && material->Rendering == Material::RenderMode::Opaque && !windy)
+        if (!fromQueue && s_GeometryCur && material->Rendering != Material::RenderMode::Transparent)
         {
             const Material::CullMode cull = material->Culling;
-            s_GeometryCur->push_back({ meshIn, mesh, transform, (doubleSided || cull == Material::CullMode::Off) ? 0 : (cull == Material::CullMode::Front ? 2 : 1) });
+            GeometryDraw g;
+            g.MeshRef = meshIn;
+            g.Draw = mesh;
+            g.Transform = transform;
+            g.Cull = (doubleSided || cull == Material::CullMode::Off) ? 0 : (cull == Material::CullMode::Front ? 2 : 1);
+            g.Edge = material->Rendering == Material::RenderMode::Opaque && !windy;
+            if (windy)
+            {
+                g.Wind = s->Wind;
+                g.WindParams = s->WindParams;
+            }
+            // Alfa kesmeli yüzey nesne UV'siyle kırpılır (gölge geçişindeki gibi); dünyaya hizalı UV'li ya da graph malzemeli kesmeli
+            // yüzeyin deliği derinlik geçişinde kurulamaz: kaydedilmez (ızgara orada sahne derinliğinden bulunur)
+            bool replayable = true;
+            if (material->Rendering == Material::RenderMode::Cutout)
+            {
+                if (material->AlbedoMap && !material->WorldAligned && !material->MaterialShader)
+                {
+                    g.Cutout = material->AlbedoMap;
+                    g.AlphaClip = material->AlphaClip;
+                    g.Alpha = material->Opacity;
+                    g.UVScale = material->Tiling;
+                    g.UVOffset = material->Offset;
+                }
+                else
+                    replayable = false;
+            }
+            if (replayable)
+                s_GeometryCur->push_back(std::move(g));
         }
         // Hareket eden opak nesne: TAA hareket vektörü geçişinde kendi hareketiyle çizilir (önceki konumu biliniyorsa). Rüzgârda
         // salınan ağaç dönüşümü değişmese de her karede (köşeler iki zamanda salınır)
@@ -2487,6 +2626,23 @@ namespace Conqueror
         }
         if (!s_PBRShader || !s_PBRShader->IsValid())
             return;
+        // Editör ızgarasının tam derinliği (355): opak örnek kümesi de kaydedilir (GBAA / SRAA kullanmaz). Alfa kesmeli örnekler
+        // (çim / yaprak kartları) kaydedilmez: kartın deliği örnekli derinlik geçişinde kurulamaz, ızgara orada sahne derinliğinden bulunur
+        if (s_GeometryCur && material->Rendering == Material::RenderMode::Opaque)
+        {
+            const Material::CullMode cull = material->Culling;
+            GeometryDraw g;
+            g.MeshRef = mesh;
+            g.Draw = mesh.get();
+            g.Transform = transform;
+            g.Cull = (doubleSided || cull == Material::CullMode::Off) ? 0 : (cull == Material::CullMode::Front ? 2 : 1);
+            g.Edge = false;
+            g.Type = GeometryDraw::Kind::Instanced;
+            g.InstanceBuffer = instanceBuffer;
+            g.FirstInstance = firstInstance;
+            g.InstanceCount = instanceCount;
+            s_GeometryCur->push_back(std::move(g));
+        }
         UploadFrameData();
         const auto& shader = s_PBRShader;
         shader->Bind();
@@ -2534,6 +2690,16 @@ namespace Conqueror
     {
         if (!mesh || !s_TerrainShader || !s_TerrainShader->IsValid())
             return;
+        if (s_GeometryCur)
+        {
+            GeometryDraw g;
+            g.MeshRef = mesh;
+            g.Draw = mesh.get();
+            g.Transform = transform;
+            g.Cull = 1;
+            g.Edge = false;
+            s_GeometryCur->push_back(std::move(g));
+        }
         UploadFrameData();
         auto& shader = s_TerrainShader;
         shader->Bind();
@@ -2930,10 +3096,27 @@ namespace Conqueror
             }
         }
 
+        std::shared_ptr<std::vector<glm::mat4>> replayBones;
+        if (s_GeometryCur)
+            replayBones = std::make_shared<std::vector<glm::mat4>>(s_Scratch.begin(), s_Scratch.begin() + palette);
         for (size_t i = 0; i < model->SkinnedMeshes.size(); ++i)
         {
             auto& mesh = model->SkinnedMeshes[i];
             auto material = (i < model->Materials.size() && model->Materials[i]) ? model->Materials[i] : Material::CreateDefault();
+            if (replayBones && mesh && mesh->GetVertexArray())
+            {
+                GeometryDraw g;
+                g.Draw = nullptr;
+                g.Transform = transform;
+                const Material::CullMode cull = material->Culling;
+                g.Cull = cull == Material::CullMode::Off ? 0 : (cull == Material::CullMode::Front ? 2 : 1);
+                g.Edge = false;
+                g.Type = GeometryDraw::Kind::Skinned;
+                g.Bones = replayBones;
+                g.Morph = morphTextures && i < morphTextures->size() ? (*morphTextures)[i] : 0u;
+                g.SkinnedRef = mesh;
+                s_GeometryCur->push_back(std::move(g));
+            }
             material->Bind(shader);
             SetMorphDeltas(shader, morphTextures && i < morphTextures->size() ? (*morphTextures)[i] : 0u);
             ApplyCulling(material, false);
@@ -3013,6 +3196,9 @@ namespace Conqueror
         }
         s->FrameActive = false;
         s_MotionCur = nullptr;
+        // Görünümün opak çizim kaydı (GBAA / SRAA, ızgaranın ve TAAU'nun tam derinliği) burada kapanır: sonraki çizimler (başka bir
+        // görünümün BeginFrame'inden önce aynı karede yapılan önizleme / panel çizimleri) bu görünümün kaydına karışmasın
+        s_GeometryCur = nullptr;
     }
 
     // ------------------------------------------------------------------ Gizmo'lar

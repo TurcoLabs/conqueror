@@ -3,11 +3,14 @@
 #include "Renderer/Utilities/Renderer3D/Renderer3D.h"
 #include "Renderer/Renderer.h"
 #include "Renderer/PostProcess.h"
+#include "Renderer/ExactDepth.h"
+#include "Core/Profiling/FrameProfiler.h"
 
 #include <glad/glad.h>
 #include <cmath>
 #include <algorithm>
 #include <unordered_map>
+#include <memory>
 
 namespace Conqueror
 {
@@ -28,6 +31,7 @@ namespace Conqueror
         DeferredGrid s_Deferred;
         uint32_t s_BelowTexture = 0;        // son görüntünün kopyası (ızgara doğrusal uzayda onun üstüne karıştırılır)
         uint32_t s_BelowWidth = 0, s_BelowHeight = 0;
+        uint32_t s_LastExactRange = 0;      // son bileşimin tam derinlik aralığı (otomasyon ölçüsü)
 
         // Görünüm başına (son görüntünün dokusuyla anahtarlı) birikmiş örtme payı: iki doku, karede bir yer değiştirir
         struct CoverageHistory
@@ -39,6 +43,9 @@ namespace Conqueror
             bool Valid = false;
             glm::mat4 PrevViewProj{ 1.0f };
             uint64_t LastFrame = 0;
+            // 355: görünümün tam derinliği (ExactDepth: opak çizimler titreşimsiz, çıktı çözünürlüğünün 3 katında yeniden çizilir)
+            std::unique_ptr<ExactDepth> Exact;
+            uint32_t ExactFrame = 0;   // dururken alt piksel kaydırma dizisinin sırası
         };
         std::unordered_map<uint32_t, CoverageHistory> s_Coverage;
         uint64_t s_CompositeFrame = 0;
@@ -63,6 +70,10 @@ namespace Conqueror
                     return false;
                 }
                 glGenVertexArrays(1, &s_EmptyVAO);
+                // Tam derinlik örnekleyicileri kendi birimlerinde (sahneye çizerken bağlanmazlar)
+                s_GridShader->Bind();
+                s_GridShader->SetInt("u_ExactDepth", 4);
+                s_GridShader->SetInt("u_ExactWide", 5);
             }
             return true;
         }
@@ -178,13 +189,14 @@ namespace Conqueror
     // ve Unreal'ın editör ilkelleri gibi ızgara artık kenar yumuşatma ve ton eşlemeden sonra çizilir; kendi çizgi yumuşatması
     // (Golus "pristine grid") olduğundan TAA'ya ihtiyacı yoktur. Nesnelerin önünde / arkasında kalması sahne derinliğinden, sahnenin
     // bu karedeki titreşimiyle örnek örnek (eskiden olduğu gibi) bulunur; karışım doğrusal uzaydadır (ton eşleme kapalı aralıkta eskisiyle aynı)
-    void EditorGrid::RenderDeferred(uint32_t colorTexture, uint32_t width, uint32_t height, uint32_t sceneDepth, uint32_t objectVelocity)
+    bool EditorGrid::RenderDeferred(uint32_t colorTexture, uint32_t width, uint32_t height, uint32_t sceneDepth, uint32_t objectVelocity,
+                                    const void* view)
     {
         if (!s_Deferred.Pending)
-            return;
+            return false;
         s_Deferred.Pending = false;
         if (!colorTexture || !sceneDepth || width == 0 || height == 0 || !EnsureShader())
-            return;
+            return false;
 
         if (!s_BelowTexture || s_BelowWidth != width || s_BelowHeight != height)
         {
@@ -261,6 +273,57 @@ namespace Conqueror
         GLboolean cull = glIsEnabled(GL_CULL_FACE);
         GLboolean depthMask = GL_TRUE;
         glGetBooleanv(GL_DEPTH_WRITEMASK, &depthMask);
+
+        // 355: ızgaranın nesnelerin arkasında kalan payı, sahnenin bu karedeki opak çizimleri titreşimsiz ve çıktı çözünürlüğünün 3 katında
+        // (piksel başına 9 örnek) yeniden çizilerek tam bulunur. Sahne derinliği iç çözünürlükte ve titreşimliydi: pay karelerden biriktiriliyor, geçmiş
+        // komşulukla kırpılıyordu. Küplerin arasındaki pikselden ince aralık titreşimin bazı karelerinde hiç örneklenmediği için eksen
+        // çizgisi yanıp sönüyordu (337 / 353); onu tutmak için eklenen titreme sayacı da kamera hızla hareket ederken kırpmayı atlatıp
+        // eski "açık" payı küplerin üstüne taşıyordu: küplerin üzerinde ızgara çizgisi parçaları ve pembe noktalar (355). Hareket ederken
+        // pay bu karenin tam derinliğidir (geçmiş yok, iz kalmaz). Dururken tam derinlik her karede alt örnek aralığının içinde kaydırılarak
+        // (Halton 2, 3) çizilir ve pay biriktirilir: 9 sabit örnekle nesnenin kenarı boyunca ızgaranın örtülmesi basamaklı kalıyordu (duvarın
+        // üst kenarı 0.148 -> 0.181). Kaydedilmeyen çizim (billboard, alfa kesmeli örnek, graph kesmeli malzeme) olan pikselde ızgara eskisi
+        // gibi sahne derinliğinden bulunur (gölgelendirici iki derinliği karşılaştırır)
+        bool exact = false;
+        glm::vec2 exactJitter(0.0f);   // tam derinliğin örnek kaydırması (çıktı pikseli biriminde)
+        if (view)
+        {
+            if (!h.Exact)
+                h.Exact = std::make_unique<ExactDepth>();
+            glm::mat4 exactViewProj = viewProj;
+            if (still)
+            {
+                const auto halton = [](uint32_t i, uint32_t b) {
+                    float f = 1.0f, r = 0.0f;
+                    for (; i > 0; i /= b)
+                    {
+                        f /= (float)b;
+                        r += f * (float)(i % b);
+                    }
+                    return r;
+                };
+                const uint32_t k = (h.ExactFrame++ % 16u) + 1u;
+                // Alt örnek hücresinin içinde (-0.5..0.5) / Factor piksel
+                exactJitter = glm::vec2(halton(k, 2) - 0.5f, halton(k, 3) - 0.5f) / (float)ExactDepth::Factor();
+                glm::mat4 projection = camera.Projection;
+                const glm::vec2 ndc(2.0f * exactJitter.x / (float)width, 2.0f * exactJitter.y / (float)height);
+                for (int c = 0; c < 4; ++c)
+                {
+                    projection[c][0] += ndc.x * projection[c][3];
+                    projection[c][1] += ndc.y * projection[c][3];
+                }
+                exactViewProj = projection * camera.View;
+            }
+            else
+                h.ExactFrame = 0;
+            // Grid.cqsh ExactMatchesScene: sahnenin titreşimli derinliğinin 1.5 iç piksellik çevresi (çıktı pikseli biriminde yukarı
+            // yuvarlanır); o komşuluktaki en yakın / en uzak tam uzaklık önceden hesaplanır (her ızgara pikselinde 25-49 okuma GPU'da 0.3 ms
+            // tutuyordu)
+            const uint32_t sceneW = std::max(static_cast<const PostProcessStack*>(view)->GetWidth(), 1u);
+            const int exactRadius = std::clamp((int)std::ceil(1.5f * (float)width / (float)sceneW), 1, 5);
+            exact = h.Exact->Render(view, exactViewProj, camera.Projection, width, height, exactRadius);
+        }
+        s_LastExactRange = exact ? h.Exact->RangeTexture() : 0;
+
         glDisable(GL_BLEND);
         glDisable(GL_DEPTH_TEST);
         glDepthMask(GL_FALSE);
@@ -269,6 +332,7 @@ namespace Conqueror
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, h.Framebuffer[write]);
         glViewport(0, 0, (GLsizei)width, (GLsizei)height);
 
+        CQ_PROFILE_GPU("Grid Composite");
         s_GridShader->Bind();
         SetCommonUniforms(camera, viewProj, false, true, false);
         s_GridShader->SetInt("u_Composite", 1);
@@ -290,10 +354,26 @@ namespace Conqueror
         s_GridShader->SetInt("u_CoverageHistory", 2);
         s_GridShader->SetInt("u_ObjectVelocity", 3);
         s_GridShader->SetInt("u_HasObjectVelocity", objectVelocity ? 1 : 0);
+        s_GridShader->SetInt("u_HasExact", exact ? 1 : 0);
+        if (exact)
+        {
+            glBindTextureUnit(4, h.Exact->DepthTexture());
+            glBindTextureUnit(5, h.Exact->WideTexture());
+            s_GridShader->SetInt("u_ExactDepth", 4);
+            s_GridShader->SetInt("u_ExactWide", 5);
+            s_GridShader->SetInt("u_ExactFactor", ExactDepth::Factor());
+            s_GridShader->SetFloat2("u_ExactJitter", exactJitter);
+            s_GridShader->SetFloat2("u_ProjZ", ExactDepth::ProjZ(camera.Projection));
+        }
         glBindVertexArray(s_EmptyVAO);
         glDrawArrays(GL_TRIANGLES, 0, 3);
         glBindVertexArray(0);
         Renderer::GetStats().DrawCalls++;
+        if (exact)
+        {
+            glBindTextureUnit(4, 0);
+            glBindTextureUnit(5, 0);
+        }
 
         h.PrevViewProj = viewProj;
         h.Valid = true;
@@ -304,11 +384,25 @@ namespace Conqueror
         if (blend) glEnable(GL_BLEND);
         if (depthTest) glEnable(GL_DEPTH_TEST);
         if (cull) glEnable(GL_CULL_FACE);
+        return true;
+    }
+
+    uint32_t EditorGrid::GetLastBelowTexture(uint32_t& width, uint32_t& height)
+    {
+        width = s_BelowWidth;
+        height = s_BelowHeight;
+        return s_BelowTexture;
+    }
+
+    uint32_t EditorGrid::GetLastExactRange()
+    {
+        return s_LastExactRange;
     }
 
     void EditorGrid::Shutdown()
     {
         s_Deferred.Pending = false;
+        s_LastExactRange = 0;
         for (auto& [key, h] : s_Coverage)
             DestroyHistory(h);
         s_Coverage.clear();

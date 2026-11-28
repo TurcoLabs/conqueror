@@ -1,0 +1,68 @@
+#language GLSL
+// 355 / 334: tam derinlik (ExactDepth.cpp: görünümün opak çizimleri titreşimsiz, çıktı çözünürlüğünün u_Factor katında) için piksel
+// başına en yakın / en uzak görüş uzaklığı (1e30: gökyüzü) ve (ayrı hedefte) örneklerin en yakın yüzeye düşen payı. Editör ızgarası ve TAAU
+// bunu sahnenin titreşimli derinliğiyle karşılaştırır. u_Mode 1 / 2: aralığın (2 u_Radius + 1)^2 çıktı pikselindeki en yakını / en uzağı, yatay
+// sonra dikey okumayla (TAAU'nun ve ızgaranın tutarlılık denetimi; her pikselde 25-49 okuma yerine)
+#type vertex
+#version 450 core
+
+void main()
+{
+    vec2 pos = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2)) * 2.0 - 1.0;
+    gl_Position = vec4(pos, 0.0, 1.0);
+}
+
+#type fragment
+#version 450 core
+
+layout(location = 0) out vec2 Range;
+layout(location = 1) out float Share;   // mod 0: örneklerin en yakın yüzeye düşen payı
+
+uniform sampler2D u_Depth;   // çıktı pikseli başına u_Factor x u_Factor örnek
+uniform int u_Factor = 3;
+uniform vec2 u_ProjZ;   // izdüşümün (2,2) ve (3,2) öğeleri: uzaklık = (3,2) / (z_ndc + (2,2))
+uniform int u_Mode = 0;
+uniform int u_Radius = 2;
+uniform sampler2D u_RangeIn;   // mod 1: mod 0'ın çıktısı
+
+float SampleDistance(ivec2 p, int s)
+{
+    float d = texelFetch(u_Depth, p * u_Factor + ivec2(s % u_Factor, s / u_Factor), 0).r;
+    return d >= 1.0 ? 1e30 : u_ProjZ.y / (d * 2.0 - 1.0 + u_ProjZ.x);
+}
+
+void main()
+{
+    ivec2 p = ivec2(gl_FragCoord.xy);
+    if (u_Mode != 0)
+    {
+        ivec2 lim = textureSize(u_RangeIn, 0) - 1;
+        ivec2 axis = u_Mode == 1 ? ivec2(1, 0) : ivec2(0, 1);
+        float nearN = 1e30, farN = 0.0;
+        for (int k = -u_Radius; k <= u_Radius; ++k)
+        {
+            vec2 rr = texelFetch(u_RangeIn, clamp(p + axis * k, ivec2(0), lim), 0).rg;
+            nearN = min(nearN, rr.x);
+            farN = max(farN, rr.y);
+        }
+        Range = vec2(nearN, farN);
+        Share = 0.0;
+        return;
+    }
+    float nearest = 1e30;
+    float farthest = 0.0;
+    float dist[16];
+    int n = min(u_Factor * u_Factor, 16);
+    for (int s = 0; s < n; ++s)
+    {
+        dist[s] = SampleDistance(p, s);
+        nearest = min(nearest, dist[s]);
+        farthest = max(farthest, dist[s]);
+    }
+    // En yakın yüzeyin payı (TAAU: iki yüzeyli pikselde yakın yüzeyin kapsaması)
+    int nearCount = 0;
+    for (int s = 0; s < n; ++s)
+        nearCount += abs(dist[s] - nearest) < 0.03 * nearest + 0.02 ? 1 : 0;
+    Range = vec2(nearest, farthest);
+    Share = float(nearCount) / float(n);
+}

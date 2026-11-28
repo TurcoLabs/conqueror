@@ -12,6 +12,7 @@
 #include "TextRenderer.h"
 #include "PostProcess.h"
 #include "EditorGrid.h"
+#include "ExactDepth.h"
 #include "Scene/Lighting2D.h"
 #include "Scene/Billboards.h"
 #include "AISystem/Navigation/NavAgents.h"
@@ -49,6 +50,7 @@ namespace Conqueror
     {
         EditorGrid::Shutdown();
         PostProcess::Shutdown();
+        ExactDepth::ShutdownShared();
         TextRenderer::Shutdown();
         ParticleSystem::Shutdown();
         RibbonRenderer::Shutdown();

@@ -66,6 +66,14 @@ uniform float u_CoverageFeedback = 0.9;
 uniform int u_CoverageStill = 0;        // 1: kamera duruyor (geçmiş yalnız yukarıdan kırpılır, birikim uzun)
 uniform sampler2D u_ObjectVelocity;     // nesne hareket vektörleri (sahnenin iç çözünürlüğünde; w: 0 durağan, 1 hareket eden nesne,
 uniform int u_HasObjectVelocity = 0;    // 2 nesnenin önceki karedeki yeri, 3 yeni beliren sprite)
+// 355: tam derinlik: görünümün bu karedeki opak çizimleri titreşimsiz, çıktı çözünürlüğünün u_ExactFactor katında (piksel başına
+// u_ExactFactor² örnek, konumları kesin bilinir; EditorGrid.cpp)
+uniform int u_HasExact = 0;
+uniform sampler2D u_ExactDepth;
+uniform sampler2D u_ExactWide;          // pikselin çevresindeki (1.5 iç piksel) örneklerin en yakın / en uzak doğrusal uzaklığı (ExactDepthRange.cqsh)
+uniform int u_ExactFactor = 3;
+uniform vec2 u_ExactJitter = vec2(0.0);  // tam derinliğin bu karedeki kaydırması (çıktı pikseli; dururken birikim için): görüntü +kaydırma kadar kayar
+uniform vec2 u_ProjZ = vec2(-1.0, -0.2);  // izdüşümün (2,2), (3,2) öğeleri: uzaklık = (3,2) / (z_ndc + (2,2))
 layout(location = 1) out vec2 CoverageOut;   // composite: bu karenin birikmiş örtme payı (sahneye çizerken bu ek maskelenir)
 
 // Ben Golus "pristine grid" uyarlaması: AA'lı, moiré'siz, SABİT piksel kalınlığında çizgiler.
@@ -122,6 +130,98 @@ float SceneCoverageAt(vec2 fragCoord, float pull)
             cover += w;
     }
     return cover;
+}
+
+// 355: tam derinlikten örtme payı: pikselin her örneği kendi ışınıyla zemin düzlemini keser, ızgara noktası (aynı öne alma payıyla)
+// o örneğin derinliğinin önündeyse görünür. Birikim yok: kamera dururken kare kare aynı, hareket ederken bu karenin kendisi
+float ExactCoverage(ivec2 ip, float pull)
+{
+    // Işının uçları izdüşüm bölmesinden önce NDC'nin doğrusal fonksiyonu: ters matrisin sütunlarıyla örnek başına iki çarpma-toplama.
+    // Karşılaştırma için noktanın yalnız z / w'si gerekir (matrisin 3. / 4. satırı)
+    mat4 inv = u_InvViewProjection;
+    vec4 rowZ = vec4(u_ViewProjection[0][2], u_ViewProjection[1][2], u_ViewProjection[2][2], u_ViewProjection[3][2]);
+    vec4 rowW = vec4(u_ViewProjection[0][3], u_ViewProjection[1][3], u_ViewProjection[2][3], u_ViewProjection[3][3]);
+    float cover = 0.0;
+    int samples = u_ExactFactor * u_ExactFactor;
+    for (int s = 0; s < samples; ++s)
+    {
+        ivec2 sub = ivec2(s % u_ExactFactor, s / u_ExactFactor);
+        float sceneDepth = texelFetch(u_ExactDepth, ip * u_ExactFactor + sub, 0).r;
+        if (sceneDepth >= 1.0)
+        {
+            cover += 1.0;   // gökyüzü
+            continue;
+        }
+        vec2 ndc = (vec2(ip) + (vec2(sub) + 0.5) / float(u_ExactFactor) - u_ExactJitter) / u_OutputSize * 2.0 - 1.0;
+        vec4 xy = inv[0] * ndc.x + inv[1] * ndc.y + inv[3];
+        vec4 n4 = xy - inv[2];
+        vec3 n = n4.xyz / n4.w;
+        vec3 d = xy.xyz / xy.w - n;
+        if (abs(d.y) < 1e-8)
+            continue;
+        float tt = -n.y / d.y;
+        if (tt < 0.0)
+            continue;
+        vec4 p = vec4(n + tt * d - normalize(d) * pull, 1.0);
+        if (dot(rowZ, p) / dot(rowW, p) * 0.5 + 0.5 <= sceneDepth)
+            cover += 1.0;
+    }
+    return cover / float(samples);
+}
+
+vec2 ExactAccumulate(float c)
+{
+    if (u_CoverageStill == 0 || u_CoverageHistoryValid == 0)
+        return vec2(c, 1.0);
+    vec2 px = gl_FragCoord.xy;
+    if (u_HasObjectVelocity == 1)
+    {
+        ivec2 vsz = textureSize(u_ObjectVelocity, 0);
+        ivec2 vc = clamp(ivec2(px / u_OutputSize * vec2(vsz)), ivec2(0), vsz - 1);
+        for (int k = 0; k < 9; ++k)
+            if (texelFetch(u_ObjectVelocity, clamp(vc + ivec2(k % 3 - 1, k / 3 - 1), ivec2(0), vsz - 1), 0).w > 0.5)
+                return vec2(c, 1.0);
+    }
+    ivec2 hsz = textureSize(u_CoverageHistory, 0);
+    vec2 hist = texelFetch(u_CoverageHistory, clamp(ivec2(px), ivec2(0), hsz - 1), 0).rg;
+    float n = max(hist.y - floor(hist.y / 64.0 + 1e-3) * 64.0, 1.0);
+    // Kaydırma payı en çok bir alt örnek hücresi kadar değiştirir: çok farklıysa sahne değişmiştir (geçmiş atılır)
+    if (abs(hist.x - c) > 0.5)
+        return vec2(c, 1.0);
+    return vec2(mix(c, hist.x, min(n / (n + 1.0), 0.94)), min(n + 1.0, 63.0));
+}
+
+float LinearDistance(float depth)
+{
+    return depth >= 1.0 ? 1e30 : u_ProjZ.y / (depth * 2.0 - 1.0 + u_ProjZ.x);
+}
+
+// Tam derinlik bu pikselde sahneyle aynı yüzeyleri mi gösteriyor: sahnenin titreşimli derinliğinin bu pikseldeki 4 örneğinden en yakını,
+// tam derinliğin çevresindeki (bir iç piksel + titreşim kadar) örneklerin aralığıyla karşılaştırılır. Sahnede daha yakın bir yüzey varsa
+// (kaydedilmeyen çizim: billboard, alfa kesmeli örnek, graph kesmeli malzeme) ya da çevredeki bütün tam derinlik örnekleri sahnenin
+// önündeyse (sahnede olmayan yüzey) bu piksel sahne derinliğinden bulunur. Küplerin arasındaki ince aralıkta sahne örneği küpe düşse de
+// çevrede küp derinliği vardır: tam derinlik kullanılır
+bool ExactMatchesScene(vec2 fragCoord)
+{
+    ivec2 sz = textureSize(u_SceneDepth, 0);
+    vec2 uv = fragCoord / u_OutputSize;
+    vec2 p = (uv + u_JitterNDC * 0.5) * vec2(sz) - 0.5;
+    ivec2 b = ivec2(floor(p));
+    float sceneNear = 1e30;
+    for (int k = 0; k < 4; ++k)
+    {
+        ivec2 t = clamp(b + ivec2(k & 1, k >> 1), ivec2(0), sz - 1);
+        sceneNear = min(sceneNear, LinearDistance(texelFetch(u_SceneDepth, t, 0).r));
+    }
+    // Tam aralığın o çevredeki en yakını / en uzağı (EditorGrid.cpp: iç çözünürlükte 1.5 iç piksel, çıktı pikseli biriminde yukarı yuvarlanmış)
+    vec2 r = texelFetch(u_ExactWide, ivec2(fragCoord), 0).rg;
+    float exactNear = r.x;
+    float exactFar = r.y;
+    if (sceneNear < exactNear * 0.97 - 0.01)
+        return false;
+    if (exactFar < sceneNear * 0.97 - 0.01)
+        return false;
+    return true;
 }
 
 // Tek karelik örtme payı nesne kenarında titreşimle değişir (kenarın hangi örneğe düştüğü karede bir değişir): kenarlarda ince
@@ -191,10 +291,12 @@ vec2 TemporalCoverage(vec3 world, float pull)
     // Hareket ederken artı komşuluğa iki yandan kırpılır ve sabit ağırlık (u_CoverageFeedback). 353: ileri geri giderken küplerin arasından
     // görünen eksen çizgisi aynı nedenle kare kare kayboluyordu: kırpma karede bir gelip giden pikselde yapılmaz (yukarıdaki sayaç);
     // kenarın gerçekten kaydığı pikselde (paralaks, sürekli kırpılır) yapılır
+    // 355: hareket ederken sayaç kırpmayı atlatmaz: kenar her karede kaydığı için sayaç hızla yükseliyor, kırpılmayan eski "açık" pay
+    // küplerin üstünde ızgara çizgisi parçası bırakıyordu. Bu yol artık yalnız tam derinliğin sahneyle uyuşmadığı pikselde kullanılır
+    // (ince aralıklar tam derinlikle doğru); sayaç dururken kullanılmak üzere güncellenir
     bool wouldClampM = h > hi + 0.02 || h < lo - 0.02;
     flicker = clamp(flicker - 1.0 + ((wouldClampM != clampedBefore) ? 6.0 : 0.0), 0.0, 12.0);
-    if (flicker < 6.0)
-        h = clamp(h, lo, hi);
+    h = clamp(h, lo, hi);
     return vec2(mix(c, h, u_CoverageFeedback), min(n + 1.0, 1.0 / (1.0 - u_CoverageFeedback)) + 64.0 * (flicker * 2.0 + (wouldClampM ? 1.0 : 0.0)));
 }
 
@@ -321,8 +423,10 @@ void main()
     alpha *= u_Opacity;
     if (u_Composite == 1)
     {
-        // Örtme payı düzlemin görünen her pikselinde yazılır (çizgi o piksele kayınca geçmişi hazır olsun)
-        vec2 coverage = TemporalCoverage(world, pull);
+        // Örtme payı düzlemin görünen her pikselinde yazılır (çizgi o piksele kayınca geçmişi hazır olsun). 355: tam derinlik sahneyle
+        // uyuşuyorsa pay ondan (geçmişe de o yazılır: piksel sonra sahne derinliğine dönerse oradan sürer), uyuşmuyorsa sahne derinliğinden
+        bool exactHere = u_HasExact == 1 && ExactMatchesScene(gl_FragCoord.xy);
+        vec2 coverage = exactHere ? ExactAccumulate(ExactCoverage(ivec2(gl_FragCoord.xy), pull)) : TemporalCoverage(world, pull);
         float cover = coverage.x;
         CoverageOut = coverage;
         vec4 below = texelFetch(u_Below, ivec2(gl_FragCoord.xy), 0);

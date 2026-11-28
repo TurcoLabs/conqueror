@@ -242,5 +242,6 @@ namespace Conqueror::Editor
 
         // Bu görünümün HDR hedefleri + post-process zinciri
         PostProcessStack m_PostStack;
+        bool m_GridComposited = false;   // ızgara geçen karede son görüntünün üstüne çizildi (opak çizim kaydı istenir, 355)
     };
 }

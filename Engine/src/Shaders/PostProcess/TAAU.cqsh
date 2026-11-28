@@ -53,6 +53,16 @@ uniform float u_ProjScale = 1.0; // bu karenin odak uzaklığı / önceki kareni
 uniform vec4 u_ShadowBoxes[64];   // 324: hareket eden gölge düşürücülerin dünya kutuları (bu + önceki kare): [2i] min, [2i+1] max
 uniform int u_ShadowBoxCount = 0;
 uniform vec3 u_TowardSun = vec3(0.0, 1.0, 0.0);
+// 334: tam derinlik (ExactDepth: bu karenin opak çizimleri titreşimsiz, çıktı çözünürlüğünün 3 katında). Çıktı pikseli başına örneklerin
+// en yakın / en uzak görüş uzaklığı (1e30: gökyüzü); bu ve önceki kare
+uniform int u_HasExact = 0;
+uniform int u_HasExactPrev = 0;
+uniform sampler2D u_ExactRange;
+uniform sampler2D u_ExactPrevRange;
+uniform sampler2D u_ExactWide;    // u_ExactRange'in 5x5 çıktı pikselindeki en yakını / en uzağı (ExactDepthRange.cqsh, mod 1 / 2)
+uniform sampler2D u_ExactShare;   // örneklerin en yakın yüzeye düşen payı (ExactDepthRange.cqsh)
+uniform mat4 u_InvViewProjNow;   // bu karenin titreşimsiz ters görüş-izdüşümü
+uniform vec2 u_ProjZ;            // bu karenin izdüşümünün (2,2), (3,2) öğeleri: uzaklık = (3,2) / (z_ndc + (2,2))
 
 // Dünya noktası hareket eden bir nesnenin gölge hacminde mi (TAA ile aynı): noktadan güneşe giden ışın kutulardan birine çarpıyor mu
 bool InMovingShadow(vec3 p)
@@ -143,6 +153,43 @@ vec3 SampleHistory(vec2 uv)
     return clamp(r, min(min(a, b), min(d, e)), max(max(a, b), max(d, e)));
 }
 
+// 334: bu karede hiçbir iç örneğe denk gelmeyen yüzeyin rengi. Yüzeyin (pikselin merkez ışını üstünde, verilen uzaklıkta; gökyüzü:
+// yön) önceki karedeki yerinde önceki karenin tam derinliği yalnız bu yüzeyi gösteren bir çıktı pikseli varsa onun geçmişi (karışık
+// pikselin geçmişi başka yüzeyin rengini de taşır, alınmaz)
+bool SurfaceHistory(float dist, bool sky, out vec3 color)
+{
+    color = vec3(0.0);
+    float zNdc = sky ? 0.999999 : u_ProjZ.y / dist - u_ProjZ.x;
+    vec4 wp = u_InvViewProjNow * vec4(v_UV * 2.0 - 1.0, zNdc, 1.0);
+    wp /= wp.w;
+    vec4 pc = u_PrevViewProj * wp;
+    if (pc.w <= 0.0)
+        return false;
+    vec2 puv = pc.xy / pc.w * 0.5 + 0.5;
+    if (any(lessThan(puv, vec2(0.0))) || any(greaterThan(puv, vec2(1.0))))
+        return false;
+    ivec2 psz = textureSize(u_ExactPrevRange, 0);
+    vec2 pp = puv * vec2(psz) - 0.5;
+    ivec2 p0 = ivec2(floor(pp));
+    float best = 1e9;
+    bool found = false;
+    for (int k = 0; k < 4; ++k)
+    {
+        ivec2 q = clamp(p0 + ivec2(k & 1, k >> 1), ivec2(0), psz - 1);
+        vec2 rr = texelFetch(u_ExactPrevRange, q, 0).rg;
+        bool single = rr.x > 1e29 || rr.y <= rr.x * 1.02 + 0.02;
+        bool match = sky ? rr.x > 1e29 : (single && abs(rr.x - pc.w) < 0.03 * pc.w + 0.02);
+        float dq = length(vec2(q) - pp);
+        if (match && dq < best)
+        {
+            best = dq;
+            color = max(texelFetch(u_History, q, 0).rgb, vec3(0.0));
+            found = true;
+        }
+    }
+    return found;
+}
+
 void main()
 {
     vec2 inSize = 1.0 / u_InTexel;
@@ -176,6 +223,20 @@ void main()
     vec2 cUV = (vec2(cTex) + 0.5) * u_InTexel;
     float cW = ViewW(cUV, cDepth);
     vec3 sMin = vec3(1e9), sMax = vec3(-1e9);
+    // 334: çıktı pikselinin tam derinliği: örneklerinin en yakın / en uzak yüzeyi (1e30: gökyüzü)
+    ivec2 outPix = ivec2(gl_FragCoord.xy);
+    bool exactActive = u_HasExact == 1 && u_CameraStill == 0;
+    vec2 exactRange = exactActive ? texelFetch(u_ExactRange, outPix, 0).rg : vec2(0.0);
+    bool exactSky = exactRange.x > 1e29;
+    bool exactSingle = exactActive && (exactSky || exactRange.y <= exactRange.x * 1.02 + 0.02);
+    float exactW = exactRange.x;
+    // Yüzey grupları: pikselin tam derinlikteki yakın (N) ve uzak (F) yüzeyi; bu karenin 3x3 iç örneklerinden her gruba düşenlerin
+    // ağırlıklı rengi ve renk aralığı (YCoCg), aşağıdaki döngüde toplanır
+    float dN = exactRange.x, dF = exactRange.y;
+    bool fSky = dF > 1e29;
+    vec3 cN = vec3(0.0), cF = vec3(0.0);
+    float wN = 0.0, wF = 0.0, wNmax = 0.0, wFmax = 0.0;
+    vec3 bNlo = vec3(1e9), bNhi = vec3(-1e9), bFlo = vec3(1e9), bFhi = vec3(-1e9);
     for (int y = -1; y <= 1; ++y)
     for (int x = -1; x <= 1; ++x)
     {
@@ -215,7 +276,23 @@ void main()
         m1 += yc;
         m2 += yc * yc;
         float dep = texelFetch(u_Depth, t, 0).r;
-        wz[(y + 1) * 3 + (x + 1)] = dep >= 1.0 ? 1e9 : ViewW((vec2(t) + 0.5) * u_InTexel, dep);
+        float wd = dep >= 1.0 ? 1e9 : ViewW((vec2(t) + 0.5) * u_InTexel, dep);
+        wz[(y + 1) * 3 + (x + 1)] = wd;
+        if (exactActive)
+        {
+            bool inN = exactSky ? wd > 1e8 : (wd < 1e8 && abs(wd - dN) < 0.03 * dN + 0.02);
+            bool inF = !exactSingle && !inN && (fSky ? wd > 1e8 : (wd < 1e8 && abs(wd - dF) < 0.03 * dF + 0.02));
+            if (inN)
+            {
+                cN += c * w; wN += w; wNmax = max(wNmax, w);
+                bNlo = min(bNlo, yc); bNhi = max(bNhi, yc);
+            }
+            if (inF)
+            {
+                cF += c * w; wF += w; wFmax = max(wFmax, w);
+                bFlo = min(bFlo, yc); bFhi = max(bFhi, yc);
+            }
+        }
         if (dep >= 1.0)
             skyNear = true;
         if (dep < closest)
@@ -239,6 +316,71 @@ void main()
         }
     }
     vec3 current = sum / max(wsum, 1e-4);
+    // 334: tam derinlik bu pikselde sahneyle aynı yüzeyleri mi gösteriyor: 3x3 iç örneklerin her birinin uzaklığı, tam derinliğin çevresindeki
+    // (5x5 çıktı pikseli) yüzeylerin aralığında olmalı. Kaydedilmeyen bir çizim (billboard, alfa kesmeli örnek) varsa tam derinlik
+    // kullanılmaz (pikselin rengi eskisi gibi)
+    bool exactOk = false;
+    if (exactActive)
+    {
+        vec2 wide = texelFetch(u_ExactWide, outPix, 0).rg;
+        float nearN = wide.x, farN = wide.y;
+        exactOk = true;
+        for (int k = 0; k < 9; ++k)
+        {
+            float w = wz[k] > 1e8 ? 1e30 : wz[k];
+            exactOk = exactOk && (w > 1e29 ? farN > 1e29 : (w >= nearN * 0.97 - 0.02 && (farN > 1e29 || w <= farN * 1.03 + 0.02)));
+        }
+    }
+    // Yakın yüzeyin örneklerdeki payı (ExactDepthRange.cqsh)
+    bool exactMixed = exactOk && !exactSingle;
+    float fNear = exactMixed ? texelFetch(u_ExactShare, outPix, 0).r : 1.0;
+    // Pikselin bu karedeki rengi yüzey gruplarından, tam derinlikteki paylarıyla (kenar tam derinliğin kapsamasıyla yumuşar). Bu karede
+    // örneklenmeyen yüzeyin (iç piksel büyüklüğündeki şerit titreşimin bazı karelerinde ıskalanır) rengi kendi önceki yerindeki geçmişinden.
+    // Eskiden bu karenin 3x3'ü yalnız çevredeki yüzeylerin rengini taşıyor, geçmiş ona kırpılınca köprünün altındaki gökyüzü şeridi
+    // kayboluyor ya da kesik kesik görünüyordu. Geçmişin kırpma aralığı da grupların renk aralığı (başka yüzeyin rengi içeri girmez)
+    bool exactRecon = false;
+    bool exactFromHistory = false;
+    vec3 exLo = vec3(0.0), exHi = vec3(0.0);
+    if (exactOk && !moving)
+    {
+        vec3 CN = vec3(0.0), CF = vec3(0.0);
+        bool okN = wN > 0.0, okF = !exactMixed || wF > 0.0;
+        bool histN = false, histF = false;
+        if (okN)
+            CN = cN / wN;
+        else if (u_HasExactPrev == 1)
+        {
+            okN = SurfaceHistory(dN, exactSky, CN);
+            histN = okN;
+        }
+        if (exactMixed)
+        {
+            if (wF > 0.0)
+                CF = cF / wF;
+            else if (u_HasExactPrev == 1)
+            {
+                okF = SurfaceHistory(dF, fSky, CF);
+                histF = okF;
+            }
+        }
+        if (okN && okF)
+        {
+            exactRecon = true;
+            exactFromHistory = histN || histF;
+            current = exactMixed ? mix(CF, CN, fNear) : CN;
+            const vec3 padH = vec3(0.02, 0.01, 0.01);
+            vec3 yN = RGBToYCoCg(CN), yF = RGBToYCoCg(CF);
+            exLo = histN ? yN - padH : bNlo;
+            exHi = histN ? yN + padH : bNhi;
+            if (exactMixed)
+            {
+                exLo = min(exLo, histF ? yF - padH : bFlo);
+                exHi = max(exHi, histF ? yF + padH : bFhi);
+            }
+            float wE = max(wNmax, wFmax);
+            wmax = wE > 0.0 ? wE : 1.0;
+        }
+    }
     // Derinlik silueti: 3x3'te gökyüzü ya da uzaklık farkı %2'den büyük. İnce aralık deseni: bir satırda / sütunda ortadaki örnek iki
     // yanındakinden derin, iki yan aynı uzaklıkta (küplerin arası); siluet sayılmaz
     float wNearest = 1e9, wFarthest = 0.0;
@@ -333,6 +475,35 @@ void main()
             DebugOut = vec4(1.0);   // beyaz: geçmiş yok / ekran dışından
         return;
     }
+    // 334: tam derinliğin tek yüzey gösterdiği (ve sahneyle uyuşan) pikselde geçmiş o yüzeyin kendi hareketiyle alınır (3x3'ün en yakın
+    // yüzeyinin değil: köprünün altındaki gökyüzü şeridinde en yakın yüzey köprüdür, geçmiş köprünün eski yerinden geliyordu) ve önceki
+    // karenin tam derinliğiyle doğrulanır: yüzey önceki karede o yerde de görünüyorsa geçmiş geçerlidir, görünmüyorsa açılmadır. Şerit her
+    // karede "açılan alan" sayılıp geçmişi atılıyor, zıplarken kayboluyor ya da kesik kesik görünüyordu
+    bool exactTrack = false, exactValid = false;
+    if (exactOk && exactSingle && u_HasExactPrev == 1 && !objectVelocity && !moving)
+    {
+        float zNdc = exactSky ? 0.999999 : u_ProjZ.y / exactW - u_ProjZ.x;
+        vec4 wp = u_InvViewProjNow * vec4(v_UV * 2.0 - 1.0, zNdc, 1.0);
+        wp /= wp.w;
+        vec4 pc = u_PrevViewProj * wp;
+        if (pc.w > 0.0)
+        {
+            vec2 puv = pc.xy / pc.w * 0.5 + 0.5;
+            if (all(greaterThanEqual(puv, vec2(0.0))) && all(lessThanEqual(puv, vec2(1.0))))
+            {
+                exactTrack = true;
+                ivec2 psz = textureSize(u_ExactPrevRange, 0);
+                ivec2 p0 = ivec2(floor(puv * vec2(psz) - 0.5));
+                for (int k = 0; k < 4; ++k)
+                {
+                    vec2 rr = texelFetch(u_ExactPrevRange, clamp(p0 + ivec2(k & 1, k >> 1), ivec2(0), psz - 1), 0).rg;
+                    exactValid = exactValid || (exactSky ? rr.y > 1e29
+                                                         : (pc.w >= rr.x * 0.97 - 0.02 && pc.w <= (rr.y > 1e29 ? 1e30 : rr.y * 1.03 + 0.02)));
+                }
+                prevUV = puv;
+            }
+        }
+    }
     // Açılma: kendi noktasının kendi hareketiyle önceki karedeki yeri (en yakın derinliğin hareketi değil: küpün kenarındaki arka plan
     // pikseli küpün hareketini alıp geçmişini küpten çekiyor, yana yürürken küpün arkasında mavi iz kalıyordu)
     bool revealed = false;
@@ -364,13 +535,13 @@ void main()
         // geçmişleri her karede atılıyordu; hangi pikselin atılacağı iç çözünürlüğün basamağına bağlı olduğundan yana yürürken duvarın
         // üst kenarı ham iç çözünürlük merdiveni gibi testere dişli görünüyordu (merdiven kalıntısı 0.29 px; yerel TAA 0.11, FSR 2 0.12).
         // Bandın ötesindeki gökyüzü (örtücü uzakta) ve gökyüzü olmayan arka plan (335: piramidin açtığı duvar) eskisi gibi
-        revealed = shiftPx >= 1.0 && !occluderAdjacent;
+        revealed = exactTrack ? !exactValid : (shiftPx >= 1.0 && !occluderAdjacent);
         // 335: ön yüzün kenarındaki arka plan pikseli (kendi yüzeyi en yakın yüzey değil; ince aralık hariç) geçmişini de kendi yüzeyinin
         // hareketiyle alır (açılma testi gibi). En yakın yüzeyin hareketiyle aldığında geçmiş ön yüzün eski yerinden, yani ön yüzün
         // renginden geliyordu: hızlı yana koşarken piramidin açtığı duvarda açılmadan sonraki karelerde mavi çizgiler ve eski silüet kalıyordu
         // Yalnız iki hareket en az 1 iç piksel ayrışınca (açılma testinin gördüğü hız): daha yavaş paralakste (zıplama) açılma görülmez,
         // kendi hareketiyle alınan geçmiş ön yüzün eski yerine düşer; en yakın yüzeyin hareketi ise kenarın hemen yanındaki aynı noktayı verir
-        if (!onClosestSurface && !enclosedGap && !occluderAdjacent && u_CameraStill == 0 && cPrev.w > 0.0 && length(((cNow - cPrevUV) - velocity) * inSize) >= 1.0)
+        if (!exactTrack && !onClosestSurface && !enclosedGap && !occluderAdjacent && u_CameraStill == 0 && cPrev.w > 0.0 && length(((cNow - cPrevUV) - velocity) * inSize) >= 1.0)
         {
             vec2 ownPrev = v_UV - (cNow - cPrevUV);
             if (all(greaterThanEqual(ownPrev, vec2(0.0))) && all(lessThanEqual(ownPrev, vec2(1.0))))
@@ -462,7 +633,9 @@ void main()
             historyDepthOk = historyDepthOk || abs(pw - prevClip.w) < tolW;
         }
     }
-    bool parallaxEdge = parallaxPx >= 0.06;
+    if (exactTrack)
+        historyDepthOk = exactValid;   // tam derinlik (önceki karenin iç çözünürlüklü derinliği yerine)
+    bool parallaxEdge = parallaxPx >= 0.06 && !(exactTrack && exactValid);
     bool velAmbiguous = parallaxEdge || !historyDepthOk;
     vec3 history = SampleHistory(prevUV);
     // Geçmişin alfası durum: 64 x (2 x biriken örnek ağırlığı, 0..31) + 2 x titreme puanı (0..16) + geçmiş geçen karede kutunun dışındaydı
@@ -498,6 +671,11 @@ void main()
     vec3 sigma = sqrt(max(m2 / 9.0 - mean * mean, vec3(0.0)));
     vec3 lo = max(mean - 1.25 * sigma, mn);
     vec3 hi = min(mean + 1.25 * sigma, mx);
+    if (exactRecon)
+    {
+        lo = exLo;
+        hi = exHi;
+    }
     vec3 historyY = RGBToYCoCg(history);
     // Titreme tutması (TAA'daki gibi): pikselden ince ayrıntı (küplerin arası) titreşimin yalnız bazı karelerinde düşük çözünürlüklü
     // örneğe denk gelir; geçmiş karede bir kutunun içinde karede bir dışında kalır. Böyle aralıklı sapan piksel kırpılmaz (yürürken
@@ -523,7 +701,8 @@ void main()
     // karenin 3x3 ton aralığının dışındaysa bu başka bir yüzeyin bulaşmış rengidir, tutulmaz (335: hızlı yana koşarken piramidin açtığı
     // duvarda mavi dikey çizgiler kalıyordu)
     bool foreignTone = any(lessThan(historyY.yz, mn.yz - vec2(0.03))) || any(greaterThan(historyY.yz, mx.yz + vec2(0.03)));
-    bool hold = flicker >= 8.0 && (rangeY < 0.06 || excessY > rangeY) && viewTurn < 0.008 && !young && !vacated && !velAmbiguous && !foreignTone && !movedBefore;
+    bool hold = flicker >= 8.0 && (rangeY < 0.06 || excessY > rangeY) && viewTurn < 0.008 && !young && !vacated && !velAmbiguous && !foreignTone && !movedBefore
+                && !exactRecon;   // 334: tam derinlikli pikselin kırpma aralığı yüzeylerinin kendi aralığı (titreme tutmasına gerek yok)
     // Yavaş kayan güvenilir yüzey (ileri geri yürürken küplerin arası, TAA'daki güvenilir yol): kırpma kutusu geniş, geçmişin ağırlığı
     // yüksek; dar kutu ıskalanan karelerde ince aralığı kırpıp geri yürürken yanıp söndürüyordu
     float speedPx = length(velocity * inSize);
@@ -532,7 +711,7 @@ void main()
     // küpün arkasında gökyüzünde soluk çizgiler kalıyordu
     // Gökyüzü hiç güvenilir yola girmez (yerel TAA gibi; onClosestSurface gökyüzünde yanlış): küpün kenarı geçerken gökyüzü pikseline
     // bulaşan renk küp uzaklaşınca geniş kutu ve %96 ağırlıkla yavaş sönüyor, yana yürürken küpün arkasındaki bulutlarda dikey tarak kalıyordu
-    float slowTrust = (moving || reactive || objectVelocity || shadowChanged || u_CameraStill == 1 || young || !historyDepthOk || !onClosestSurface) ? 0.0 : (1.0 - smoothstep(1.5, 3.0, speedPx)) * (1.0 - smoothstep(0.003, 0.006, viewTurn));
+    float slowTrust = (moving || reactive || objectVelocity || shadowChanged || u_CameraStill == 1 || young || !historyDepthOk || !onClosestSurface || exactRecon) ? 0.0 : (1.0 - smoothstep(1.5, 3.0, speedPx)) * (1.0 - smoothstep(0.003, 0.006, viewTurn));
     // Kamera duruyorken: geçmiş her karede bu düşük çözünürlüklü 3x3'ün aralığına kırpılınca çıktı çözünürlüğünde biriken ayrıntı
     // siliniyordu (yükseltme bulanık kalıyordu). Kutu küçük bir payla genişler (büyük değişim, namlu alevi ışığı yine kırpılır)
     bool settle = u_CameraStill == 1 && !moving && !reactive && !shadowChanged;
@@ -670,7 +849,8 @@ void main()
         // ve güvenilir (geniş kutu), eflatun: gökyüzü komşusu, sarı: normal kırpma (parlak: geçmiş kırpıldı, koyu: kırpılmadı)
         vec3 tint;
         bool clamped = distance(RGBToYCoCg(historyBeforeClamp), RGBToYCoCg(history)) > 0.02;
-        if (lightFrozen) tint = vec3(0.75, 0.45, 1.0);   // lila: ışık değişiminde geçmişi korunan piksel
+        if (exactFromHistory) tint = vec3(1.0, 1.0, 1.0);   // beyaz: bir yüzeyi bu karede örneklenmedi, rengi kendi geçmişinden (334)
+        else if (lightFrozen) tint = vec3(0.75, 0.45, 1.0);   // lila: ışık değişiminde geçmişi korunan piksel
         else if (particleFrozen) tint = vec3(1.0, 0.55, 0.9);   // pembe: parçacığın altında geçmişi korunan piksel
         else if (vacated) tint = vec3(1.0, 0.4, 0.6);
         else if (revealed) tint = vec3(1.0, 0.5, 0.0);

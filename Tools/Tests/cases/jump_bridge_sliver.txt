@@ -1,0 +1,574 @@
+# template: fps
+# 334: TAA + NIS'te geçitte köprüye doğru yürüyüp zıplarken köprünün altıyla arka duvarın üstü arasındaki ince gökyüzü şeridi kayboluyor ya
+# da kesik kesik beyaz çizgiye dönüyor, hedef direkleri ve tahtaları bozuk görünüyordu (kullanıcının 16:32 videosu, 68. resmi). TAAU
+# çıktı pikselinin rengini 3x3 iç örnekten alıyor, ince yüzey titreşimin bazı karelerinde hiç örneklenmiyor, geçmiş çevredeki yüzeylerin
+# rengine kırpılıyordu; şerit pikselleri ayrıca her karede "açılan alan" sayılıp geçmişi atılıyordu. Artık TAAU görünümün tam derinliğini
+# (opak çizimler titreşimsiz, çıktı çözünürlüğünün 3 katında) kullanır: piksel yüzey gruplarından, her grubun kendi örneklerinden ya da
+# kendi geçmişinden kurulur. Aynı yürüyüş sabit adımla SSAA (referans) ve TAA + NIS ile kaydedilir; şerit ve hedeflerin bandında
+# referanstan 40 seviyeden çok sapan piksel, kare başına ortalama: eski 162, yeni 55 (yerel TAA 23)
+timeout 900
+wait 60
+focus Game
+render_setting Post.CloudWindSpeed 0
+cvar r.AntiAliasing 7
+cvar r.Upscaler 0
+random_seed 7
+record_start png fixed fps=60 out={work}/rec334ref
+play
+wait 2
+entity move Player 0 0.9 -7.5
+wait 4
+script set Player@FirstPersonShooter yaw float 0
+script set Player@FirstPersonShooter pitch float 2
+wait 120
+screenshot_frames {work}/j334ref 264
+entity move Player 0 0.9000 -7.5150
+wait 1
+entity move Player 0 0.9899 -7.5300
+wait 1
+entity move Player 0 1.0756 -7.5450
+wait 1
+entity move Player 0 1.1570 -7.5600
+wait 1
+entity move Player 0 1.2341 -7.5750
+wait 1
+entity move Player 0 1.3069 -7.5900
+wait 1
+entity move Player 0 1.3755 -7.6050
+wait 1
+entity move Player 0 1.4397 -7.6200
+wait 1
+entity move Player 0 1.4997 -7.6350
+wait 1
+entity move Player 0 1.5554 -7.6500
+wait 1
+entity move Player 0 1.6068 -7.6650
+wait 1
+entity move Player 0 1.6538 -7.6800
+wait 1
+entity move Player 0 1.6967 -7.6950
+wait 1
+entity move Player 0 1.7353 -7.7100
+wait 1
+entity move Player 0 1.7695 -7.7250
+wait 1
+entity move Player 0 1.7995 -7.7400
+wait 1
+entity move Player 0 1.8252 -7.7550
+wait 1
+entity move Player 0 1.8466 -7.7700
+wait 1
+entity move Player 0 1.8637 -7.7850
+wait 1
+entity move Player 0 1.8766 -7.8000
+wait 1
+entity move Player 0 1.8851 -7.8150
+wait 1
+entity move Player 0 1.8895 -7.8300
+wait 1
+entity move Player 0 1.8895 -7.8450
+wait 1
+entity move Player 0 1.8851 -7.8600
+wait 1
+entity move Player 0 1.8766 -7.8750
+wait 1
+entity move Player 0 1.8637 -7.8900
+wait 1
+entity move Player 0 1.8466 -7.9050
+wait 1
+entity move Player 0 1.8252 -7.9200
+wait 1
+entity move Player 0 1.7995 -7.9350
+wait 1
+entity move Player 0 1.7695 -7.9500
+wait 1
+entity move Player 0 1.7353 -7.9650
+wait 1
+entity move Player 0 1.6967 -7.9800
+wait 1
+entity move Player 0 1.6538 -7.9950
+wait 1
+entity move Player 0 1.6068 -8.0100
+wait 1
+entity move Player 0 1.5554 -8.0250
+wait 1
+entity move Player 0 1.4997 -8.0400
+wait 1
+entity move Player 0 1.4397 -8.0550
+wait 1
+entity move Player 0 1.3755 -8.0700
+wait 1
+entity move Player 0 1.3069 -8.0850
+wait 1
+entity move Player 0 1.2341 -8.1000
+wait 1
+entity move Player 0 1.1570 -8.1150
+wait 1
+entity move Player 0 1.0756 -8.1300
+wait 1
+entity move Player 0 0.9899 -8.1450
+wait 1
+entity move Player 0 0.9000 -8.1600
+wait 1
+entity move Player 0 0.9000 -8.1750
+wait 1
+entity move Player 0 0.9899 -8.1900
+wait 1
+entity move Player 0 1.0756 -8.2050
+wait 1
+entity move Player 0 1.1570 -8.2200
+wait 1
+entity move Player 0 1.2341 -8.2350
+wait 1
+entity move Player 0 1.3069 -8.2500
+wait 1
+entity move Player 0 1.3755 -8.2650
+wait 1
+entity move Player 0 1.4397 -8.2800
+wait 1
+entity move Player 0 1.4997 -8.2950
+wait 1
+entity move Player 0 1.5554 -8.3100
+wait 1
+entity move Player 0 1.6068 -8.3250
+wait 1
+entity move Player 0 1.6538 -8.3400
+wait 1
+entity move Player 0 1.6967 -8.3550
+wait 1
+entity move Player 0 1.7353 -8.3700
+wait 1
+entity move Player 0 1.7695 -8.3850
+wait 1
+entity move Player 0 1.7995 -8.4000
+wait 1
+entity move Player 0 1.8252 -8.4150
+wait 1
+entity move Player 0 1.8466 -8.4300
+wait 1
+entity move Player 0 1.8637 -8.4450
+wait 1
+entity move Player 0 1.8766 -8.4600
+wait 1
+entity move Player 0 1.8851 -8.4750
+wait 1
+entity move Player 0 1.8895 -8.4900
+wait 1
+entity move Player 0 1.8895 -8.5050
+wait 1
+entity move Player 0 1.8851 -8.5200
+wait 1
+entity move Player 0 1.8766 -8.5350
+wait 1
+entity move Player 0 1.8637 -8.5500
+wait 1
+entity move Player 0 1.8466 -8.5650
+wait 1
+entity move Player 0 1.8252 -8.5800
+wait 1
+entity move Player 0 1.7995 -8.5950
+wait 1
+entity move Player 0 1.7695 -8.6100
+wait 1
+entity move Player 0 1.7353 -8.6250
+wait 1
+entity move Player 0 1.6967 -8.6400
+wait 1
+entity move Player 0 1.6538 -8.6550
+wait 1
+entity move Player 0 1.6068 -8.6700
+wait 1
+entity move Player 0 1.5554 -8.6850
+wait 1
+entity move Player 0 1.4997 -8.7000
+wait 1
+entity move Player 0 1.4397 -8.7150
+wait 1
+entity move Player 0 1.3755 -8.7300
+wait 1
+entity move Player 0 1.3069 -8.7450
+wait 1
+entity move Player 0 1.2341 -8.7600
+wait 1
+entity move Player 0 1.1570 -8.7750
+wait 1
+entity move Player 0 1.0756 -8.7900
+wait 1
+entity move Player 0 0.9899 -8.8050
+wait 1
+entity move Player 0 0.9000 -8.8200
+wait 1
+entity move Player 0 0.9000 -8.8350
+wait 1
+entity move Player 0 0.9899 -8.8500
+wait 1
+entity move Player 0 1.0756 -8.8650
+wait 1
+entity move Player 0 1.1570 -8.8800
+wait 1
+entity move Player 0 1.2341 -8.8950
+wait 1
+entity move Player 0 1.3069 -8.9100
+wait 1
+entity move Player 0 1.3755 -8.9250
+wait 1
+entity move Player 0 1.4397 -8.9400
+wait 1
+entity move Player 0 1.4997 -8.9550
+wait 1
+entity move Player 0 1.5554 -8.9700
+wait 1
+entity move Player 0 1.6068 -8.9850
+wait 1
+entity move Player 0 1.6538 -9.0000
+wait 1
+entity move Player 0 1.6967 -9.0150
+wait 1
+entity move Player 0 1.7353 -9.0300
+wait 1
+entity move Player 0 1.7695 -9.0450
+wait 1
+entity move Player 0 1.7995 -9.0600
+wait 1
+entity move Player 0 1.8252 -9.0750
+wait 1
+entity move Player 0 1.8466 -9.0900
+wait 1
+entity move Player 0 1.8637 -9.1050
+wait 1
+entity move Player 0 1.8766 -9.1200
+wait 1
+entity move Player 0 1.8851 -9.1350
+wait 1
+entity move Player 0 1.8895 -9.1500
+wait 1
+entity move Player 0 1.8895 -9.1650
+wait 1
+entity move Player 0 1.8851 -9.1800
+wait 1
+entity move Player 0 1.8766 -9.1950
+wait 1
+entity move Player 0 1.8637 -9.2100
+wait 1
+entity move Player 0 1.8466 -9.2250
+wait 1
+entity move Player 0 1.8252 -9.2400
+wait 1
+entity move Player 0 1.7995 -9.2550
+wait 1
+entity move Player 0 1.7695 -9.2700
+wait 1
+entity move Player 0 1.7353 -9.2850
+wait 1
+entity move Player 0 1.6967 -9.3000
+wait 1
+entity move Player 0 1.6538 -9.3150
+wait 1
+entity move Player 0 1.6068 -9.3300
+wait 1
+entity move Player 0 1.5554 -9.3450
+wait 1
+entity move Player 0 1.4997 -9.3600
+wait 1
+entity move Player 0 1.4397 -9.3750
+wait 1
+entity move Player 0 1.3755 -9.3900
+wait 1
+entity move Player 0 1.3069 -9.4050
+wait 1
+entity move Player 0 1.2341 -9.4200
+wait 1
+entity move Player 0 1.1570 -9.4350
+wait 1
+entity move Player 0 1.0756 -9.4500
+wait 1
+entity move Player 0 0.9899 -9.4650
+wait 1
+entity move Player 0 0.9000 -9.4800
+wait 1
+wait 4
+record_stop
+stop
+wait 30
+cvar r.AntiAliasing 3
+cvar r.Upscaler 3
+random_seed 7
+record_start png fixed fps=60 out={work}/rec334nis
+play
+wait 2
+entity move Player 0 0.9 -7.5
+wait 4
+script set Player@FirstPersonShooter yaw float 0
+script set Player@FirstPersonShooter pitch float 2
+wait 120
+screenshot_frames {work}/j334nis 264
+entity move Player 0 0.9000 -7.5150
+wait 1
+entity move Player 0 0.9899 -7.5300
+wait 1
+entity move Player 0 1.0756 -7.5450
+wait 1
+entity move Player 0 1.1570 -7.5600
+wait 1
+entity move Player 0 1.2341 -7.5750
+wait 1
+entity move Player 0 1.3069 -7.5900
+wait 1
+entity move Player 0 1.3755 -7.6050
+wait 1
+entity move Player 0 1.4397 -7.6200
+wait 1
+entity move Player 0 1.4997 -7.6350
+wait 1
+entity move Player 0 1.5554 -7.6500
+wait 1
+entity move Player 0 1.6068 -7.6650
+wait 1
+entity move Player 0 1.6538 -7.6800
+wait 1
+entity move Player 0 1.6967 -7.6950
+wait 1
+entity move Player 0 1.7353 -7.7100
+wait 1
+entity move Player 0 1.7695 -7.7250
+wait 1
+entity move Player 0 1.7995 -7.7400
+wait 1
+entity move Player 0 1.8252 -7.7550
+wait 1
+entity move Player 0 1.8466 -7.7700
+wait 1
+entity move Player 0 1.8637 -7.7850
+wait 1
+entity move Player 0 1.8766 -7.8000
+wait 1
+entity move Player 0 1.8851 -7.8150
+wait 1
+entity move Player 0 1.8895 -7.8300
+wait 1
+entity move Player 0 1.8895 -7.8450
+wait 1
+entity move Player 0 1.8851 -7.8600
+wait 1
+entity move Player 0 1.8766 -7.8750
+wait 1
+entity move Player 0 1.8637 -7.8900
+wait 1
+entity move Player 0 1.8466 -7.9050
+wait 1
+entity move Player 0 1.8252 -7.9200
+wait 1
+entity move Player 0 1.7995 -7.9350
+wait 1
+entity move Player 0 1.7695 -7.9500
+wait 1
+entity move Player 0 1.7353 -7.9650
+wait 1
+entity move Player 0 1.6967 -7.9800
+wait 1
+entity move Player 0 1.6538 -7.9950
+wait 1
+entity move Player 0 1.6068 -8.0100
+wait 1
+entity move Player 0 1.5554 -8.0250
+wait 1
+entity move Player 0 1.4997 -8.0400
+wait 1
+entity move Player 0 1.4397 -8.0550
+wait 1
+entity move Player 0 1.3755 -8.0700
+wait 1
+entity move Player 0 1.3069 -8.0850
+wait 1
+entity move Player 0 1.2341 -8.1000
+wait 1
+entity move Player 0 1.1570 -8.1150
+wait 1
+entity move Player 0 1.0756 -8.1300
+wait 1
+entity move Player 0 0.9899 -8.1450
+wait 1
+entity move Player 0 0.9000 -8.1600
+wait 1
+entity move Player 0 0.9000 -8.1750
+wait 1
+entity move Player 0 0.9899 -8.1900
+wait 1
+entity move Player 0 1.0756 -8.2050
+wait 1
+entity move Player 0 1.1570 -8.2200
+wait 1
+entity move Player 0 1.2341 -8.2350
+wait 1
+entity move Player 0 1.3069 -8.2500
+wait 1
+entity move Player 0 1.3755 -8.2650
+wait 1
+entity move Player 0 1.4397 -8.2800
+wait 1
+entity move Player 0 1.4997 -8.2950
+wait 1
+entity move Player 0 1.5554 -8.3100
+wait 1
+entity move Player 0 1.6068 -8.3250
+wait 1
+entity move Player 0 1.6538 -8.3400
+wait 1
+entity move Player 0 1.6967 -8.3550
+wait 1
+entity move Player 0 1.7353 -8.3700
+wait 1
+entity move Player 0 1.7695 -8.3850
+wait 1
+entity move Player 0 1.7995 -8.4000
+wait 1
+entity move Player 0 1.8252 -8.4150
+wait 1
+entity move Player 0 1.8466 -8.4300
+wait 1
+entity move Player 0 1.8637 -8.4450
+wait 1
+entity move Player 0 1.8766 -8.4600
+wait 1
+entity move Player 0 1.8851 -8.4750
+wait 1
+entity move Player 0 1.8895 -8.4900
+wait 1
+entity move Player 0 1.8895 -8.5050
+wait 1
+entity move Player 0 1.8851 -8.5200
+wait 1
+entity move Player 0 1.8766 -8.5350
+wait 1
+entity move Player 0 1.8637 -8.5500
+wait 1
+entity move Player 0 1.8466 -8.5650
+wait 1
+entity move Player 0 1.8252 -8.5800
+wait 1
+entity move Player 0 1.7995 -8.5950
+wait 1
+entity move Player 0 1.7695 -8.6100
+wait 1
+entity move Player 0 1.7353 -8.6250
+wait 1
+entity move Player 0 1.6967 -8.6400
+wait 1
+entity move Player 0 1.6538 -8.6550
+wait 1
+entity move Player 0 1.6068 -8.6700
+wait 1
+entity move Player 0 1.5554 -8.6850
+wait 1
+entity move Player 0 1.4997 -8.7000
+wait 1
+entity move Player 0 1.4397 -8.7150
+wait 1
+entity move Player 0 1.3755 -8.7300
+wait 1
+entity move Player 0 1.3069 -8.7450
+wait 1
+entity move Player 0 1.2341 -8.7600
+wait 1
+entity move Player 0 1.1570 -8.7750
+wait 1
+entity move Player 0 1.0756 -8.7900
+wait 1
+entity move Player 0 0.9899 -8.8050
+wait 1
+entity move Player 0 0.9000 -8.8200
+wait 1
+entity move Player 0 0.9000 -8.8350
+wait 1
+entity move Player 0 0.9899 -8.8500
+wait 1
+entity move Player 0 1.0756 -8.8650
+wait 1
+entity move Player 0 1.1570 -8.8800
+wait 1
+entity move Player 0 1.2341 -8.8950
+wait 1
+entity move Player 0 1.3069 -8.9100
+wait 1
+entity move Player 0 1.3755 -8.9250
+wait 1
+entity move Player 0 1.4397 -8.9400
+wait 1
+entity move Player 0 1.4997 -8.9550
+wait 1
+entity move Player 0 1.5554 -8.9700
+wait 1
+entity move Player 0 1.6068 -8.9850
+wait 1
+entity move Player 0 1.6538 -9.0000
+wait 1
+entity move Player 0 1.6967 -9.0150
+wait 1
+entity move Player 0 1.7353 -9.0300
+wait 1
+entity move Player 0 1.7695 -9.0450
+wait 1
+entity move Player 0 1.7995 -9.0600
+wait 1
+entity move Player 0 1.8252 -9.0750
+wait 1
+entity move Player 0 1.8466 -9.0900
+wait 1
+entity move Player 0 1.8637 -9.1050
+wait 1
+entity move Player 0 1.8766 -9.1200
+wait 1
+entity move Player 0 1.8851 -9.1350
+wait 1
+entity move Player 0 1.8895 -9.1500
+wait 1
+entity move Player 0 1.8895 -9.1650
+wait 1
+entity move Player 0 1.8851 -9.1800
+wait 1
+entity move Player 0 1.8766 -9.1950
+wait 1
+entity move Player 0 1.8637 -9.2100
+wait 1
+entity move Player 0 1.8466 -9.2250
+wait 1
+entity move Player 0 1.8252 -9.2400
+wait 1
+entity move Player 0 1.7995 -9.2550
+wait 1
+entity move Player 0 1.7695 -9.2700
+wait 1
+entity move Player 0 1.7353 -9.2850
+wait 1
+entity move Player 0 1.6967 -9.3000
+wait 1
+entity move Player 0 1.6538 -9.3150
+wait 1
+entity move Player 0 1.6068 -9.3300
+wait 1
+entity move Player 0 1.5554 -9.3450
+wait 1
+entity move Player 0 1.4997 -9.3600
+wait 1
+entity move Player 0 1.4397 -9.3750
+wait 1
+entity move Player 0 1.3755 -9.3900
+wait 1
+entity move Player 0 1.3069 -9.4050
+wait 1
+entity move Player 0 1.2341 -9.4200
+wait 1
+entity move Player 0 1.1570 -9.4350
+wait 1
+entity move Player 0 1.0756 -9.4500
+wait 1
+entity move Player 0 0.9899 -9.4650
+wait 1
+entity move Player 0 0.9000 -9.4800
+wait 1
+wait 4
+record_stop
+stop
+wait 30
+image_seq_edges {work}/j334ref {work}/j334nis 0 263 705 436 1085 476 all 1 diff 40 max 40
+quit

@@ -261,6 +261,11 @@ namespace Conqueror
         // derinlik (derinlik yazılır). Çizim yoksa false
         enum class GeometryPass { GBAAEdges, SRAANormalDepth };
         static bool RenderGeometry(const void* view, GeometryPass pass, const glm::mat4& viewProj, const glm::vec2& viewportSize);
+        // 355: editör ızgarasının tam derinliği. Bu görünümün bu karedeki derinlik yazan opak çizimlerini (meshler, rüzgârlı ağaçlar,
+        // nesne UV'li alfa kesmeliler dokuyla kırpılarak, opak MultiMesh örnekleri, iskeletli modeller, araziler) bağlı çerçeve
+        // tamponunun derinliğine verilen görüş-izdüşümüyle yeniden çizer; renk yazılmaz, derinlik testi / yazma ve hedef çağıranın.
+        // Kayıt yoksa ya da tel kafes görünümündeyse (sahne derinliği yalnız çizgiler) false
+        static bool RenderGeometryDepth(const void* view, const glm::mat4& viewProj);
         // Bu görünümde nokta / spot ışıkların toplam gücü önceki çağrıdan beri değişti mi (namlu alevi ışığı yanıp söner):
         // TAA yalnız böyle karelerde aydınlığı değişen piksellerde geçmişe az güvenir
         static bool ConsumeLightingChange(const void* view);

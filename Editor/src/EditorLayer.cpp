@@ -15,6 +15,7 @@
 #include "Panels/ObjectPicker.h"
 #include "Panels/TreeInspector.h"
 #include "Renderer/Utilities/Renderer3D/Material.h"
+#include "Renderer/EditorGrid.h"
 #include "Renderer/Utilities/Renderer3D/MaterialAsset.h"
 #include "Scene/MeshRendererMaterial.h"
 #include "Assets/SceneTemplate.h"
@@ -7083,6 +7084,80 @@ namespace Conqueror::Editor
         };
         Automation::RegisterCommand("game_flicker", flickerCommand("game_flicker", [this]() { return m_GamePanel ? m_GamePanel->GetFramebuffer() : nullptr; }));
         Automation::RegisterCommand("viewport_flicker", flickerCommand("viewport_flicker", [this]() { return m_ViewportPanel ? m_ViewportPanel->GetFramebuffer() : nullptr; }));
+        // viewport_grid_over_blue <kare> [max n] [diff d] (355): ızgara mavi nesnelerin (FPS şablonunun piramidi) üstüne çizildi mi. Her karede
+        // aynı karenin ızgaradan önceki görüntüsünde mavi olan, kenarından 3 piksel içerideki pikseller (küplerin arasındaki aralık ve
+        // kenarın yumuşatılmış pikselleri dışarıda) ile son görüntü karşılaştırılır; d seviyeden (24) çok farklı piksel = küpün üstünde ızgara
+        // izi. Kamera hızla hareket ederken titreme sayacı kırpmayı atlatıp küplerin üstünde ızgara çizgisi parçaları bırakıyordu
+        Automation::RegisterCommand("viewport_grid_over_blue", [this](const Args& a, std::string& err) {
+            if (a.size() < 2 || !m_ViewportPanel) { err = "viewport_grid_over_blue <frames> [max n] [diff d]"; return false; }
+            const int frames = std::max(1, std::atoi(a[1].c_str()));
+            int maxLimit = -1, diffLimit = 24;
+            for (size_t k = 2; k + 1 < a.size(); k += 2)
+            {
+                if (a[k] == "max") maxLimit = std::atoi(a[k + 1].c_str());
+                else if (a[k] == "diff") diffLimit = std::max(1, std::atoi(a[k + 1].c_str()));
+            }
+            auto counts = std::make_shared<std::vector<int>>();
+            Automation::AddFrameCheck("viewport grid over blue", frames, [this, counts, frames, maxLimit, diffLimit](uint32_t, uint32_t, std::string& e) {
+                const auto fb = m_ViewportPanel ? m_ViewportPanel->GetFramebuffer() : nullptr;
+                uint32_t bw = 0, bh = 0;
+                const uint32_t below = EditorGrid::GetLastBelowTexture(bw, bh);
+                if (!fb || !below || bw == 0 || bh == 0) { e = "no viewport image / grid composite"; return false; }
+                const int w = (int)bw, h = (int)bh;
+                std::vector<uint8_t> fin((size_t)w * h * 4), bel((size_t)w * h * 4);
+                glGetTextureSubImage(fb->GetColorAttachmentRendererID(0), 0, 0, 0, 0, w, h, 1, GL_RGBA, GL_UNSIGNED_BYTE, (GLsizei)fin.size(), fin.data());
+                glGetTextureSubImage(below, 0, 0, 0, 0, w, h, 1, GL_RGBA, GL_UNSIGNED_BYTE, (GLsizei)bel.size(), bel.data());
+                // Tam derinlik pikselin tek yüzeyini gösteriyor mu (küplerin arasındaki aralık ve nesnenin kenarı karışık pikseldir: ızgara orada
+                // arkadan doğru biçimde görünebilir, sayılmaz)
+                std::vector<float> range;
+                if (const uint32_t er = EditorGrid::GetLastExactRange())
+                {
+                    range.resize((size_t)w * h * 2);
+                    glGetTextureSubImage(er, 0, 0, 0, 0, w, h, 1, GL_RG, GL_FLOAT, (GLsizei)(range.size() * sizeof(float)), range.data());
+                }
+                std::vector<uint8_t> blue((size_t)w * h);
+                for (size_t i = 0; i < blue.size(); ++i)
+                {
+                    const int r = bel[i * 4], g = bel[i * 4 + 1], b = bel[i * 4 + 2];
+                    bool single = true;
+                    if (!range.empty())
+                        single = range[i * 2] < 1e29f && range[i * 2 + 1] <= range[i * 2] * 1.01f + 0.01f;
+                    blue[i] = (b > 110 && b - r > 60 && b - g > 40 && single) ? 1 : 0;
+                }
+                int count = 0;
+                for (int y = 3; y < h - 3; ++y)
+                    for (int x = 3; x < w - 3; ++x)
+                    {
+                        bool inside = true;
+                        for (int dy = -3; dy <= 3 && inside; ++dy)
+                            for (int dx = -3; dx <= 3 && inside; ++dx)
+                                inside = blue[(size_t)(y + dy) * w + (x + dx)] != 0;
+                        if (!inside)
+                            continue;
+                        const size_t i = ((size_t)y * w + x) * 4;
+                        int d = 0;
+                        for (int c = 0; c < 3; ++c)
+                            d = std::max(d, std::abs((int)fin[i + c] - (int)bel[i + c]));
+                        count += d > diffLimit ? 1 : 0;
+                    }
+                counts->push_back(count);
+                if ((int)counts->size() < frames)
+                    return true;
+                int total = 0, worst = 0;
+                for (int c : *counts)
+                {
+                    total += c;
+                    worst = std::max(worst, c);
+                }
+                char line[200];
+                std::snprintf(line, sizeof(line), "GRID OVER BLUE %d frames: total %d, max %d pixels per frame changed by the grid more than %d levels",
+                              frames, total, worst, diffLimit);
+                Automation::Report(line);
+                if (maxLimit >= 0 && worst > maxLimit) { e = std::string("grid drawn over the objects: ") + line; return false; }
+                return true;
+            });
+            return true;
+        });
         // viewport_line_flicker <kare> u0 v0 u1 v1 [mean% x] [max% y] (214): bölgedeki kırmızı eksen çizgisinin (doğrusal uzayda kırmızı - yeşil
         // fazlası) her sütunda tepe ±6 satırdaki, çevresine göre fazla enerjisi; kareler boyunca sütun ortalamasının göreli ikinci farkı.
         // Kamera uzaklaşırken çizgi ekranda kaydıkça parlaklığı sabit kalmalı (eski profilde kareden kareye %5-10, en çok %24 oynuyordu)

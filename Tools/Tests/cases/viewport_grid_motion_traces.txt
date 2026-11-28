@@ -1,0 +1,62 @@
+# template: fps
+# 355: Viewport'ta (yerel TAA ve TAA + NIS) kamera hızla hareket ederken ızgara çizgileri ve eksenler mavi küplerin üstünde parça parça
+# kalıyordu (kullanıcının yenihata.mp4'ü, 70-80. resimleri). 337 / 353 için eklenen titreme sayacı hareket ederken geçmişin kırpılmasını
+# atlatıyor, eski "açık" örtme payı küplerin üstüne taşınıyordu. Izgaranın örtülmesi artık görünümün opak çizimleri titreşimsiz, çıktı
+# çözünürlüğünün 3 katında yeniden çizilerek bulunur (hareket ederken geçmiş yok). Ölçü: aynı karenin ızgaradan önceki görüntüsünde mavi
+# olan (kenarından 3 piksel içeride) piksellerde ızgaranın 24 seviyeden çok değiştirdiği piksel, kare başına en çok. Hızlı yana kayma,
+# ileri geri uçuş ve dönme boyunca
+timeout 600
+wait_until 3000 layout_settled
+wait 10
+focus Viewport
+view_option gizmos off
+cvar r.AntiAliasing 3
+cvar r.Upscaler 0
+camera 30 8 -15 -0.6 1.0 0
+wait 150
+viewport_grid_over_blue 300 max 0
+camera_fly 10 0 0 25
+wait 30
+camera_fly -10 0 0 25
+wait 30
+camera_fly 0 0 20 25
+wait 30
+camera_fly 0 0 -20 25
+wait 30
+camera_spin 50 0 25
+wait 30
+camera_spin -50 0 25
+wait 30
+camera_fly 8 0 12 30
+wait 35
+camera_fly -8 0 -12 30
+wait 35
+camera_spin 0 20 20
+wait 25
+camera_spin 0 -20 20
+wait 40
+cvar r.Upscaler 3
+camera 30 8 -15 -0.6 1.0 0
+wait 150
+viewport_grid_over_blue 300 max 0
+camera_fly 10 0 0 25
+wait 30
+camera_fly -10 0 0 25
+wait 30
+camera_fly 0 0 20 25
+wait 30
+camera_fly 0 0 -20 25
+wait 30
+camera_spin 50 0 25
+wait 30
+camera_spin -50 0 25
+wait 30
+camera_fly 8 0 12 30
+wait 35
+camera_fly -8 0 -12 30
+wait 35
+camera_spin 0 20 20
+wait 25
+camera_spin 0 -20 20
+wait 40
+quit

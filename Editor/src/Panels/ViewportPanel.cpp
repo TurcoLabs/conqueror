@@ -205,7 +205,9 @@ namespace Conqueror::Editor
         const uint32_t width = static_cast<uint32_t>(m_ViewportSize.x);
         const uint32_t height = static_cast<uint32_t>(m_ViewportSize.y);
 
-        // 1. Sahneyi bu görünümün HDR hedefine çiz (görünüme özel çizim modu ile)
+        // 1. Sahneyi bu görünümün HDR hedefine çiz (görünüme özel çizim modu ile). Izgara geçen karede son görüntünün üstüne çizildiyse
+        // opak çizimler kaydedilir: ızgaranın nesnelerin arkasında kalan kısmı onlardan tam derinlikle bulunur (355)
+        m_PostStack.SetWantDepthReplay(m_GridComposited);
         m_PostStack.BeginScene(width, height);
         // HDR hattı doğrusal (tam sRGB eğrisi; çıkışta LinearToSRGB ile birebir geri döner)
         // 2D görünümde Unity Scene görünümü gibi düz gri arka plan; 3D'de ortamın arka plan rengi (gökyüzü üstüne çizilir)
@@ -385,8 +387,9 @@ namespace Conqueror::Editor
         if (m_Context)
         {
             const auto& spec = m_Framebuffer->GetSpecification();
-            EditorGrid::RenderDeferred(m_Framebuffer->GetColorAttachmentRendererID(0), std::min(width, spec.Width), std::min(height, spec.Height),
-                                       m_PostStack.GetSceneDepthTexture(), m_PostStack.GetObjectVelocityTexture());
+            m_GridComposited = EditorGrid::RenderDeferred(m_Framebuffer->GetColorAttachmentRendererID(0), std::min(width, spec.Width),
+                                                          std::min(height, spec.Height), m_PostStack.GetSceneDepthTexture(),
+                                                          m_PostStack.GetObjectVelocityTexture(), &m_PostStack);
         }
 
         // 4a. Ertelenen editör çizgileri (291 / 331): çarpıştırıcı / ışık / gezinme gizmo'ları ve hata ayıklama çizgileri kenar yumuşatma ve

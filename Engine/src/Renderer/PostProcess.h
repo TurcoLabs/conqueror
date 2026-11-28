@@ -16,6 +16,7 @@ namespace Conqueror { class FSR2Upscaler; class DLSSUpscaler; class XeSSUpscaler
 
 namespace Conqueror
 {
+    class ExactDepth;
     struct RenderCamera;
 
     // Bir görünümün (editör viewport'u, oyun paneli, runtime pencere) HDR
@@ -126,6 +127,9 @@ namespace Conqueror
         // GBAA / SRAA: bu görünümün opak geometrisi bu karede toplanıp özel gölgelendiriciyle yeniden çizilecek mi (sahne hedefi
         // bağlıyken Renderer3D sorar)
         static bool WantsGeometry();
+        // 355: editör ızgarası bu görünümün sahne çiziminde opak çizimlerin kaydını ister (Renderer3D::RenderGeometryDepth ile tam
+        // derinlik). Viewport her karede, ızgarayı son görüntünün üstüne çizip çizmediğine göre ayarlar
+        void SetWantDepthReplay(bool want) { m_WantDepthReplay = want; }
         static void EndReactiveDraw();
         // SSR normal/pürüzlülük tamponu (yoksa 0)
         uint32_t GetSceneNormalTexture() const;
@@ -267,6 +271,8 @@ namespace Conqueror
         bool m_UseFSR2 = false;
         // GBAA / SRAA geometri geçişi
         bool m_WantGeometry = false;      // sonraki kare için istek
+        bool m_WantDepthReplay = false;   // editör ızgarasının tam derinliği (yalnız çizim kaydı; GBAA / SRAA hedefleri kurulmaz)
+        bool m_WantDepthReplayTAAU = false;   // TAAU'nun tam derinliği (geçen kare TAAU çalıştı)
         bool m_GeometryReady = false;     // bu karenin hedefi çizildi
         RenderTarget m_GBAAEdges;
         uint32_t m_GeometryFramebuffer = 0;
@@ -289,6 +295,12 @@ namespace Conqueror
         }                  // 292: TAAU çıktısı, geçmişi yeni reddedilen piksellerde FXAA'lı (Unreal TSR rejection AA)
         int m_TAAUIndex = 0;
         bool m_TAAUValid = false;
+        // 334: TAAU'nun tam derinliği (bu ve önceki kare; ExactDepth): iç örneklerin bu karede ıskaladığı ince yüzey (köprünün altındaki
+        // gökyüzü şeridi, küplerin arası) gerçekten kaybolan yüzeyden ayrılır
+        std::unique_ptr<ExactDepth> m_TAAUExact[2];
+        bool m_TAAUExactValid[2] = { false, false };
+        int m_TAAUExactIndex = 0;
+        glm::mat4 m_TAAUExactViewProj{ 1.0f };   // m_TAAUExact[m_TAAUExactIndex]'in çizildiği görüş-izdüşümü
         // Snapdragon GSR 2: hareket + derinlik kırpma (iç çözünürlük) ve çıktı çözünürlüğünde geçmiş (RGBA16F, LDR)
         RenderTarget m_SGSR2Motion;
         RenderTarget m_SGSR2History[2];
@@ -296,6 +308,7 @@ namespace Conqueror
         bool m_SGSR2Valid = false;
         int m_SGSR2StillFrames = 0;
         glm::mat4 m_FinalViewProj{ 1.0f };   // bu karenin titreşimsiz görüş-izdüşümü (TAAU açılma testi)
+        glm::mat4 m_FinalProjection{ 1.0f }; // bu karenin titreşimsiz izdüşümü (TAAU tam derinliği: görüş uzaklığı)
         // Önceki karenin sahne derinliği (kare sonunda kopyalanır): TAA / TAAU açılma testi. Pikselin kendi noktası önceki karede
         // daha yakın bir yüzeyin arkasındaysa ve o yüzey uzaklaştıysa geçmiş o örtücünündür (arka kenarda iz / çentik)
         uint32_t m_PrevDepth = 0;

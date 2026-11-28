@@ -35,7 +35,14 @@ namespace Conqueror
         // Renders the deferred grid onto the final image (colorTexture, sRGB); no-op if nothing was deferred. sceneDepth: viewport's
         // (multisample-resolved) scene depth (PostProcessStack::GetSceneDepthTexture)
         // objectVelocity: PostProcessStack::GetObjectVelocityTexture (0: no moving / deleted objects this frame)
-        static void RenderDeferred(uint32_t colorTexture, uint32_t width, uint32_t height, uint32_t sceneDepth, uint32_t objectVelocity = 0);
+        // view: the viewport's PostProcessStack (its recorded opaque draws give the exact, unjittered output-resolution depth the grid is
+        // occluded by, 355; Renderer3D::RenderGeometryDepth). Returns true if the grid was drawn
+        static bool RenderDeferred(uint32_t colorTexture, uint32_t width, uint32_t height, uint32_t sceneDepth, uint32_t objectVelocity = 0,
+                                   const void* view = nullptr);
         static void Shutdown();
+        // Automation (355): the last composite's image before the grid was blended in (RGBA8) and its size; 0 if none yet
+        static uint32_t GetLastBelowTexture(uint32_t& width, uint32_t& height);
+        // Automation (355): the last composite's exact depth range (RG32F nearest / farthest eye depth per pixel, ExactDepth); 0 if none
+        static uint32_t GetLastExactRange();
     };
 }

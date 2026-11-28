@@ -5,6 +5,7 @@
 #include <chrono>
 #include "Core/Serialization/SceneSerializer.h"
 #include "PostProcess.h"
+#include "ExactDepth.h"
 #include "Core/Profiling/FrameProfiler.h"
 #include "Core/Tiering/QualitySettings.h"
 #include "Core/Logging/Log.h"
@@ -998,7 +999,7 @@ namespace Conqueror
     bool PostProcessStack::WantsGeometry()
     {
         PostProcessStack* st = s_Current;
-        if (!st || !st->m_WantGeometry || !st->m_SceneFramebuffer)
+        if (!st || !(st->m_WantGeometry || st->m_WantDepthReplay || st->m_WantDepthReplayTAAU) || !st->m_SceneFramebuffer)
             return false;
         GLint drawFBO = 0;
         glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &drawFBO);
@@ -1821,6 +1822,8 @@ namespace Conqueror
     void PostProcessStack::RunFinal(const PostProcessSettings& settings, uint32_t outputFramebuffer, const int outputViewport[4])
     {
         CQ_PROFILE_GPU("Final");
+        // TAAU yolu çalışırsa yeniden açar (334: tam derinlik için opak çizimler kaydedilir)
+        m_WantDepthReplayTAAU = false;
         auto fxaa = PostProcess::GetShader("FXAA");
         auto sharpen = PostProcess::GetShader("Sharpen");
         const glm::vec2 invSize(1.0f / m_Width, 1.0f / m_Height);
@@ -2580,6 +2583,30 @@ namespace Conqueror
                 EnsureTarget(m_TAAUDisplay, outW, outH, GL_RGBA16F);
             if (taauDebug)
                 EnsureTarget(m_TAADebug, outW, outH, GL_RGBA16F);
+            // 334: tam derinlik (bu karenin opak çizimleri titreşimsiz, çıktı çözünürlüğünün 3 katında; ExactDepth). Çıktı pikselinin kendi
+            // yüzeyi bu karede hiçbir iç örneğe denk gelmediyse (köprünün altındaki ince gökyüzü şeridi, küplerin arası) ve önceki karenin tam
+            // derinliği geçmişin aynı yüzeyden geldiğini gösteriyorsa geçmiş kırpılmaz (TAAU.cqsh). Bir sonraki karede de çizimler kaydedilir.
+            // TAAU tam derinliği yalnız kamera hareket ederken kullanır: kamera dururken çizilmez; hareketin ilk karesinde önceki karenin tam
+            // derinliği de önceki matrisle çizilir (nesneler bu karedeki yerlerinde; kendi hızıyla hareket eden nesnenin pikseli onu kullanmaz)
+            m_WantDepthReplayTAAU = true;
+            const int exactNow = m_TAAUExactIndex ^ 1;
+            for (auto& e : m_TAAUExact)
+                if (!e)
+                    e = std::make_unique<ExactDepth>();
+            if (!m_CameraStill)
+            {
+                m_TAAUExactValid[exactNow] = m_TAAUExact[exactNow]->Render(this, m_FinalViewProj, m_FinalProjection, outW, outH, 2);
+                if (m_TAAUExactValid[exactNow] && !m_TAAUExactValid[m_TAAUExactIndex] && historyValid && m_HasPrevViewProj)
+                    m_TAAUExactValid[m_TAAUExactIndex] = m_TAAUExact[m_TAAUExactIndex]->Render(this, m_PrevViewProj, m_FinalProjection, outW, outH);
+            }
+            else
+            {
+                m_TAAUExactValid[0] = m_TAAUExactValid[1] = false;
+            }
+            const ExactDepth* exactPrev = m_TAAUExact[m_TAAUExactIndex].get();
+            const bool exactPrevOk = historyValid && m_TAAUExactValid[exactNow] && exactPrev && m_TAAUExactValid[m_TAAUExactIndex]
+                                     && exactPrev->Width() == outW && exactPrev->Height() == outH;
+            CQ_PROFILE_GPU("TAAU");
             glBindFramebuffer(GL_FRAMEBUFFER, m_TAAUHistory[ni].Framebuffer);
             glViewport(0, 0, (GLsizei)outW, (GLsizei)outH);
             taau->Bind();
@@ -2609,6 +2636,18 @@ namespace Conqueror
             taau->SetFloat("u_Feedback", std::clamp(settings.TAAFeedback, 0.5f, 0.97f));
             taau->SetInt("u_Reactive", 5);
             taau->SetInt("u_HasReactive", m_ReactiveUsed ? 1 : 0);
+            taau->SetInt("u_HasExact", m_TAAUExactValid[exactNow] ? 1 : 0);
+            taau->SetInt("u_HasExactPrev", exactPrevOk ? 1 : 0);
+            taau->SetInt("u_ExactRange", 11);
+            taau->SetInt("u_ExactPrevRange", 12);
+            BindTexture(11, m_TAAUExactValid[exactNow] ? m_TAAUExact[exactNow]->RangeTexture() : 0);
+            BindTexture(12, exactPrevOk ? exactPrev->RangeTexture() : 0);
+            taau->SetInt("u_ExactWide", 13);
+            BindTexture(13, m_TAAUExactValid[exactNow] ? m_TAAUExact[exactNow]->WideTexture() : 0);
+            taau->SetInt("u_ExactShare", 14);
+            BindTexture(14, m_TAAUExactValid[exactNow] ? m_TAAUExact[exactNow]->ShareTexture() : 0);
+            taau->SetMat4("u_InvViewProjNow", glm::inverse(m_FinalViewProj));
+            taau->SetFloat2("u_ProjZ", ExactDepth::ProjZ(m_FinalProjection));
             BindTexture(5, m_ReactiveUsed ? m_Reactive.Texture : 0);
             // Önceki karenin derinliği (iç çözünürlük): açılma testi
             const bool prevDepth = PrevDepthUsable();
@@ -2671,6 +2710,7 @@ namespace Conqueror
             }
             glTextureParameteri(cur, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
             m_TAAUIndex = ni;
+            m_TAAUExactIndex = exactNow;
             m_TAAUValid = true;
             // 310 / 149: TAA + NIS / FSR 1 / CAS: TAAU büyüttü, keskinleştirmeyi seçilen uzamsal yükseltici yapar (kendi 0.5 x keskinliği yerine)
             const bool spatialSharpen = m_SpatialSharpener == UpscalerMode::NIS || m_SpatialSharpener == UpscalerMode::FSR1 ||
@@ -3035,6 +3075,7 @@ namespace Conqueror
             m_FinalHasVelocity = RenderObjectVelocity(camera);
             m_FinalInvViewProj = glm::inverse(JitteredProjection(camera) * camera.View);
             m_FinalViewProj = camera.Projection * camera.View;
+            m_FinalProjection = camera.Projection;
             const glm::mat4 now = camera.Projection * camera.View;
             const bool still = IsCameraStill(now);
             m_CameraStill = still;

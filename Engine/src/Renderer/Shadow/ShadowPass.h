@@ -55,6 +55,16 @@ namespace Conqueror
         // Eski API (shader uniform'larına doğrudan yazar) - özel shader'lar için
         void BindShadowMapsToShader(std::shared_ptr<Shader> shader);
 
+        // 355: editör ızgarasının tam derinlik geçişi (Renderer3D::RenderGeometryDepth) bu derinlik gölgelendiricilerini kameranın
+        // titreşimsiz görüş-izdüşümüyle (u_LightSpaceMatrix) kullanır. Derlenmemişse nullptr
+        std::shared_ptr<Shader> GetDepthShader() const { return m_DepthShader && m_DepthShader->IsValid() ? m_DepthShader : nullptr; }
+        std::shared_ptr<Shader> GetSkinnedDepthShader() const { return m_SkinnedDepthShader && m_SkinnedDepthShader->IsValid() ? m_SkinnedDepthShader : nullptr; }
+        std::shared_ptr<Shader> GetInstancedDepthShader() const { return m_InstancedDepthShader && m_InstancedDepthShader->IsValid() ? m_InstancedDepthShader : nullptr; }
+        bool CutoutReady() const;
+        void DrawCutout(const Mesh& mesh, const glm::mat4& transform, const glm::mat4& lightSpace, Texture2D& albedo,
+                        float alphaClip, float alpha, const glm::vec2& uvScale, const glm::vec2& uvOffset, const glm::vec4& wind = glm::vec4(0.0f),
+                        const glm::vec4& windParams = glm::vec4(0.0f));
+
     private:
         void CalculateCascadeSplits(float nearPlane, float farPlane, int count, float lambda);
         void EnsureResolution(int resolution);
@@ -65,10 +75,6 @@ namespace Conqueror
         std::shared_ptr<Shader> m_InstancedDepthShader;
         std::shared_ptr<Shader> m_CutoutDepthShader;     // alfa kırpmalı malzemeler (yaprak, tel örgü)
 
-        bool CutoutReady() const;
-        void DrawCutout(const Mesh& mesh, const glm::mat4& transform, const glm::mat4& lightSpace, Texture2D& albedo,
-                        float alphaClip, float alpha, const glm::vec2& uvScale, const glm::vec2& uvOffset, const glm::vec4& wind = glm::vec4(0.0f),
-                        const glm::vec4& windParams = glm::vec4(0.0f));
         std::vector<glm::mat4> m_LightSpaceMatrices;
         std::vector<float> m_CascadeSplits;
         std::vector<float> m_CascadeTexelWorld;
