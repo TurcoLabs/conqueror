@@ -7488,6 +7488,62 @@ namespace Conqueror::Editor
             if (limit >= 0.0f && sum / std::max(frames, 1) > limit) { err = std::string("edge deviation over the limit: ") + line; return false; }
             return true;
         });
+        // image_seq_mean_hf <dir> <first> <last> x0 y0 x1 y1 [max v]: kaydedilen karelerin (record_start) ortalamasında bölgenin yüksek
+        // frekansı (parlaklığın yatay ve dikey ikinci farkının ortalama mutlak değeri, seviye). Göz kareleri birleştirir: her karede kayan
+        // titreşim ortalamada kaybolur, ekrana sabit desen kalır (336: gökyüzündeki ±1 seviyelik çapraz desen)
+        Automation::RegisterCommand("image_seq_mean_hf", [](const Args& a, std::string& err) {
+            if (a.size() < 8) { err = "image_seq_mean_hf <dir> <first> <last> x0 y0 x1 y1 [max v]"; return false; }
+            std::error_code ec;
+            std::filesystem::path dir = a[1];
+            for (const auto& e : std::filesystem::directory_iterator(a[1], ec))
+                if (e.is_directory() && e.path().filename().string().rfind("Recording_", 0) == 0 &&
+                    (dir == std::filesystem::path(a[1]) || e.path().filename() > dir.filename()))
+                    dir = e.path();
+            const int first = std::atoi(a[2].c_str()), last = std::atoi(a[3].c_str());
+            const int x0 = std::atoi(a[4].c_str()), y0 = std::atoi(a[5].c_str()), x1 = std::atoi(a[6].c_str()), y1 = std::atoi(a[7].c_str());
+            float limit = -1.0f;
+            for (size_t k = 8; k + 1 < a.size(); k += 2)
+                if (a[k] == "max") limit = (float)std::atof(a[k + 1].c_str());
+            const int rw = x1 - x0, rh = y1 - y0;
+            if (rw < 3 || rh < 3 || last < first) { err = "bad region or frame range"; return false; }
+            std::vector<double> mean((size_t)rw * rh, 0.0);
+            int frames = 0;
+            for (int f = first; f <= last; ++f)
+            {
+                char name[32];
+                std::snprintf(name, sizeof(name), "frame_%06d.png", f);
+                int w = 0, h = 0, n = 0;
+                unsigned char* d = stbi_load((dir / name).string().c_str(), &w, &h, &n, 3);
+                if (!d)
+                    continue;
+                if (x1 <= w && y1 <= h)
+                {
+                    for (int y = 0; y < rh; ++y)
+                        for (int x = 0; x < rw; ++x)
+                        {
+                            const unsigned char* px = d + ((size_t)(y0 + y) * w + (x0 + x)) * 3;
+                            mean[(size_t)y * rw + x] += (px[0] + px[1] + px[2]) / 3.0;
+                        }
+                    ++frames;
+                }
+                stbi_image_free(d);
+            }
+            if (frames == 0) { err = "no frames"; return false; }
+            for (auto& v : mean) v /= frames;
+            double hsum = 0.0, vsum = 0.0;
+            for (int y = 0; y < rh; ++y)
+                for (int x = 1; x + 1 < rw; ++x)
+                    hsum += std::abs(mean[(size_t)y * rw + x + 1] - 2.0 * mean[(size_t)y * rw + x] + mean[(size_t)y * rw + x - 1]);
+            for (int y = 1; y + 1 < rh; ++y)
+                for (int x = 0; x < rw; ++x)
+                    vsum += std::abs(mean[(size_t)(y + 1) * rw + x] - 2.0 * mean[(size_t)y * rw + x] + mean[(size_t)(y - 1) * rw + x]);
+            const double hf = 0.5 * (hsum / ((double)rh * (rw - 2)) + vsum / ((double)(rh - 2) * rw));
+            char line[160];
+            std::snprintf(line, sizeof(line), "SEQ MEAN HF %d frames: %.3f", frames, hf);
+            Automation::Report(line);
+            if (limit >= 0.0f && hf > limit) { err = std::string("over the limit: ") + line; return false; }
+            return true;
+        });
         Automation::RegisterCommand("image_seq_trail", [](const Args& a, std::string& err) {
             if (a.size() < 9) { err = "image_seq_trail <ref dir> <test dir> <first> <last> x0 y0 x1 y1 [max n] [diff n]"; return false; }
             // record_start çıktı klasörünün içinde Recording_<zaman> alt klasörü açar

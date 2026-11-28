@@ -1,0 +1,26 @@
+# template: fps
+# 336: yerel TAA'da gökyüzünde ince bir desen vardı, yana yürürken titreşiyordu. Composite'in 8-bit bantlaşmayı önleyen titreşimi ekrana
+# sabitti; yerel TAA ondan önce çalıştığı için ±1 seviyelik çapraz desen olduğu gibi kalıyordu (ikinci fark 0.86, SSAA 0.31, AA kapalı
+# 0.85; titreşim kapalıyken TAA 0.27) ve yana yürürken içerik onun üstünden kayıyordu. Kamera hareket ederken desen artık her karede kayar
+# (Unreal'ın ton eşleyicisindeki nicemleme titreşimi gibi): göz kareleri birleştirir; dururken sabit kalır (kareler bit bit aynı). Ölçü:
+# yana yürürken kaydedilen 4 karenin ortalamasında gökyüzünün yüksek frekansı (eski 1.002, yeni 0.336)
+timeout 300
+wait 60
+focus Game
+play
+wait 30
+cvar r.AntiAliasing 3
+cvar r.Upscaler 0
+script set Player@FirstPersonShooter pitch float 25
+wait 150
+record_start png fixed fps=60 out={work}/sky336
+wait 16
+key_down D
+wait 40
+key_up D
+wait 2
+record_stop
+image_seq_mean_hf {work}/sky336 38 41 100 140 900 300 max 0.6
+stop
+wait 5
+quit

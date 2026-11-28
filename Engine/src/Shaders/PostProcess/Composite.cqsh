@@ -27,6 +27,7 @@ uniform sampler2D u_Depth;
 uniform vec2 u_AONearFar = vec2(0.1, 1000.0);   // AO büyütmesi için izdüşümün yakın / uzak düzlemi (326)
 uniform int u_UseBloom = 0;
 uniform int u_UseAO = 0;
+uniform float u_DitherOffset = 0.0;   // 336: titreşim deseninin kaydırması (5.588238 x kare sırası; kamera dururken 0)
 // 290: AO yalnız dolaylı aydınlığa (sahnenin 4. eki, PBRForwardFragment.glsl): renk - dolaylı x (1 - AO). Ek yoksa eski yol (bütün renk)
 uniform sampler2D u_Indirect;
 uniform int u_AOIndirectOnly = 0;
@@ -210,8 +211,12 @@ void main()
         srgb += n * u_GrainIntensity * 0.25 * (0.4 + 0.6 * lumaMask);
     }
 
-    // 8-bit bantlaşmayı önlemek için hafif titreşim
-    srgb += (InterleavedGradientNoise(gl_FragCoord.xy) - 0.5) / 255.0;
+    // 8-bit bantlaşmayı önlemek için hafif titreşim. 336: kamera hareket ederken desen her karede kayar (Unreal'ın ton eşleyicisindeki
+    // nicemleme titreşimi gibi, GrainRandomFull kare numarasıyla; IGN'nin zamansal kaydırması 5.588238 x kare, Jimenez 2014). Eskiden
+    // ekrana sabitti: yerel TAA ondan önce çalıştığı için gökyüzünde ±1 seviyelik çapraz desen kalıyor, yana yürürken içerik desenin
+    // üstünden kaydığı için ince desen titreşiyordu. Kayan deseni göz ortalar. Kamera dururken desen sabit (u_DitherOffset 0): kareler
+    // bit bit aynı kalır
+    srgb += (InterleavedGradientNoise(gl_FragCoord.xy + u_DitherOffset) - 0.5) / 255.0;
 
     FragColor = vec4(clamp(srgb, 0.0, 1.0), 1.0);
 }

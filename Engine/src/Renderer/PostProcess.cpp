@@ -1795,7 +1795,10 @@ namespace Conqueror
         auto composite = PostProcess::GetShader("Composite");
         RenderTarget& dst = target ? *target : m_LDR;
         if (!target)
+        {
             m_CompositeTime = time;
+            ++m_DitherFrame;
+        }
         glBindFramebuffer(GL_FRAMEBUFFER, dst.Framebuffer);
         glViewport(0, 0, dst.Width, dst.Height);
         if (!Valid(composite))
@@ -1840,6 +1843,7 @@ namespace Conqueror
         composite->SetInt("u_UseGrain", (on && settings.FilmGrain) ? 1 : 0);
         composite->SetFloat("u_GrainIntensity", settings.FilmGrainIntensity);
         composite->SetFloat("u_Time", time);
+        composite->SetFloat("u_DitherOffset", m_DitherAnimate ? 5.588238f * (float)(m_DitherFrame & 63u) : 0.0f);
         composite->SetFloat2("u_ScreenSize", glm::vec2((float)m_Width, (float)m_Height));
 
         BindTexture(0, source ? source : (m_Source ? m_Source : GetSceneColorTexture()));
@@ -3307,6 +3311,20 @@ namespace Conqueror
             RunBloom(settings);
         else
             m_BloomResult = 0;
+        // 336: titreşim deseni yalnız kamera hareket ederken kayar (RunComposite). Önceki matris burada, her karede tutulur (geçmiş tutan
+        // görünümlerde, ör. Path Tracing, m_PrevViewProj güncellenmez: kamera dururken desen kayıyordu)
+        {
+            const glm::mat4 vpNow = camera.Projection * camera.View;
+            bool same = m_DitherPrevValid;
+            for (int c = 0; c < 4 && same; ++c)
+                for (int r = 0; r < 4 && same; ++r)
+                    same = std::abs(vpNow[c][r] - m_DitherPrevViewProj[c][r]) <= 1e-6f * std::max(1.0f, std::abs(vpNow[c][r]));
+            // Yalnız titreşimli zamansal yöntemde (TAA ailesi): desen onların çıktısının üstünde sabit kalıyordu. Path Tracing görünümünün
+            // kendi birikimi var (zamansal AA kapalı), tek kare yöntemlerde desen zaten her karede aynı yere düşer
+            m_DitherAnimate = !camera.Orthographic && !same && m_JitterActive;
+            m_DitherPrevViewProj = vpNow;
+            m_DitherPrevValid = true;
+        }
         RunComposite(settings, time);
         // GBAA / SRAA: kenar uzaklığı ya da çok örnekli geometri hedefi (RunFinal'daki çözüm için)
         m_GeometryReady = false;

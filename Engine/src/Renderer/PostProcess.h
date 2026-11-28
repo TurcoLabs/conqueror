@@ -219,6 +219,10 @@ namespace Conqueror
         // FSR 2 çıktısına ışıklı / ışıksız farkı eklenmiş gösterim
         RenderTarget m_TransientHDR, m_LDRUnlit, m_FSR2Display;
         float m_CompositeTime = 0.0f;
+        uint32_t m_DitherFrame = 0;   // 336: Composite'in titreşim deseninin kare sırası (ışıksız ikinci Composite aynısını kullanır)
+        bool m_DitherAnimate = false;   // titreşimli zamansal yöntemde kamera hareket ediyor: desen kayar; dururken sabit (kareler bit bit aynı)
+        glm::mat4 m_DitherPrevViewProj{ 1.0f };
+        bool m_DitherPrevValid = false;
         RenderTarget m_SMAAEdges;
         RenderTarget m_SMAAWeights;    // SMAA / MLAA karışım ağırlıkları
         RenderTarget m_Temp;
