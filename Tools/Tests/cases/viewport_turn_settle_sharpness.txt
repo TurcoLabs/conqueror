@@ -1,0 +1,20 @@
+# template: fps
+# 341: Viewport'ta TAA + NIS, sınır duvarının üstünden duvar boyunca bakarken ani bir dönüşten sonra duvar üstü bir anda bulanıklaşıp yarım
+# saniyede netleşiyordu (kullanıcının 20-21. resimleri). Hareket boyunca geçmiş her karede yeniden örneklenip bulanıklaşır, keskinlik artışı
+# bunu karşılar; artış durulan karede birden kalkıyor, bulanık geçmiş de 4 örnek değerinde sayıldığı için yavaş çekiliyordu (yüksek frekans
+# dönüşte 3.54, durunca 2.84, 30 karede 3.20). Artık durulan ilk karede yeni örnek en az yarı ağırlıkla girer, keskinlik artışı geçmişin
+# oturma hızıyla (8 / (8 + n), 90 karede sıfır) söner: 3.54 -> 3.65 -> 3.37 -> 3.26, sonra düz. Ölçü: dönüşten sonraki 50 karede yüksek
+# frekansın 100. karedekine en küçük oranı (eski 0.85, yeni 1.00)
+timeout 400
+wait_until 3000 layout_settled
+wait 10
+focus Viewport
+cvar r.AntiAliasing 3
+cvar r.Upscaler 3
+camera 14 18 0 -28 3 0
+wait 120
+camera_spin 400 0 8 inplace
+screenshot_frames {work}/turn341 110
+wait 120
+image_seq_hf_ratio {work}/turn341 8 58 405 185 1437 778 ref 100 min 0.95
+quit

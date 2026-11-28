@@ -298,6 +298,10 @@ namespace Conqueror
         // TAAU: çıktı çözünürlüğünde geçmiş (RGBA16F, LDR)
         RenderTarget m_TAAUHistory[2];
         RenderTarget m_TAAURejectAA;
+        float m_TAAUMotionPeak = 0.0f;       // 341: son hareketin karede en büyük ekran kayması (iç piksel)
+        bool m_TAAUWasStill = true, m_TAAUSettleReset = false;
+        float m_TAAULastMotionPeak = 0.0f;   // durmadan önceki hareketin en büyük kayması
+        int m_TAAUStillFrames = 0;           // kamera kaç karedir duruyor
         RenderTarget m_TAAUExactFar;         // 334: iki yüzeyli pikselin uzak yüzeyinin rengi (ExactFill.cqsh)
         RenderTarget m_TAAUDisplay;          // 338: ışık dondurulan karede gösterilen TAAU çıktısı (geçmiş ışıktan önceki halinde kalır)
         bool m_TAAULightingChanged = false;  // TAAU bu karede ışık değişimini tüketti (RunStillHold owner 4)

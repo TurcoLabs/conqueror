@@ -7544,6 +7544,53 @@ namespace Conqueror::Editor
             if (limit >= 0.0f && hf > limit) { err = std::string("over the limit: ") + line; return false; }
             return true;
         });
+        // image_seq_hf_ratio <prefix> <first> <last> x0 y0 x1 y1 ref <n> [min r]: screenshot_frames dizisinde (önek_N.png) her karenin bölgedeki
+        // yüksek frekansının (parlaklığın ikinci farkı) n. kareninkine oranı; en küçüğü bildirilir (341: ani dönüşten sonra Viewport'un
+        // bulanıklaşıp yarım saniyede netleşmesi)
+        Automation::RegisterCommand("image_seq_hf_ratio", [](const Args& a, std::string& err) {
+            if (a.size() < 10 || a[8] != "ref") { err = "image_seq_hf_ratio <prefix> <first> <last> x0 y0 x1 y1 ref <n> [min r]"; return false; }
+            const int first = std::atoi(a[2].c_str()), last = std::atoi(a[3].c_str());
+            const int x0 = std::atoi(a[4].c_str()), y0 = std::atoi(a[5].c_str()), x1 = std::atoi(a[6].c_str()), y1 = std::atoi(a[7].c_str());
+            const int refIndex = std::atoi(a[9].c_str());
+            float limit = -1.0f;
+            for (size_t k = 10; k + 1 < a.size(); k += 2)
+                if (a[k] == "min") limit = (float)std::atof(a[k + 1].c_str());
+            auto hfOf = [&](int idx, double& out) {
+                const std::string path = a[1] + "_" + std::to_string(idx) + ".png";
+                int w = 0, h = 0, n = 0;
+                unsigned char* d = stbi_load(path.c_str(), &w, &h, &n, 3);
+                if (!d)
+                    return false;
+                const int rx1 = std::min(x1, w), ry1 = std::min(y1, h);
+                auto lum = [&](int x, int y) { const unsigned char* p = d + ((size_t)y * w + x) * 3; return (p[0] + p[1] + p[2]) / 3.0; };
+                double hs = 0.0, vs = 0.0;
+                long hn = 0, vn = 0;
+                for (int y = y0; y < ry1; ++y)
+                    for (int x = x0 + 1; x + 1 < rx1; ++x) { hs += std::abs(lum(x + 1, y) - 2.0 * lum(x, y) + lum(x - 1, y)); ++hn; }
+                for (int y = y0 + 1; y + 1 < ry1; ++y)
+                    for (int x = x0; x < rx1; ++x) { vs += std::abs(lum(x, y + 1) - 2.0 * lum(x, y) + lum(x, y - 1)); ++vn; }
+                stbi_image_free(d);
+                out = 0.5 * (hs / std::max(hn, 1L) + vs / std::max(vn, 1L));
+                return true;
+            };
+            double refHF = 0.0;
+            if (!hfOf(refIndex, refHF) || refHF <= 0.0) { err = "missing reference frame"; return false; }
+            double worst = 1e9;
+            int worstFrame = -1;
+            for (int f = first; f <= last; ++f)
+            {
+                double v = 0.0;
+                if (!hfOf(f, v))
+                    continue;
+                if (v / refHF < worst) { worst = v / refHF; worstFrame = f; }
+            }
+            if (worstFrame < 0) { err = "no frames"; return false; }
+            char line[160];
+            std::snprintf(line, sizeof(line), "SEQ HF RATIO frames %d-%d: min %.3f (frame %d) of frame %d", first, last, worst, worstFrame, refIndex);
+            Automation::Report(line);
+            if (limit >= 0.0f && worst < limit) { err = std::string("under the limit: ") + line; return false; }
+            return true;
+        });
         Automation::RegisterCommand("image_seq_trail", [](const Args& a, std::string& err) {
             if (a.size() < 9) { err = "image_seq_trail <ref dir> <test dir> <first> <last> x0 y0 x1 y1 [max n] [diff n]"; return false; }
             // record_start çıktı klasörünün içinde Recording_<zaman> alt klasörü açar

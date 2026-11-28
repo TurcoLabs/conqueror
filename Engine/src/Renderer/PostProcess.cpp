@@ -2796,6 +2796,7 @@ namespace Conqueror
             taau->SetInt("u_HistoryValid", historyValid ? 1 : 0);
             NoteTemporalStart(historyValid);
             taau->SetInt("u_CameraStill", m_CameraStill ? 1 : 0);
+            taau->SetInt("u_SettleReset", m_TAAUSettleReset ? 1 : 0);
             taau->SetMat4("u_InvViewProj", m_FinalInvViewProj);
             {
                 // Bu ve önceki karenin göz noktası (kırpma uzayında (0, 0, k, 0)): yüzeye bakış yönünün karede ne kadar döndüğü için
@@ -2937,9 +2938,20 @@ namespace Conqueror
             sharpen->SetInt("u_ScreenTexture", 0);
             sharpen->SetFloat2("u_InverseScreenSize", glm::vec2(1.0f / (float)outW, 1.0f / (float)outH));
             sharpen->SetFloat("u_Amount", std::min((spatialSharpen ? 0.0f : 0.5f * upSharp) + ((settings.Sharpen && !m_CASSharpen) ? settings.SharpenAmount : 0.0f), 1.0f));
-            // Hareket ederken geçmiş her karede yeniden örneklenip yumuşar (TAA'daki gibi): kamera kıpırdadıysa keskinlik artar
-            sharpen->SetInt("u_HasMotionState", m_CameraStill ? 0 : 2);
-            sharpen->SetFloat("u_MotionAmount", kTAAMotionSharpen);
+            // Hareket ederken geçmiş her karede yeniden örneklenip yumuşar (TAA'daki gibi): kamera kıpırdadıysa keskinlik artar. 341: durunca
+            // artış, hareketin bulanık geçmişinin birikimdeki payıyla söner (8 / (8 + n); 90 karede sürekli olarak sıfıra inecek biçimde
+            // kaydırılmış, sönüşün sonunda sıçrama olmaz). Eskiden durulan karede birden
+            // kalkıyordu: hızlı dönüşten sonra duvar üstü bir anda bulanıklaşıp yarım saniyede netleşiyordu (yüksek frekans 3.54 -> 2.84 -> 3.20)
+            {
+                const float n = (float)m_TAAUStillFrames;
+                constexpr float kEnd = 8.0f / 98.0f;
+                const float settleFade = m_CameraStill ? (m_TAAULastMotionPeak >= 1.0f ? std::max(8.0f / (8.0f + n) - kEnd, 0.0f) / (1.0f - kEnd) : 0.0f) : 1.0f;
+                sharpen->SetInt("u_HasMotionState", settleFade > 0.0f ? 2 : 0);
+                sharpen->SetFloat("u_MotionAmount", kTAAMotionSharpen);
+                // Yalnız hareketten gelen keskinlik varsa (NIS yolu: durağan miktar 0) çekirdek sönüşle birlikte sürekli küçülür
+                const bool onlyMotion = (spatialSharpen ? 0.0f : 0.5f * upSharp) + ((settings.Sharpen && !m_CASSharpen) ? settings.SharpenAmount : 0.0f) <= 0.0f;
+                sharpen->SetFloat("u_WeightScale", onlyMotion ? settleFade : 1.0f);
+            }
             sharpen->SetInt("u_HasUnsharpened", edgeMask ? 1 : 0);
             if (edgeMask)
             {
@@ -2954,6 +2966,7 @@ namespace Conqueror
             PostProcess::DrawFullscreenQuad();
             sharpen->SetInt("u_HasMotionState", 0);
             sharpen->SetInt("u_HasUnsharpened", 0);
+            sharpen->SetFloat("u_WeightScale", 1.0f);
             Renderer::GetStats().PostProcessPasses += 2;
             return;
         }
@@ -3274,6 +3287,17 @@ namespace Conqueror
                     }
                 }
                 m_CameraNearlyStill = maxShift < 0.02f;
+                // 341: hızlı hareketten (dönüş, yana kayma) sonra kameranın durduğu ilk kare: TAAU'nun hareket boyunca yeniden örneklenip
+                // bulanıklaşan geçmişi daha az örnek değerinde sayılır
+                m_TAAUMotionPeak = still ? m_TAAUMotionPeak : std::max(m_TAAUMotionPeak * 0.8f, std::min(maxShift, 1e4f));
+                m_TAAUSettleReset = still && !m_TAAUWasStill && m_TAAUMotionPeak >= 4.0f;
+                if (still && !m_TAAUWasStill)
+                {
+                    m_TAAULastMotionPeak = m_TAAUMotionPeak;
+                    m_TAAUMotionPeak = 0.0f;
+                }
+                m_TAAUStillFrames = still ? std::min(m_TAAUStillFrames + 1, 1000) : 0;
+                m_TAAUWasStill = still;
             }
             if (m_AAMode != AntiAliasingMode::SMAA_T2X)
                 m_T2xValid = false;

@@ -35,6 +35,7 @@ uniform int u_HasVelocity = 0;
 uniform int u_HasMotionFlag = 0;
 uniform int u_HistoryValid = 0;
 uniform int u_CameraStill = 0;
+uniform int u_SettleReset = 0;   // 341: hızlı hareketten sonra kameranın durduğu ilk kare
 uniform mat4 u_InvViewProj;     // titreşimli
 uniform mat4 u_PrevViewProj;    // önceki karenin titreşimsiz matrisi
 uniform vec2 u_InTexel;         // 1 / iç çözünürlük
@@ -758,6 +759,9 @@ void main()
     // ve kenarları basamaklı görünüyordu (önizleme küpü duvarın üstünden çekilince duvar üstünün kenarı). Hareket ederken genç pikseldeki
     // gibi (329): ilk 4 örnek geniş süzgeçle ve her çıktı pikselinde aynı ağırlıkla (1/2, 1/3, 1/4), sonra dar süzgeçle birikim sürer
     vec3 currentWide = current;
+    // 341: hızlı hareket boyunca geçmiş her karede yeniden örneklenip bulanıklaşır; durunca 4 örnek değerinde sayılıyor, dar süzgeçli
+    // yeni örnekler ona eşit ağırlıkla eklendiğinden duvar üstü yarım saniye bulanık kalıyordu (12 kare sonra geçmişin payı %25). Durulan
+    // ilk karede bu karenin dar süzgeçli örneği en az yarı ağırlıkla girer (aşağıda): bulanık geçmişin payı ikiye iner, birikim sürer
     bool settleYoung = settle && accBefore < 3.99;
     if (settle && !settleYoung)
     {
@@ -766,6 +770,8 @@ void main()
         float wNear = narrow ? wmaxG : wmaxN;
         alphaSettle = wNear / (min(accBefore, u_AccCap) + wNear);
         acc = min(accBefore + wNear, u_AccCap);
+        if (u_SettleReset == 1)
+            alphaSettle = max(alphaSettle, 0.5);
     }
     else if (settleYoung)
     {
